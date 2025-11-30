@@ -47,10 +47,13 @@ public class AnchorGUIManager : MonoBehaviour
     [SerializeField] private Color idleColor = Color.gray;
 
     [Header("Controller Anchor Creation")]
-     private GameObject anchorCursorPrefab; // Icon shown on controller
+    private GameObject anchorCursorPrefab; // Icon shown on controller
+    private GameObject anchorMarkerPrefab;
     [SerializeField] private Transform rightControllerTransform; // Right controller reference
     [SerializeField] private Transform leftControllerTransform; // Left controller reference
     [SerializeField] private float cursorOffset = 0.1f; // Distance from controller tip
+    [SerializeField] private float cursorScale = 0.05f;
+    [SerializeField] private float anchorScale = 0.1f;
 
     private List<OVRSpatialAnchor> currentAnchors;
     private bool isHost;
@@ -115,6 +118,21 @@ public class AnchorGUIManager : MonoBehaviour
         else
         {
             Debug.Log($"[AnchorGUI] ✅ Loaded cursor prefab: {anchorCursorPrefab.name}");
+        }
+
+
+        Debug.Log("[AnchorGUI] Loading AnchorMarker from Resources...");
+        GameObject anchorMarkerPrefab = Resources.Load<GameObject>("AnchorMarker");
+
+        if (anchorMarkerPrefab == null)
+        {
+            Debug.LogError("[AnchorGUI] ❌ Failed to load AnchorMarker!  Will use cursor prefab as fallback.");
+        }
+        else
+        {
+            Debug.Log($"[AnchorGUI] ✅ Loaded anchor marker prefab: {anchorMarkerPrefab.name}");
+            // Store it for later use
+            this.anchorMarkerPrefab = anchorMarkerPrefab;
         }
 
         FindControllers();
@@ -530,7 +548,7 @@ public class AnchorGUIManager : MonoBehaviour
 
 #endif
 
-  
+
 
     private void OnCreateAnchorClicked()
     {
@@ -571,7 +589,7 @@ public class AnchorGUIManager : MonoBehaviour
         Debug.Log($"[AnchorGUI] ✅ Controllers found - Left: {leftControllerTransform.name}, Right: {rightControllerTransform.name}");
 
         isPlacingAnchor = true;
-        LogStatus("👉 Pull index trigger to place anchor");
+        LogStatus("👉 Press A, B, X, or Y button to place anchor");
 
         // Check cursor prefab
         if (anchorCursorPrefab == null)
@@ -599,7 +617,7 @@ public class AnchorGUIManager : MonoBehaviour
                 leftCursorInstance.name = "LeftControllerCursor";
                 leftCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
                 leftCursorInstance.transform.localRotation = Quaternion.identity;
-                leftCursorInstance.transform.localScale = Vector3.one * 3f; // VERY BIG for testing
+                leftCursorInstance.transform.localScale = Vector3.one * cursorScale;
                 leftCursorInstance.SetActive(true);
 
                 Debug.Log($"[AnchorGUI] ✅ LEFT cursor created!");
@@ -640,7 +658,7 @@ public class AnchorGUIManager : MonoBehaviour
                 rightCursorInstance.name = "RightControllerCursor";
                 rightCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
                 rightCursorInstance.transform.localRotation = Quaternion.identity;
-                rightCursorInstance.transform.localScale = Vector3.one * 3f; // VERY BIG for testing
+                rightCursorInstance.transform.localScale = Vector3.one * cursorScale;
                 rightCursorInstance.SetActive(true);
 
                 Debug.Log($"[AnchorGUI] ✅ RIGHT cursor created!");
@@ -1158,13 +1176,22 @@ public class AnchorGUIManager : MonoBehaviour
             anchorGameObject.transform.rotation = rotation;
 
             // Add visual using cursor prefab
-            if (anchorCursorPrefab != null)
+            // ✅ Add visual using ANCHOR MARKER prefab (not cursor!)
+            GameObject visualPrefab = anchorMarkerPrefab != null ? anchorMarkerPrefab : anchorCursorPrefab;
+
+            if (visualPrefab != null)
             {
-                GameObject visual = Instantiate(anchorCursorPrefab, anchorGameObject.transform);
+                GameObject visual = Instantiate(visualPrefab, anchorGameObject.transform);
                 visual.name = "Visual";
                 visual.transform.localPosition = Vector3.zero;
                 visual.transform.localRotation = Quaternion.identity;
-                visual.transform.localScale = Vector3.one;
+                visual.transform.localScale = Vector3.one * anchorScale;
+
+                Debug.Log($"[AnchorGUI] ✅ Added visual marker to anchor using: {visualPrefab.name}");
+            }
+            else
+            {
+                Debug.LogWarning("[AnchorGUI] ⚠️ No visual prefab available for anchor!");
             }
 
             // Add spatial anchor component
