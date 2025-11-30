@@ -8,9 +8,12 @@ EditorBuildSettings:
   - enabled: 0
     path: Assets/Colocation/Scenes/Colocation.unity
     guid: 99c9720ab356a0642a771bea13969a05
-  - enabled: 1
+  - enabled: 0
     path: Assets/MainPanel_1.1.unity
     guid: 78a7929dd221e8e408964d61105e3987
+  - enabled: 1
+    path: Assets/Colocation/Scenes/Demo1.1.unity
+    guid: 7164767fec3d93344a614e0d92d607fb
   m_configObjects:
     Unity.XR.Oculus.Settings: {fileID: 11400000, guid: 2a92d7d1b9e254b2398812013a455fac,
       type: 2}

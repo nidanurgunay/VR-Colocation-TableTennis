@@ -31,7 +31,7 @@ public class AnchorGUIManager : MonoBehaviour
     [Header("Status Display")]
     [SerializeField] private TextMeshProUGUI statusText;
     [SerializeField] private TextMeshProUGUI groupUuidText;
-    [SerializeField] private TextMeshProUGUI anchorCountText;
+    [SerializeField] private TextMeshProUGUI anchorText;
     [SerializeField] private TextMeshProUGUI connectionStateText;
     [SerializeField] private Image statusIndicator;
 
@@ -75,7 +75,8 @@ public class AnchorGUIManager : MonoBehaviour
         "Comet",
         "Custom..."
     };
-
+    private Dictionary<Guid, bool> savedAnchors = new Dictionary<Guid, bool>();
+    private Dictionary<Guid, bool> sharedAnchors = new Dictionary<Guid, bool>();
     private const int CUSTOM_ROOM_INDEX = 6;
 
 #if FUSION2
@@ -100,6 +101,8 @@ public class AnchorGUIManager : MonoBehaviour
         currentGroupUuid = Guid.Empty;
         currentState = SessionState.Idle;
         isHost = false;
+        savedAnchors = new Dictionary<Guid, bool>();
+        sharedAnchors = new Dictionary<Guid, bool>();
 
         cameraTransform = Camera.main?.transform;
         if (cameraTransform == null)
@@ -881,6 +884,7 @@ public class AnchorGUIManager : MonoBehaviour
                 if (saveResult.Success)
                 {
                     savedCount++;
+                    savedAnchors[anchor.Uuid] = true;
                 }
             }
 
@@ -944,6 +948,10 @@ public class AnchorGUIManager : MonoBehaviour
 
             if (shareResult.Success)
             {
+                foreach (var anchor in validAnchors)
+                {
+                    sharedAnchors[anchor.Uuid] = true;
+                }
                 LogStatus("Shared " + validAnchors.Count + " anchor(s)!");
             }
             else
@@ -1051,7 +1059,20 @@ public class AnchorGUIManager : MonoBehaviour
 
     private void UpdateAnchorCount()
     {
-        if (anchorCountText == null) return;
+        if (anchorText == null) return;
+
+        // ✅ NEW: Display detailed anchor list instead of just count
+        if (currentAnchors.Count == 0)
+        {
+            anchorText.text = "📍 Anchors: (none)";
+            return;
+        }
+
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+        // Header with role and count
+        string roleIcon = isHost ? "👑" : "👤";
+        string role = isHost ? "HOST" : "CLIENT";
 
         int localizedCount = 0;
         foreach (var anchor in currentAnchors)
@@ -1060,7 +1081,62 @@ public class AnchorGUIManager : MonoBehaviour
                 localizedCount++;
         }
 
-        anchorCountText.text = "Anchors: " + currentAnchors.Count + " (" + localizedCount + " localized)";
+        sb.AppendLine($"{roleIcon} {role} - {currentAnchors.Count} Anchor(s) ({localizedCount} localized)");
+        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        int index = 1;
+        foreach (var anchor in currentAnchors)
+        {
+            if (anchor == null) continue;
+
+            sb.AppendLine($"\n🔷 #{index}");
+
+            // Short UUID (first 8 characters)
+            string uuidShort = anchor.Uuid.ToString().Substring(0, 8);
+            sb.AppendLine($"   ID: {uuidShort}");
+
+            // Full UUID (for comparison between devices)
+            sb.AppendLine($"   Full: {anchor.Uuid}");
+
+            // Status badges
+            List<string> badges = new List<string>();
+
+            if (anchor.Created)
+                badges.Add("✅");
+            else
+                badges.Add("⏳");
+
+            if (anchor.Localized)
+                badges.Add("🌍");
+            else
+                badges.Add("📡");
+
+            // Check if saved
+            if (savedAnchors.ContainsKey(anchor.Uuid) && savedAnchors[anchor.Uuid])
+                badges.Add("💾");
+
+            // Check if shared
+            if (sharedAnchors.ContainsKey(anchor.Uuid) && sharedAnchors[anchor.Uuid])
+                badges.Add("☁️");
+
+            sb.Append($"   [{string.Join("][", badges)}]");
+
+            // Position
+            Vector3 pos = anchor.transform.position;
+            sb.AppendLine($" ({pos.x:F1}, {pos.y:F1}, {pos.z:F1})");
+
+            index++;
+        }
+
+        // Footer with Group UUID if available
+        if (currentGroupUuid != Guid.Empty)
+        {
+            sb.AppendLine("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            string groupShort = currentGroupUuid.ToString().Substring(0, 8);
+            sb.AppendLine($"🔗 Group: {groupShort}.. .");
+        }
+
+        anchorText.text = sb.ToString();
     }
 
     private void UpdateButtonStates()
