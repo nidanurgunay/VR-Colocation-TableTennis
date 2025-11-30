@@ -1,4 +1,4 @@
-﻿                                                    using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System;
@@ -42,10 +42,15 @@ public class AnchorGUIManager : MonoBehaviour
     [SerializeField] private Button confirmNoButton;
 
     [Header("Settings")]
-    [SerializeField] private float anchorCreationDistance = 1.5f;
     [SerializeField] private Color hostColor = Color.green;
     [SerializeField] private Color clientColor = Color.cyan;
     [SerializeField] private Color idleColor = Color.gray;
+
+    [Header("Controller Anchor Creation")]
+     private GameObject anchorCursorPrefab; // Icon shown on controller
+    [SerializeField] private Transform rightControllerTransform; // Right controller reference
+    [SerializeField] private Transform leftControllerTransform; // Left controller reference
+    [SerializeField] private float cursorOffset = 0.1f; // Distance from controller tip
 
     private List<OVRSpatialAnchor> currentAnchors;
     private bool isHost;
@@ -53,6 +58,9 @@ public class AnchorGUIManager : MonoBehaviour
     private Transform cameraTransform;
     private Action pendingConfirmationAction;
 
+    private bool isPlacingAnchor = false; // Are we in placement mode?
+    private GameObject leftCursorInstance; // Left controller cursor
+    private GameObject rightCursorInstance; // Right controller cursor
     // Room name options
     private readonly string[] roomNameOptions = new string[]
     {
@@ -97,6 +105,19 @@ public class AnchorGUIManager : MonoBehaviour
             return;
         }
 
+        Debug.Log("[AnchorGUI] Loading AnchorCursor from Resources...");
+        anchorCursorPrefab = Resources.Load<GameObject>("AnchorCursorSphere");
+
+        if (anchorCursorPrefab == null)
+        {
+            Debug.LogError("[AnchorGUI] ❌ Failed to load AnchorCursor!  Check: Assets/Resources/AnchorCursor.prefab");
+        }
+        else
+        {
+            Debug.Log($"[AnchorGUI] ✅ Loaded cursor prefab: {anchorCursorPrefab.name}");
+        }
+
+        FindControllers();
         SetupButtonListeners();
         SetupInputFields();
         InitializeRoomDropdown();
@@ -107,33 +128,109 @@ public class AnchorGUIManager : MonoBehaviour
 
         LogStatus("Anchor GUI initialized");
     }
+    /// <summary>
+    /// Finds controller transforms at runtime
+    /// </summary>
+    private void FindControllers()
+    {
+        // Method 1: Try to find by name
+        if (rightControllerTransform == null)
+        {
+            GameObject rightHand = GameObject.Find("RightHandAnchor");
+            if (rightHand != null)
+            {
+                rightControllerTransform = rightHand.transform;
+                Debug.Log("[AnchorGUI] Found RightHandAnchor: " + rightControllerTransform.name);
+            }
+            else
+            {
+                Debug.LogWarning("[AnchorGUI] RightHandAnchor not found in scene!");
+            }
+        }
 
+        if (leftControllerTransform == null)
+        {
+            GameObject leftHand = GameObject.Find("LeftHandAnchor");
+            if (leftHand != null)
+            {
+                leftControllerTransform = leftHand.transform;
+                Debug.Log("[AnchorGUI] Found LeftHandAnchor: " + leftControllerTransform.name);
+            }
+            else
+            {
+                Debug.LogWarning("[AnchorGUI] LeftHandAnchor not found in scene!");
+            }
+        }
+
+        // Method 2: Fallback - find OVRCameraRig and get children
+        if (rightControllerTransform == null || leftControllerTransform == null)
+        {
+            OVRCameraRig cameraRig = FindObjectOfType<OVRCameraRig>();
+            if (cameraRig != null)
+            {
+                Transform trackingSpace = cameraRig.trackingSpace;
+
+                if (trackingSpace != null)
+                {
+                    if (rightControllerTransform == null)
+                    {
+                        rightControllerTransform = trackingSpace.Find("RightHandAnchor");
+                        if (rightControllerTransform != null)
+                            Debug.Log("[AnchorGUI] Found RightHandAnchor via OVRCameraRig");
+                    }
+
+                    if (leftControllerTransform == null)
+                    {
+                        leftControllerTransform = trackingSpace.Find("LeftHandAnchor");
+                        if (leftControllerTransform != null)
+                            Debug.Log("[AnchorGUI] Found LeftHandAnchor via OVRCameraRig");
+                    }
+                }
+            }
+        }
+
+        // Final check
+        if (rightControllerTransform == null)
+        {
+            Debug.LogError("[AnchorGUI] Failed to find RightHandAnchor!");
+        }
+
+        if (leftControllerTransform == null)
+        {
+            Debug.LogError("[AnchorGUI] Failed to find LeftHandAnchor!");
+        }
+    }
     private void Update()
     {
         UpdateStatusIndicator();
+        if (isPlacingAnchor)
+        {
+            UpdateCursorPositions();
+            CheckPlacementButtons();
+        }
     }
 
     private void SetupButtonListeners()
     {
-            hostSessionButton?.onClick.AddListener(OnHostSessionClicked);
+        hostSessionButton?.onClick.AddListener(OnHostSessionClicked);
 
-            joinSessionButton?.onClick.AddListener(OnJoinSessionClicked);
+        joinSessionButton?.onClick.AddListener(OnJoinSessionClicked);
 
-            leaveSessionButton?.onClick.AddListener(OnLeaveSessionClicked);
+        leaveSessionButton?.onClick.AddListener(OnLeaveSessionClicked);
 
-            createAnchorButton?.onClick.AddListener(OnCreateAnchorClicked);
+        createAnchorButton?.onClick.AddListener(OnCreateAnchorClicked);
 
-            saveAnchorButton?.onClick.AddListener(OnSaveAnchorClicked);
+        saveAnchorButton?.onClick.AddListener(OnSaveAnchorClicked);
 
-            loadAnchorsButton?.onClick.AddListener(OnLoadAnchorsClicked);
+        loadAnchorsButton?.onClick.AddListener(OnLoadAnchorsClicked);
 
-            shareAnchorsButton?.onClick.AddListener(OnShareAnchorsClicked);
+        shareAnchorsButton?.onClick.AddListener(OnShareAnchorsClicked);
 
-            clearAnchorsButton?.onClick.AddListener(OnClearAnchorsClicked);
+        clearAnchorsButton?.onClick.AddListener(OnClearAnchorsClicked);
 
-            confirmYesButton?.onClick.AddListener(OnConfirmationYes);
+        confirmYesButton?.onClick.AddListener(OnConfirmationYes);
 
-            confirmNoButton?.onClick.AddListener(OnConfirmationNo);
+        confirmNoButton?.onClick.AddListener(OnConfirmationNo);
     }
 
     private void SetupInputFields()
@@ -433,7 +530,9 @@ public class AnchorGUIManager : MonoBehaviour
 
 #endif
 
-    private async void OnCreateAnchorClicked()
+  
+
+    private void OnCreateAnchorClicked()
     {
         if (cameraTransform == null)
         {
@@ -441,19 +540,258 @@ public class AnchorGUIManager : MonoBehaviour
             return;
         }
 
-        LogStatus("Creating spatial anchor...");
+        // ✅ Enter placement mode
+        EnterAnchorPlacementMode();
+    }
+    // ============================================================================
+    // CONTROLLER-BASED ANCHOR PLACEMENT METHODS
+    // ============================================================================
+
+    /// <summary>
+    /// Enters placement mode - shows cursors on controllers
+    /// </summary>
+    private void EnterAnchorPlacementMode()
+    {
+        Debug.Log("[AnchorGUI] ===== ENTERING PLACEMENT MODE =====");
+
+        // Verify controllers exist
+        if (leftControllerTransform == null || rightControllerTransform == null)
+        {
+            Debug.LogWarning("[AnchorGUI] Controllers NULL, trying to find them...");
+            FindControllers();
+
+            if (leftControllerTransform == null || rightControllerTransform == null)
+            {
+                LogStatus("⚠️ Controllers not detected!", true);
+                Debug.LogError($"[AnchorGUI] Still NULL!  Left: {leftControllerTransform == null}, Right: {rightControllerTransform == null}");
+                return;
+            }
+        }
+
+        Debug.Log($"[AnchorGUI] ✅ Controllers found - Left: {leftControllerTransform.name}, Right: {rightControllerTransform.name}");
+
+        isPlacingAnchor = true;
+        LogStatus("👉 Pull index trigger to place anchor");
+
+        // Check cursor prefab
+        if (anchorCursorPrefab == null)
+        {
+            Debug.LogError("[AnchorGUI] ❌ ANCHOR CURSOR PREFAB IS NULL!  Check Inspector assignment!");
+            LogStatus("ERROR: Cursor prefab not assigned!", true);
+            return;
+        }
+
+        Debug.Log($"[AnchorGUI] ✅ Cursor prefab assigned: {anchorCursorPrefab.name}");
+
+        // LEFT CONTROLLER CURSOR
+        if (leftControllerTransform != null && leftCursorInstance == null)
+        {
+            Debug.Log($"[AnchorGUI] Creating LEFT cursor at controller position: {leftControllerTransform.position}");
+
+            leftCursorInstance = Instantiate(anchorCursorPrefab, leftControllerTransform);
+
+            if (leftCursorInstance == null)
+            {
+                Debug.LogError("[AnchorGUI] ❌ LEFT cursor instantiation FAILED!");
+            }
+            else
+            {
+                leftCursorInstance.name = "LeftControllerCursor";
+                leftCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
+                leftCursorInstance.transform.localRotation = Quaternion.identity;
+                leftCursorInstance.transform.localScale = Vector3.one * 3f; // VERY BIG for testing
+                leftCursorInstance.SetActive(true);
+
+                Debug.Log($"[AnchorGUI] ✅ LEFT cursor created!");
+                Debug.Log($"[AnchorGUI]    - World Position: {leftCursorInstance.transform.position}");
+                Debug.Log($"[AnchorGUI]    - Local Position: {leftCursorInstance.transform.localPosition}");
+                Debug.Log($"[AnchorGUI]    - Scale: {leftCursorInstance.transform.localScale}");
+                Debug.Log($"[AnchorGUI]    - Active: {leftCursorInstance.activeSelf}");
+                Debug.Log($"[AnchorGUI]    - Parent: {leftCursorInstance.transform.parent.name}");
+
+                // Check if it has a renderer
+                Renderer[] renderers = leftCursorInstance.GetComponentsInChildren<Renderer>();
+                Debug.Log($"[AnchorGUI]    - Renderers found: {renderers.Length}");
+                foreach (var r in renderers)
+                {
+                    Debug.Log($"[AnchorGUI]       - Renderer: {r.name}, Enabled: {r.enabled}, Material: {r.material.name}");
+                }
+            }
+        }
+        else if (leftCursorInstance != null)
+        {
+            Debug.Log("[AnchorGUI] LEFT cursor already exists, reusing");
+            leftCursorInstance.SetActive(true);
+        }
+
+        // RIGHT CONTROLLER CURSOR
+        if (rightControllerTransform != null && rightCursorInstance == null)
+        {
+            Debug.Log($"[AnchorGUI] Creating RIGHT cursor at controller position: {rightControllerTransform.position}");
+
+            rightCursorInstance = Instantiate(anchorCursorPrefab, rightControllerTransform);
+
+            if (rightCursorInstance == null)
+            {
+                Debug.LogError("[AnchorGUI] ❌ RIGHT cursor instantiation FAILED!");
+            }
+            else
+            {
+                rightCursorInstance.name = "RightControllerCursor";
+                rightCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
+                rightCursorInstance.transform.localRotation = Quaternion.identity;
+                rightCursorInstance.transform.localScale = Vector3.one * 3f; // VERY BIG for testing
+                rightCursorInstance.SetActive(true);
+
+                Debug.Log($"[AnchorGUI] ✅ RIGHT cursor created!");
+                Debug.Log($"[AnchorGUI]    - World Position: {rightCursorInstance.transform.position}");
+                Debug.Log($"[AnchorGUI]    - Local Position: {rightCursorInstance.transform.localPosition}");
+                Debug.Log($"[AnchorGUI]    - Scale: {rightCursorInstance.transform.localScale}");
+                Debug.Log($"[AnchorGUI]    - Active: {rightCursorInstance.activeSelf}");
+                Debug.Log($"[AnchorGUI]    - Parent: {rightCursorInstance.transform.parent.name}");
+
+                // Check if it has a renderer
+                Renderer[] renderers = rightCursorInstance.GetComponentsInChildren<Renderer>();
+                Debug.Log($"[AnchorGUI]    - Renderers found: {renderers.Length}");
+                foreach (var r in renderers)
+                {
+                    Debug.Log($"[AnchorGUI]       - Renderer: {r.name}, Enabled: {r.enabled}, Material: {r.material.name}");
+                }
+            }
+        }
+        else if (rightCursorInstance != null)
+        {
+            Debug.Log("[AnchorGUI] RIGHT cursor already exists, reusing");
+            rightCursorInstance.SetActive(true);
+        }
+
+        Debug.Log("[AnchorGUI] ===== PLACEMENT MODE ENTERED =====");
+    }
+
+    /// <summary>
+    /// Updates cursor visibility (runs every frame when in placement mode)
+    /// </summary>
+    private void UpdateCursorPositions()
+    {
+        // Cursors automatically follow controllers since they're parented! 
+        // Just make sure they're visible
+        if (leftCursorInstance != null)
+            leftCursorInstance.SetActive(true);
+
+        if (rightCursorInstance != null)
+            rightCursorInstance.SetActive(true);
+    }
+
+    /// <summary>
+    /// Checks for A/B button presses to confirm placement
+    /// </summary>
+    private void CheckPlacementButtons()
+    {
+        // Check A button (right controller)
+        bool pressedA = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
+
+        // Check B button (right controller) 
+        bool pressedB = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
+
+        // Check X button (left controller)
+        bool pressedX = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
+
+        // Check Y button (left controller)
+        bool pressedY = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.LTouch);
+
+        if (pressedA || pressedB)
+        {
+            // Right controller button pressed
+            CreateAnchorAtController(rightControllerTransform, OVRInput.Controller.RTouch);
+        }
+        else if (pressedX || pressedY)
+        {
+            // Left controller button pressed
+            CreateAnchorAtController(leftControllerTransform, OVRInput.Controller.LTouch);
+        }
+
+        // Cancel with grip buttons
+        if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger))
+        {
+            CancelAnchorPlacement();
+        }
+    }
+    /// <summary>
+    /// Gets controller position using OVRInput (backup method)
+    /// </summary>
+    private Vector3 GetControllerPosition(OVRInput.Controller controller)
+    {
+        // Get local position from OVR
+        Vector3 localPos = OVRInput.GetLocalControllerPosition(controller);
+
+        // Convert to world space
+        OVRCameraRig cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null && cameraRig.trackingSpace != null)
+        {
+            return cameraRig.trackingSpace.TransformPoint(localPos);
+        }
+
+        return localPos; // Fallback to local
+    }
+
+    /// <summary>
+    /// Gets controller rotation using OVRInput (backup method)
+    /// </summary>
+    private Quaternion GetControllerRotation(OVRInput.Controller controller)
+    {
+        Quaternion localRot = OVRInput.GetLocalControllerRotation(controller);
+
+        OVRCameraRig cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null && cameraRig.trackingSpace != null)
+        {
+            return cameraRig.trackingSpace.rotation * localRot;
+        }
+
+        return localRot;
+    }
+
+    /// <summary>
+    /// Creates anchor at the specified controller's cursor position
+    /// </summary>
+    private async void CreateAnchorAtController(Transform controllerTransform, OVRInput.Controller controller)
+    {
+        LogStatus("Creating anchor.. .");
+
+        // Haptic feedback
+        OVRInput.SetControllerVibration(0.5f, 0.5f, controller);
 
         try
         {
-            Vector3 anchorPosition = cameraTransform.position + cameraTransform.forward * anchorCreationDistance;
-            anchorPosition.y = 0;
+            Vector3 anchorPosition;
+            Quaternion anchorRotation;
 
-            var anchor = await CreateAnchorAtPosition(anchorPosition, Quaternion.identity);
+            // ✅ TRY TRANSFORM FIRST
+            if (controllerTransform != null)
+            {
+                anchorPosition = controllerTransform.position + controllerTransform.forward * cursorOffset;
+                anchorRotation = controllerTransform.rotation;
+            }
+            // ✅ FALLBACK TO OVRINPUT
+            else
+            {
+                Debug.LogWarning("[AnchorGUI] Using OVRInput fallback for controller position");
+                anchorPosition = GetControllerPosition(controller);
+                anchorRotation = GetControllerRotation(controller);
+                anchorPosition += anchorRotation * Vector3.forward * cursorOffset;
+            }
+
+            var anchor = await CreateAnchorAtPosition(anchorPosition, anchorRotation);
 
             if (anchor != null)
             {
                 currentAnchors.Add(anchor);
-                LogStatus("Anchor created!  UUID: " + anchor.Uuid.ToString().Substring(0, 8) + "...");
+                LogStatus($"✅ Anchor created!   ({currentAnchors.Count} total)");
+
+                // Success vibration
+                OVRInput.SetControllerVibration(1f, 1f, controller);
+                await System.Threading.Tasks.Task.Delay(100);
+                OVRInput.SetControllerVibration(0, 0, controller);
+
                 UpdateAllUI();
             }
             else
@@ -464,7 +802,44 @@ public class AnchorGUIManager : MonoBehaviour
         catch (Exception e)
         {
             LogStatus("Error: " + e.Message, true);
+            Debug.LogError("[AnchorGUI] Exception creating anchor: " + e);
         }
+        finally
+        {
+            ExitAnchorPlacementMode();
+        }
+    }
+    /// <summary>
+    /// Cancels anchor placement without creating anchor
+    /// </summary>
+    private void CancelAnchorPlacement()
+    {
+        LogStatus("Anchor placement cancelled");
+        ExitAnchorPlacementMode();
+    }
+
+    /// <summary>
+    /// Exits placement mode - hides cursors and resets state
+    /// </summary>
+    private void ExitAnchorPlacementMode()
+    {
+        isPlacingAnchor = false;
+
+        // Destroy left cursor
+        if (leftCursorInstance != null)
+        {
+            Destroy(leftCursorInstance);
+            leftCursorInstance = null;
+        }
+
+        // Destroy right cursor
+        if (rightCursorInstance != null)
+        {
+            Destroy(rightCursorInstance);
+            rightCursorInstance = null;
+        }
+
+        Debug.Log("[AnchorGUI] Exited anchor placement mode");
     }
 
     private async void OnSaveAnchorClicked()
@@ -777,12 +1152,25 @@ public class AnchorGUIManager : MonoBehaviour
     {
         try
         {
+            // Create anchor GameObject
             var anchorGameObject = new GameObject("Anchor_" + DateTime.Now.ToString("HHmmss"));
             anchorGameObject.transform.position = position;
             anchorGameObject.transform.rotation = rotation;
 
+            // Add visual using cursor prefab
+            if (anchorCursorPrefab != null)
+            {
+                GameObject visual = Instantiate(anchorCursorPrefab, anchorGameObject.transform);
+                visual.name = "Visual";
+                visual.transform.localPosition = Vector3.zero;
+                visual.transform.localRotation = Quaternion.identity;
+                visual.transform.localScale = Vector3.one;
+            }
+
+            // Add spatial anchor component
             var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
 
+            // Wait for anchor creation
             int timeout = 100;
             while (!spatialAnchor.Created && timeout > 0)
             {
@@ -790,6 +1178,7 @@ public class AnchorGUIManager : MonoBehaviour
                 timeout--;
             }
 
+            // Check if successful
             if (!spatialAnchor.Created)
             {
                 Debug.LogError("[AnchorGUI] Anchor creation timed out");
