@@ -305,46 +305,50 @@ public class AnchorGUIManager : MonoBehaviour
 #endif
     }
 
-#if FUSION2
 
     private async void OnLeaveSessionClicked()
     {
-        Debug.Log("[AnchorGUI] Leave Session clicked");
-        LogStatus("Leaving session.. .");
+#if FUSION2
+    Debug.Log("[AnchorGUI] Leave Session clicked");
+    LogStatus("Leaving session...");
+    
+    try
+    {
+        if (networkRunner != null && networkRunner.IsRunning)
+        {
+            Debug.Log("[AnchorGUI] Shutting down NetworkRunner");
+            await networkRunner. Shutdown();
+            
+            if (networkRunner.gameObject != null)
+            {
+                Destroy(networkRunner.gameObject);
+            }
+            
+            networkRunner = null;
+            Debug.Log("[AnchorGUI] NetworkRunner shut down successfully");
+        }
+        else
+        {
+            Debug.Log("[AnchorGUI] No active NetworkRunner to shut down");
+        }
         
-        try
-        {
-            if (networkRunner != null && networkRunner.IsRunning)
-            {
-                Debug.Log("[AnchorGUI] Shutting down NetworkRunner");
-                await networkRunner. Shutdown();
-                
-                if (networkRunner.gameObject != null)
-                {
-                    Destroy(networkRunner.gameObject);
-                }
-                
-                networkRunner = null;
-                Debug.Log("[AnchorGUI] NetworkRunner shut down successfully");
-            }
-            else
-            {
-                Debug.Log("[AnchorGUI] No active NetworkRunner to shut down");
-            }
-            
-            isHost = false;
-            SetSessionState(SessionState.Idle);
-            
-            LogStatus("Left session");
-            UpdateAllUI();
-        }
-        catch (Exception e)
-        {
-            Debug.LogError("[AnchorGUI] Error leaving session: " + e);
-            LogStatus("Error leaving session: " + e. Message, true);
-        }
+        isHost = false;
+        SetSessionState(SessionState.Idle);
+        
+        LogStatus("Left session");
+        UpdateAllUI();
+    }
+    catch (Exception e)
+    {
+        Debug.LogError("[AnchorGUI] Error leaving session: " + e);
+        LogStatus("Error leaving session: " + e. Message, true);
+    }
+#else
+        LogStatus("Photon Fusion not available!", true);
+#endif
     }
 
+#if FUSION2
     private async void StartPhotonHostSession(string roomName)
     {
         try
@@ -976,7 +980,6 @@ public class AnchorGUIManager : MonoBehaviour
             LogStatus("No anchors to clear!", true);
             return;
         }
-
         ShowConfirmationDialog(
             "Clear " + currentAnchors.Count + " anchor(s)?",
             () =>
@@ -990,6 +993,11 @@ public class AnchorGUIManager : MonoBehaviour
                 }
 
                 currentAnchors.Clear();
+
+                // ✅ ADD: Clear tracking when clearing anchors
+                savedAnchors.Clear();
+                sharedAnchors.Clear();
+
                 LogStatus("Anchors cleared");
                 UpdateAllUI();
             }
@@ -1056,23 +1064,20 @@ public class AnchorGUIManager : MonoBehaviour
             groupUuidText.text = "UUID: " + currentGroupUuid.ToString().Substring(0, 13) + "... ";
         }
     }
-
     private void UpdateAnchorCount()
     {
         if (anchorText == null) return;
 
-        // ✅ NEW: Display detailed anchor list instead of just count
         if (currentAnchors.Count == 0)
         {
-            anchorText.text = "📍 Anchors: (none)";
+            anchorText.text = "Anchors: (none)";
             return;
         }
 
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
 
         // Header with role and count
-        string roleIcon = isHost ? "👑" : "👤";
-        string role = isHost ? "HOST" : "CLIENT";
+        string roleIcon = isHost ? "[HOST]" : "[CLIENT]";
 
         int localizedCount = 0;
         foreach (var anchor in currentAnchors)
@@ -1081,64 +1086,61 @@ public class AnchorGUIManager : MonoBehaviour
                 localizedCount++;
         }
 
-        sb.AppendLine($"{roleIcon} {role} - {currentAnchors.Count} Anchor(s) ({localizedCount} localized)");
-        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        sb.AppendLine($"{roleIcon} {currentAnchors.Count} Anchor(s) ({localizedCount} localized)");
+        sb.AppendLine("================================");
 
         int index = 1;
         foreach (var anchor in currentAnchors)
         {
             if (anchor == null) continue;
 
-            sb.AppendLine($"\n🔷 #{index}");
+            sb.AppendLine($"\nAnchor #{index}");
 
-            // Short UUID (first 8 characters)
+            // Short UUID
             string uuidShort = anchor.Uuid.ToString().Substring(0, 8);
-            sb.AppendLine($"   ID: {uuidShort}");
+            sb.AppendLine($"  ID: {uuidShort}");
 
-            // Full UUID (for comparison between devices)
-            sb.AppendLine($"   Full: {anchor.Uuid}");
+            // Full UUID
+            sb.AppendLine($"  Full: {anchor.Uuid}");
 
-            // Status badges
+            // Status badges (text only)
             List<string> badges = new List<string>();
 
             if (anchor.Created)
-                badges.Add("✅");
+                badges.Add("CREATED");
             else
-                badges.Add("⏳");
+                badges.Add("CREATING");
 
             if (anchor.Localized)
-                badges.Add("🌍");
+                badges.Add("LOCALIZED");
             else
-                badges.Add("📡");
+                badges.Add("LOCALIZING");
 
-            // Check if saved
             if (savedAnchors.ContainsKey(anchor.Uuid) && savedAnchors[anchor.Uuid])
-                badges.Add("💾");
+                badges.Add("SAVED");
 
-            // Check if shared
             if (sharedAnchors.ContainsKey(anchor.Uuid) && sharedAnchors[anchor.Uuid])
-                badges.Add("☁️");
+                badges.Add("SHARED");
 
-            sb.Append($"   [{string.Join("][", badges)}]");
+            sb.AppendLine($"  Status: {string.Join(" | ", badges)}");
 
             // Position
             Vector3 pos = anchor.transform.position;
-            sb.AppendLine($" ({pos.x:F1}, {pos.y:F1}, {pos.z:F1})");
+            sb.AppendLine($"  Pos: ({pos.x:F1}, {pos.y:F1}, {pos.z:F1})");
 
             index++;
         }
 
-        // Footer with Group UUID if available
+        // Footer with Group UUID
         if (currentGroupUuid != Guid.Empty)
         {
-            sb.AppendLine("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            string groupShort = currentGroupUuid.ToString().Substring(0, 8);
-            sb.AppendLine($"🔗 Group: {groupShort}.. .");
+            sb.AppendLine("\n================================");
+            string groupShort = currentGroupUuid.ToString().Substring(0, 13);
+            sb.AppendLine($"Group UUID: {groupShort}.. .");
         }
 
         anchorText.text = sb.ToString();
     }
-
     private void UpdateButtonStates()
     {
         bool canStartSession = (currentState == SessionState.Idle);
