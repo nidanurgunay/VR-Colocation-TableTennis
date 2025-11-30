@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+﻿                                                    using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System;
@@ -75,6 +75,7 @@ public class AnchorGUIManager : MonoBehaviour
     {
         Idle,
         Hosting,
+        Joining,
         Connected,
         Loading,
         Sharing
@@ -114,35 +115,25 @@ public class AnchorGUIManager : MonoBehaviour
 
     private void SetupButtonListeners()
     {
-        if (hostSessionButton != null)
-            hostSessionButton.onClick.AddListener(OnHostSessionClicked);
+            hostSessionButton?.onClick.AddListener(OnHostSessionClicked);
 
-        if (joinSessionButton != null)
-            joinSessionButton.onClick.AddListener(OnJoinSessionClicked);
+            joinSessionButton?.onClick.AddListener(OnJoinSessionClicked);
 
-        if (leaveSessionButton != null)
-            leaveSessionButton.onClick.AddListener(OnLeaveSessionClicked);
+            leaveSessionButton?.onClick.AddListener(OnLeaveSessionClicked);
 
-        if (createAnchorButton != null)
-            createAnchorButton.onClick.AddListener(OnCreateAnchorClicked);
+            createAnchorButton?.onClick.AddListener(OnCreateAnchorClicked);
 
-        if (saveAnchorButton != null)
-            saveAnchorButton.onClick.AddListener(OnSaveAnchorClicked);
+            saveAnchorButton?.onClick.AddListener(OnSaveAnchorClicked);
 
-        if (loadAnchorsButton != null)
-            loadAnchorsButton.onClick.AddListener(OnLoadAnchorsClicked);
+            loadAnchorsButton?.onClick.AddListener(OnLoadAnchorsClicked);
 
-        if (shareAnchorsButton != null)
-            shareAnchorsButton.onClick.AddListener(OnShareAnchorsClicked);
+            shareAnchorsButton?.onClick.AddListener(OnShareAnchorsClicked);
 
-        if (clearAnchorsButton != null)
-            clearAnchorsButton.onClick.AddListener(OnClearAnchorsClicked);
+            clearAnchorsButton?.onClick.AddListener(OnClearAnchorsClicked);
 
-        if (confirmYesButton != null)
-            confirmYesButton.onClick.AddListener(OnConfirmationYes);
+            confirmYesButton?.onClick.AddListener(OnConfirmationYes);
 
-        if (confirmNoButton != null)
-            confirmNoButton.onClick.AddListener(OnConfirmationNo);
+            confirmNoButton?.onClick.AddListener(OnConfirmationNo);
     }
 
     private void SetupInputFields()
@@ -299,7 +290,7 @@ public class AnchorGUIManager : MonoBehaviour
     {
         try
         {
-            SetSessionState(SessionState. Hosting);
+            SetSessionState(SessionState.Joining);
             
             networkRunner = FindObjectOfType<NetworkRunner>();
             
@@ -622,6 +613,8 @@ public class AnchorGUIManager : MonoBehaviour
             stateText = "IDLE";
         else if (currentState == SessionState.Hosting)
             stateText = "Hosting... ";
+        else if (currentState == SessionState.Joining)
+            stateText = "Joining... ";
         else if (currentState == SessionState.Connected)
             stateText = isHost ? "HOST (Connected)" : "CLIENT (Connected)";
         else if (currentState == SessionState.Loading)
@@ -680,7 +673,7 @@ public class AnchorGUIManager : MonoBehaviour
     private void UpdateButtonStates()
     {
         bool canStartSession = (currentState == SessionState.Idle);
-        bool inSession = (currentState == SessionState.Connected || currentState == SessionState.Hosting);
+        bool inSession = (currentState == SessionState.Connected || currentState == SessionState.Hosting || currentState == SessionState.Joining);
 
         if (hostSessionButton != null)
             hostSessionButton.interactable = canStartSession;
