@@ -47,13 +47,16 @@ public class AnchorGUIManager : MonoBehaviour
     [SerializeField] private Color idleColor = Color.gray;
 
     [Header("Controller Anchor Creation")]
-    private GameObject anchorCursorPrefab; // Icon shown on controller
+    private GameObject anchorCursorPrefab;
     private GameObject anchorMarkerPrefab;
     [SerializeField] private Transform rightControllerTransform;
     [SerializeField] private Transform leftControllerTransform;
     [SerializeField] private float cursorOffset = 0.1f;
     [SerializeField] private float cursorScale = 0.05f;
-    [SerializeField] private float anchorScale = 0.1f;
+    [SerializeField] private float anchorScale = 1.0f;
+
+    [Header("Debug Settings")]
+    [SerializeField] private bool enableVerboseLogging = false;
 
     private List<OVRSpatialAnchor> currentAnchors;
     private bool isHost;
@@ -65,7 +68,6 @@ public class AnchorGUIManager : MonoBehaviour
     private GameObject leftCursorInstance;
     private GameObject rightCursorInstance;
 
-    // Room name options
     private readonly string[] roomNameOptions = new string[]
     {
         "Mars",
@@ -76,6 +78,7 @@ public class AnchorGUIManager : MonoBehaviour
         "Comet",
         "Custom..."
     };
+
     private Dictionary<Guid, bool> savedAnchors = new Dictionary<Guid, bool>();
     private Dictionary<Guid, bool> sharedAnchors = new Dictionary<Guid, bool>();
     private const int CUSTOM_ROOM_INDEX = 6;
@@ -114,31 +117,16 @@ public class AnchorGUIManager : MonoBehaviour
             return;
         }
 
-        Debug.Log("[AnchorGUI] Loading AnchorCursor from Resources...");
         anchorCursorPrefab = Resources.Load<GameObject>("AnchorCursorSphere");
-
         if (anchorCursorPrefab == null)
         {
-            Debug.LogError("[AnchorGUI]  Failed to load AnchorCursor!  Check: Assets/Resources/AnchorCursor.prefab");
-        }
-        else
-        {
-            Debug.Log($"[AnchorGUI] Loaded cursor prefab: {anchorCursorPrefab.name}");
+            Debug.LogError("[AnchorGUI] Failed to load AnchorCursor from Resources");
         }
 
-
-        Debug.Log("[AnchorGUI] Loading AnchorMarker from Resources...");
-        GameObject anchorMarkerPrefab = Resources.Load<GameObject>("AnchorMarker");
-
+        anchorMarkerPrefab = Resources.Load<GameObject>("AnchorMarker");
         if (anchorMarkerPrefab == null)
         {
-            Debug.LogError("[AnchorGUI] Failed to load AnchorMarker!  Will use cursor prefab as fallback.");
-        }
-        else
-        {
-            Debug.Log($"[AnchorGUI]  Loaded anchor marker prefab: {anchorMarkerPrefab.name}");
-            // Store it for later use
-            this.anchorMarkerPrefab = anchorMarkerPrefab;
+            Debug.LogWarning("[AnchorGUI] Failed to load AnchorMarker, using cursor as fallback");
         }
 
         FindControllers();
@@ -152,78 +140,43 @@ public class AnchorGUIManager : MonoBehaviour
 
         LogStatus("Anchor GUI initialized");
     }
-    /// <summary>
-    /// Finds controller transforms at runtime
-    /// </summary>
+
     private void FindControllers()
     {
-        // Method 1: Try to find by name
         if (rightControllerTransform == null)
         {
             GameObject rightHand = GameObject.Find("RightHandAnchor");
             if (rightHand != null)
-            {
                 rightControllerTransform = rightHand.transform;
-                Debug.Log("[AnchorGUI] Found RightHandAnchor: " + rightControllerTransform.name);
-            }
-            else
-            {
-                Debug.LogWarning("[AnchorGUI] RightHandAnchor not found in scene!");
-            }
         }
 
         if (leftControllerTransform == null)
         {
             GameObject leftHand = GameObject.Find("LeftHandAnchor");
             if (leftHand != null)
-            {
                 leftControllerTransform = leftHand.transform;
-                Debug.Log("[AnchorGUI] Found LeftHandAnchor: " + leftControllerTransform.name);
-            }
-            else
-            {
-                Debug.LogWarning("[AnchorGUI] LeftHandAnchor not found in scene!");
-            }
         }
 
-        // Method 2: Fallback - find OVRCameraRig and get children
         if (rightControllerTransform == null || leftControllerTransform == null)
         {
             OVRCameraRig cameraRig = FindObjectOfType<OVRCameraRig>();
-            if (cameraRig != null)
+            if (cameraRig != null && cameraRig.trackingSpace != null)
             {
-                Transform trackingSpace = cameraRig.trackingSpace;
+                if (rightControllerTransform == null)
+                    rightControllerTransform = cameraRig.trackingSpace.Find("RightHandAnchor");
 
-                if (trackingSpace != null)
-                {
-                    if (rightControllerTransform == null)
-                    {
-                        rightControllerTransform = trackingSpace.Find("RightHandAnchor");
-                        if (rightControllerTransform != null)
-                            Debug.Log("[AnchorGUI] Found RightHandAnchor via OVRCameraRig");
-                    }
-
-                    if (leftControllerTransform == null)
-                    {
-                        leftControllerTransform = trackingSpace.Find("LeftHandAnchor");
-                        if (leftControllerTransform != null)
-                            Debug.Log("[AnchorGUI] Found LeftHandAnchor via OVRCameraRig");
-                    }
-                }
+                if (leftControllerTransform == null)
+                    leftControllerTransform = cameraRig.trackingSpace.Find("LeftHandAnchor");
             }
         }
 
-        // Final check
         if (rightControllerTransform == null)
-        {
-            Debug.LogError("[AnchorGUI] Failed to find RightHandAnchor!");
-        }
+            Debug.LogError("[AnchorGUI] Failed to find RightHandAnchor");
 
         if (leftControllerTransform == null)
-        {
-            Debug.LogError("[AnchorGUI] Failed to find LeftHandAnchor!");
-        }
+            Debug.LogError("[AnchorGUI] Failed to find LeftHandAnchor");
     }
+
     private void Update()
     {
         UpdateStatusIndicator();
@@ -237,23 +190,14 @@ public class AnchorGUIManager : MonoBehaviour
     private void SetupButtonListeners()
     {
         hostSessionButton?.onClick.AddListener(OnHostSessionClicked);
-
         joinSessionButton?.onClick.AddListener(OnJoinSessionClicked);
-
         leaveSessionButton?.onClick.AddListener(OnLeaveSessionClicked);
-
         createAnchorButton?.onClick.AddListener(OnCreateAnchorClicked);
-
         saveAnchorButton?.onClick.AddListener(OnSaveAnchorClicked);
-
         loadAnchorsButton?.onClick.AddListener(OnLoadAnchorsClicked);
-
         shareAnchorsButton?.onClick.AddListener(OnShareAnchorsClicked);
-
         clearAnchorsButton?.onClick.AddListener(OnClearAnchorsClicked);
-
         confirmYesButton?.onClick.AddListener(OnConfirmationYes);
-
         confirmNoButton?.onClick.AddListener(OnConfirmationNo);
     }
 
@@ -262,8 +206,8 @@ public class AnchorGUIManager : MonoBehaviour
 #if UNITY_ANDROID && !UNITY_EDITOR
         if (roomNameInputField != null)
         {
-            roomNameInputField.shouldHideMobileInput = false;
-            roomNameInputField.shouldHideSoftKeyboard = false;
+            roomNameInputField. shouldHideMobileInput = false;
+            roomNameInputField. shouldHideSoftKeyboard = false;
         }
 #endif
     }
@@ -279,7 +223,6 @@ public class AnchorGUIManager : MonoBehaviour
             return;
         }
 
-        Debug.Log("[AnchorGUI] Hosting room: " + roomName);
         LogStatus("Creating Photon room: " + roomName);
         isHost = true;
         StartPhotonHostSession(roomName);
@@ -293,13 +236,12 @@ public class AnchorGUIManager : MonoBehaviour
 #if FUSION2
         string roomName = GetSelectedRoomName();
         
-        if (string.IsNullOrEmpty(roomName))
+        if (string. IsNullOrEmpty(roomName))
         {
             LogStatus("Please select or enter a room name!", true);
             return;
         }
 
-        Debug.Log("[AnchorGUI] Joining room: " + roomName);
         LogStatus("Joining Photon room: " + roomName);
         isHost = false;
         StartPhotonClientSession(roomName);
@@ -308,425 +250,403 @@ public class AnchorGUIManager : MonoBehaviour
 #endif
     }
 
-
     private async void OnLeaveSessionClicked()
     {
 #if FUSION2
-    Debug.Log("[AnchorGUI] Leave Session clicked");
-    LogStatus("Leaving session...");
-    
-    try
-    {
-        if (networkRunner != null && networkRunner.IsRunning)
+        LogStatus("Leaving session.. .");
+        
+        try
         {
-            Debug.Log("[AnchorGUI] Shutting down NetworkRunner");
-            await networkRunner. Shutdown();
-            
-            if (networkRunner.gameObject != null)
+            if (networkRunner != null && networkRunner.IsRunning)
             {
-                Destroy(networkRunner.gameObject);
+                await networkRunner.Shutdown();
+                
+                if (networkRunner.gameObject != null)
+                    Destroy(networkRunner.gameObject);
+                
+                networkRunner = null;
             }
             
-            networkRunner = null;
-            Debug.Log("[AnchorGUI] NetworkRunner shut down successfully");
-        }
-        else
-        {
-            Debug.Log("[AnchorGUI] No active NetworkRunner to shut down");
-        }
-        
-        isHost = false;
-        if (isAdvertising)
-    {
-        Debug.Log("[AnchorGUI] Stopping advertisement...");
-        var stopAdvert = await OVRColocationSession.StopAdvertisementAsync();
-        if (stopAdvert.Success)
-        {
-            Debug.Log("[AnchorGUI] Advertisement stopped");
-            isAdvertising = false;
-        }
-    }
+            isHost = false;
+            
+            if (isAdvertising)
+            {
+                var stopAdvert = await OVRColocationSession.StopAdvertisementAsync();
+                if (stopAdvert. Success)
+                    isAdvertising = false;
+            }
 
-    if (isDiscovering)
-    {
-        Debug.Log("[AnchorGUI] Stopping discovery...");
-        var stopDisco = await OVRColocationSession.StopDiscoveryAsync();
-        if (stopDisco.Success)
-        {
-            Debug.Log("[AnchorGUI] Discovery stopped");
-            isDiscovering = false;
+            if (isDiscovering)
+            {
+                var stopDisco = await OVRColocationSession.StopDiscoveryAsync();
+                if (stopDisco. Success)
+                    isDiscovering = false;
+                
+                OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
+            }
+
+            currentGroupUuid = Guid.Empty;
+
+            foreach (var anchor in currentAnchors)
+            {
+                if (anchor != null && anchor.gameObject != null)
+                    Destroy(anchor.gameObject);
+            }
+            currentAnchors.Clear();
+
+            SetSessionState(SessionState.Idle);
+            LogStatus("Left session");
+            UpdateAllUI();
         }
-    
-        // Unsubscribe from events
-        OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
-    }
-
-    currentGroupUuid = Guid.Empty;
-
-        SetSessionState(SessionState.Idle);
-        
-        LogStatus("Left session");
-        UpdateAllUI();
-    }
-    catch (Exception e)
-    {
-        Debug.LogError("[AnchorGUI] Error leaving session: " + e);
-        LogStatus("Error leaving session: " + e. Message, true);
-    }
+        catch (Exception e)
+        {
+            Debug.LogError("[AnchorGUI] Error leaving session: " + e);
+            LogStatus("Error leaving session: " + e.Message, true);
+        }
 #else
         LogStatus("Photon Fusion not available!", true);
 #endif
     }
 
 #if FUSION2
-   private async void StartPhotonHostSession(string roomName)
-{
-    try
-    {
-        SetSessionState(SessionState.Hosting);
-        
-        networkRunner = FindObjectOfType<NetworkRunner>();
-        
-        if (networkRunner == null)
-        {
-            Debug.Log("[AnchorGUI] Creating new NetworkRunner");
-            var runnerGO = new GameObject("NetworkRunner");
-            networkRunner = runnerGO.AddComponent<NetworkRunner>();
-            DontDestroyOnLoad(runnerGO);
-        }
-        else if (networkRunner.IsRunning)
-        {
-            Debug.Log("[AnchorGUI] Shutting down existing session");
-            await networkRunner.Shutdown();
-            await System.Threading.Tasks.Task.  Delay(500);
-        }
-
-        networkRunner. ProvideInput = true;
-        
-        Debug.Log("[AnchorGUI] Starting Host for room: " + roomName);
-        
-        var result = await networkRunner.StartGame(new StartGameArgs
-        {
-            GameMode = GameMode.Host,
-            SessionName = roomName,
-            SceneManager = networkRunner.GetComponent<INetworkSceneManager>()
-        });
-
-        //  CORRECT HOST CODE:
-             if (result.Ok)
-        {
-            Debug.Log("[AnchorGUI] Host started successfully");
-            LogStatus("Hosting room: " + roomName);
-            SetSessionState(SessionState.Connected);
-    
-            // Auto-create anchor disabled - use Create Anchor button instead
-            // await System.Threading.Tasks.Task. Delay(1000);
-            // await CreateHostAnchor();
-    
-            UpdateAllUI();
-        }
-        else
-        {
-            Debug.LogError("[AnchorGUI] Host failed: " + result.ShutdownReason);
-            LogStatus("Failed to host: " + result.ShutdownReason, true);
-            SetSessionState(SessionState.Idle);
-        }
-    }
-    catch (Exception e)
-    {
-        Debug.LogError("[AnchorGUI] Host exception: " + e);
-        LogStatus("Error: " + e.Message, true);
-        SetSessionState(SessionState.Idle);
-    }
-}
-
-   private async void StartPhotonClientSession(string roomName)
-{
-    try
-    {
-        SetSessionState(SessionState.Joining);
-        
-        networkRunner = FindObjectOfType<NetworkRunner>();
-        
-        if (networkRunner == null)
-        {
-            Debug.Log("[AnchorGUI] Creating new NetworkRunner");
-            var runnerGO = new GameObject("NetworkRunner");
-            networkRunner = runnerGO.AddComponent<NetworkRunner>();
-            DontDestroyOnLoad(runnerGO);
-        }
-        else if (networkRunner.IsRunning)
-        {
-            Debug.Log("[AnchorGUI] Shutting down existing session");
-            await networkRunner.Shutdown();
-            await System.Threading.Tasks. Task. Delay(500);
-        }
-
-        networkRunner.ProvideInput = true;
-        
-        Debug.Log("[AnchorGUI] Starting Client for room: " + roomName);
-        
-        var result = await networkRunner.StartGame(new StartGameArgs
-        {
-            GameMode = GameMode.Client,
-            SessionName = roomName,
-            SceneManager = networkRunner.GetComponent<INetworkSceneManager>()
-        });
-
-        //  CORRECT CLIENT CODE:
-        if (result.Ok)
-        {
-            Debug.Log("[AnchorGUI] Client joined successfully");
-            LogStatus("Joined room: " + roomName);
-            SetSessionState(SessionState.Connected);
-    
-            await System.Threading.Tasks.Task.Delay(500);
-            
-            //  CLIENT DISCOVERS ANCHORS (not creates!)
-            await StartDiscoveringGroupUuid();
-    
-            UpdateAllUI();
-        }
-        else
-        {
-            Debug.LogError("[AnchorGUI] Join failed: " + result.ShutdownReason);
-            LogStatus("Failed to join: " + result.ShutdownReason, true);
-            SetSessionState(SessionState. Idle);
-        }
-    }
-    catch (Exception e)
-    {
-        Debug.LogError("[AnchorGUI] Join exception: " + e);
-        LogStatus("Error: " + e.Message, true);
-        SetSessionState(SessionState.Idle);
-    }
-}
-
-//   private async System.Threading.Tasks.Task CreateHostAnchor()
-//{
-//    if (! isHost) return;
-    
-//    Debug.Log("[AnchorGUI] Host creating colocation anchor");
-    
-//    var anchor = await CreateAnchorAtPosition(Vector3.zero, Quaternion.identity);
-    
-//    if (anchor != null)
-//    {
-//        currentAnchors.Add(anchor);
-        
-//        var saveResult = await anchor.SaveAnchorAsync();
-//        if (saveResult.Success)
-//        {
-//            Debug.Log("[AnchorGUI] Host anchor saved");
-            
-//            // Generate Group UUID
-//            currentGroupUuid = Guid.NewGuid();
-            
-//            var shareResult = await OVRSpatialAnchor.ShareAsync(
-//                new List<OVRSpatialAnchor> { anchor }, 
-//                currentGroupUuid
-//            );
-            
-//            if (shareResult.Success)
-//            {
-//                Debug.Log("[AnchorGUI] Anchor shared with UUID: " + currentGroupUuid);
-                
-//                // START ADVERTISING THE GROUP UUID
-//                await StartAdvertisingGroupUuid();
-                
-//                LogStatus("Room ready!   UUID: " + currentGroupUuid. ToString(). Substring(0, 10) + "...");
-//                UpdateAllUI();
-//            }
-//            else
-//            {
-//                Debug.LogError("[AnchorGUI] Failed to share anchor: " + shareResult.Status);
-//            }
-//        }
-//    }
-//}
-private async System.Threading.Tasks. Task StartAdvertisingGroupUuid()
-{
-    if (isAdvertising)
-    {
-        Debug.Log("[AnchorGUI] Already advertising");
-        return;
-    }
-    
-    Debug.Log("[AnchorGUI] Starting to advertise Group UUID: " + currentGroupUuid);
-    
-    // Convert Group UUID to bytes for advertisement
-    byte[] uuidBytes = currentGroupUuid. ToByteArray();
-    
-    try
-    {
-        // KEY API CALL: Advertise the Group UUID
-        var startAdvert = await OVRColocationSession.StartAdvertisementAsync(uuidBytes);
-        
-        if (startAdvert.Success && startAdvert.TryGetValue(out Guid advertisementUuid))
-        {
-            Debug.Log($"[AnchorGUI] Started advertising with UUID: {advertisementUuid}");
-            isAdvertising = true;
-        }
-        else
-        {
-            Debug.LogError($"[AnchorGUI] Failed to start advertising: {startAdvert.Status}");
-        }
-    }
-    catch (Exception e)
-    {
-        Debug.LogError($"[AnchorGUI] Exception starting advertisement: {e.Message}");
-    }
-}
-private async System.Threading.Tasks.Task StartDiscoveringGroupUuid()
-{
-    if (isDiscovering)
-    {
-        Debug.Log("[AnchorGUI] Already discovering");
-        return;
-    }
-    
-    Debug.Log("[AnchorGUI] Starting to discover Group UUID.. .");
-    
-    // Subscribe to discovery events
-    OVRColocationSession.ColocationSessionDiscovered += OnColocationSessionDiscovered;
-    
-    try
-    {
-        // KEY API CALL: Start discovering sessions
-        var startDisco = await OVRColocationSession.StartDiscoveryAsync();
-        
-        if (startDisco.Success)
-        {
-            Debug.Log("[AnchorGUI] Started discovering sessions");
-            isDiscovering = true;
-            LogStatus("Discovering anchor sessions...");
-        }
-        else
-        {
-            Debug. LogError($"[AnchorGUI] Failed to start discovery: {startDisco.Status}");
-        }
-    }
-    catch (Exception e)
-    {
-        Debug.LogError($"[AnchorGUI] Exception starting discovery: {e.Message}");
-    }
-}
-
-/// <summary>
-/// Called when a colocation session is discovered
-/// </summary>
-private async void OnColocationSessionDiscovered(OVRColocationSession. Data data)
-{
-    Debug.Log($"[AnchorGUI] Discovered session with UUID: {data. AdvertisementUuid}");
-    
-    if (data. Metadata != null && data.Metadata.Length == 16)
+    private async void StartPhotonHostSession(string roomName)
     {
         try
         {
-            Guid discoveredGroupUuid = new Guid(data.Metadata);
-            Debug.Log($"[AnchorGUI] Received Group UUID: {discoveredGroupUuid}");
+            SetSessionState(SessionState.Hosting);
             
-            currentGroupUuid = discoveredGroupUuid;
-            UpdateAllUI();
+            networkRunner = FindObjectOfType<NetworkRunner>();
             
-            // Reduce delay to 200ms (was 500ms)
-            LogStatus("Found anchor session!   Loading...");
-            await System.Threading.Tasks.Task.Delay(200);
-            await LoadSharedAnchors();
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[AnchorGUI] Failed to parse Group UUID: {e.Message}");
-        }
-    }
-    else
-    {
-        Debug. LogWarning("[AnchorGUI] Received session without valid metadata");
-    }
-}
-  private async System.Threading.Tasks.Task LoadSharedAnchors()
-{
-    if (currentGroupUuid == Guid.Empty)
-    {
-        Debug.LogWarning("[AnchorGUI] No UUID to load from");
-        return;
-    }
-    
-    SetSessionState(SessionState.Loading);
-    LogStatus("Step 1/3: Requesting anchors from cloud...");
-    
-    var unboundAnchors = new List<OVRSpatialAnchor. UnboundAnchor>();
-    var loadResult = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(
-        currentGroupUuid,
-        unboundAnchors
-    );
-
-    if (loadResult.Success && unboundAnchors.Count > 0)
-    {
-        Debug.Log($"[AnchorGUI] Received {unboundAnchors.Count} unbound anchor(s)");
-        
-        LogStatus($"Step 2/3: Localizing {unboundAnchors.Count} anchor(s)...");
-        
-        int loadedCount = 0;
-        foreach (var unboundAnchor in unboundAnchors)
-        {
-            Debug.Log($"[AnchorGUI] Localizing anchor: {unboundAnchor. Uuid. ToString(). Substring(0, 8)}");
-            
-            bool localized = await unboundAnchor.LocalizeAsync();
-            if (localized)
+            if (networkRunner == null)
             {
-                Debug.Log($"[AnchorGUI] Anchor localized, creating GameObject...");
+                var runnerGO = new GameObject("NetworkRunner");
+                networkRunner = runnerGO.AddComponent<NetworkRunner>();
+                DontDestroyOnLoad(runnerGO);
+            }
+            else if (networkRunner.IsRunning)
+            {
+                await networkRunner.Shutdown();
+                await System.Threading.Tasks.Task. Delay(500);
+            }
+
+            networkRunner. ProvideInput = true;
+            
+            var result = await networkRunner.StartGame(new StartGameArgs
+            {
+                GameMode = GameMode.Host,
+                SessionName = roomName,
+                SceneManager = networkRunner.GetComponent<INetworkSceneManager>()
+            });
+
+            if (result.Ok)
+            {
+                Debug.Log("[AnchorGUI] Host started successfully");
+                LogStatus("Hosting room: " + roomName);
+                SetSessionState(SessionState.Connected);
                 
-                var anchorGO = new GameObject("SharedAnchor_" + unboundAnchor.Uuid. ToString(). Substring(0, 8));
-                var spatialAnchor = anchorGO.AddComponent<OVRSpatialAnchor>();
-                unboundAnchor.BindTo(spatialAnchor);
-                
-                // ADD VISUAL MARKER
-                GameObject visualPrefab = anchorMarkerPrefab != null ? anchorMarkerPrefab : anchorCursorPrefab;
-                if (visualPrefab != null)
-                {
-                    GameObject visual = Instantiate(visualPrefab, anchorGO.transform);
-                    visual.name = "Visual";
-                    visual.transform.localPosition = Vector3.zero;
-                    visual.transform.localRotation = Quaternion.identity;
-                    visual.transform.localScale = Vector3.one * anchorScale;
-                    Debug.Log($"[AnchorGUI] Added visual to loaded anchor");
-                }
-                
-                currentAnchors.Add(spatialAnchor);
-                loadedCount++;
-                
-                // Show progress
-                LogStatus($"Step 3/3: Loading...  ({loadedCount}/{unboundAnchors.Count})");
-                
-                Debug.Log("[AnchorGUI] Loaded shared anchor: " + unboundAnchor. Uuid);
+                await LoadLocalSavedAnchors();
+                UpdateAllUI();
             }
             else
             {
-                Debug. LogWarning($"[AnchorGUI] Failed to localize anchor: {unboundAnchor. Uuid. ToString().Substring(0, 8)}");
+                Debug.LogError("[AnchorGUI] Host failed: " + result.ShutdownReason);
+                LogStatus("Failed to host: " + result.ShutdownReason, true);
+                SetSessionState(SessionState.Idle);
             }
         }
-        
-        LogStatus($"SUCCESS: Loaded {loadedCount} anchor(s)");
-    }
-    else
-    {
-        if (loadResult.Success)
+        catch (Exception e)
         {
-            Debug. LogWarning("[AnchorGUI] Load succeeded but received 0 anchors");
+            Debug.LogError("[AnchorGUI] Host exception: " + e);
+            LogStatus("Error: " + e.Message, true);
+            SetSessionState(SessionState.Idle);
+        }
+    }
+
+    private async void StartPhotonClientSession(string roomName)
+    {
+        try
+        {
+            SetSessionState(SessionState.Joining);
+            
+            networkRunner = FindObjectOfType<NetworkRunner>();
+            
+            if (networkRunner == null)
+            {
+                var runnerGO = new GameObject("NetworkRunner");
+                networkRunner = runnerGO.AddComponent<NetworkRunner>();
+                DontDestroyOnLoad(runnerGO);
+            }
+            else if (networkRunner.IsRunning)
+            {
+                await networkRunner. Shutdown();
+                await System. Threading.Tasks.Task.Delay(500);
+            }
+
+            networkRunner.ProvideInput = true;
+            
+            var result = await networkRunner.StartGame(new StartGameArgs
+            {
+                GameMode = GameMode.Client,
+                SessionName = roomName,
+                SceneManager = networkRunner.GetComponent<INetworkSceneManager>()
+            });
+
+            if (result.Ok)
+            {
+                Debug.Log("[AnchorGUI] Client joined successfully");
+                LogStatus("Joined room: " + roomName);
+                SetSessionState(SessionState. Connected);
+        
+                await System.Threading.Tasks.Task. Delay(500);
+                await StartDiscoveringGroupUuid();
+        
+                UpdateAllUI();
+            }
+            else
+            {
+                Debug.LogError("[AnchorGUI] Join failed: " + result.ShutdownReason);
+                LogStatus("Failed to join: " + result.ShutdownReason, true);
+                SetSessionState(SessionState.Idle);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[AnchorGUI] Join exception: " + e);
+            LogStatus("Error: " + e.Message, true);
+            SetSessionState(SessionState.Idle);
+        }
+    }
+
+    private async System.Threading.Tasks.Task StartAdvertisingGroupUuid()
+    {
+        if (isAdvertising)
+            return;
+        
+        byte[] uuidBytes = currentGroupUuid.ToByteArray();
+        
+        try
+        {
+            var startAdvert = await OVRColocationSession.StartAdvertisementAsync(uuidBytes);
+            
+            if (startAdvert.Success && startAdvert.TryGetValue(out Guid advertisementUuid))
+            {
+                Debug.Log($"[AnchorGUI] Started advertising");
+                isAdvertising = true;
+            }
+            else
+            {
+                Debug.LogError($"[AnchorGUI] Failed to start advertising: {startAdvert. Status}");
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[AnchorGUI] Exception starting advertisement: {e. Message}");
+        }
+    }
+
+    private async System.Threading.Tasks.Task StartDiscoveringGroupUuid()
+    {
+        if (isDiscovering)
+            return;
+        
+        OVRColocationSession.ColocationSessionDiscovered += OnColocationSessionDiscovered;
+        
+        try
+        {
+            var startDisco = await OVRColocationSession.StartDiscoveryAsync();
+            
+            if (startDisco.Success)
+            {
+                Debug.Log("[AnchorGUI] Started discovering");
+                isDiscovering = true;
+                LogStatus("Discovering anchor sessions.. .");
+            }
+            else
+            {
+                Debug.LogError($"[AnchorGUI] Failed to start discovery: {startDisco.Status}");
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[AnchorGUI] Exception starting discovery: {e.Message}");
+        }
+    }
+
+    private async void OnColocationSessionDiscovered(OVRColocationSession.Data data)
+    {
+        if (data. Metadata != null && data.Metadata.Length == 16)
+        {
+            try
+            {
+                Guid discoveredGroupUuid = new Guid(data.Metadata);
+                Debug.Log($"[AnchorGUI] Received Group UUID");
+                
+                currentGroupUuid = discoveredGroupUuid;
+                UpdateAllUI();
+                
+                LogStatus("Found anchor session!  Loading...");
+                await System.Threading.Tasks.Task. Delay(200);
+                await LoadSharedAnchors();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[AnchorGUI] Failed to parse Group UUID: {e.Message}");
+            }
+        }
+    }
+
+    private async System.Threading.Tasks.Task LoadSharedAnchors()
+    {
+        if (currentGroupUuid == Guid.Empty)
+            return;
+        
+        SetSessionState(SessionState.Loading);
+        LogStatus("Requesting anchors from cloud...");
+        
+        var unboundAnchors = new List<OVRSpatialAnchor. UnboundAnchor>();
+        var loadResult = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(
+            currentGroupUuid,
+            unboundAnchors
+        );
+
+        if (loadResult.Success && unboundAnchors.Count > 0)
+        {
+            LogStatus($"Localizing {unboundAnchors. Count} anchor(s)...");
+            
+            int loadedCount = 0;
+            foreach (var unboundAnchor in unboundAnchors)
+            {
+                bool localized = await unboundAnchor.LocalizeAsync();
+                if (localized)
+                {
+                    var anchorGO = new GameObject("SharedAnchor_" + unboundAnchor.Uuid. ToString(). Substring(0, 8));
+                    var spatialAnchor = anchorGO.AddComponent<OVRSpatialAnchor>();
+                    unboundAnchor. BindTo(spatialAnchor);
+                    
+                    GameObject visualPrefab = anchorMarkerPrefab != null ?  anchorMarkerPrefab : anchorCursorPrefab;
+                    if (visualPrefab != null)
+                    {
+                        GameObject visual = Instantiate(visualPrefab, anchorGO.transform);
+                        visual.name = "Visual";
+                        visual.transform.localPosition = Vector3.zero;
+                        visual.transform.localRotation = Quaternion.identity;
+                        visual.transform.localScale = Vector3.one * anchorScale;
+                    }
+                    
+                    currentAnchors.Add(spatialAnchor);
+                    loadedCount++;
+                    
+                    LogStatus($"Loading...  ({loadedCount}/{unboundAnchors.Count})");
+                }
+            }
+            
+            LogStatus($"Loaded {loadedCount} anchor(s)");
         }
         else
         {
-            Debug.LogError($"[AnchorGUI] Load failed: {loadResult.Status}");
+            LogStatus("No shared anchors found", true);
         }
-        LogStatus("No shared anchors found", true);
+        
+        SetSessionState(SessionState.Connected);
+        UpdateAllUI();
     }
+
+private async System.Threading.Tasks.Task LoadLocalSavedAnchors()
+{
+    Debug.Log("[AnchorGUI] ===== LOAD LOCAL ANCHORS DEBUG START =====");
+    LogStatus("Loading saved anchors...");
+    SetSessionState(SessionState.Loading);
     
-    SetSessionState(SessionState.Connected);
-    UpdateAllUI();
+    try
+    {
+        var unboundAnchors = new List<OVRSpatialAnchor. UnboundAnchor>();
+        
+        Debug.Log("[AnchorGUI] Calling LoadUnboundAnchorsAsync with empty UUID list (load all)");
+        var queryResult = await OVRSpatialAnchor.LoadUnboundAnchorsAsync(new List<Guid>(), unboundAnchors);
+        
+        Debug.Log($"[AnchorGUI] Load query result:");
+        Debug.Log($"[AnchorGUI]   - Success: {queryResult.Success}");
+        Debug.Log($"[AnchorGUI]   - Status: {queryResult.Status}");
+        Debug.Log($"[AnchorGUI]   - Anchors found: {unboundAnchors. Count}");
+        
+        if (! queryResult.Success)
+        {
+            Debug.LogError($"[AnchorGUI] Load query failed with status: {queryResult.Status}");
+            LogStatus($"Load failed: {queryResult.Status}", true);
+            SetSessionState(SessionState.Connected);
+            return;
+        }
+        
+        if (unboundAnchors.Count == 0)
+        {
+            Debug.LogWarning("[AnchorGUI] No saved anchors found on device");
+            LogStatus("No saved anchors found");
+            SetSessionState(SessionState.Connected);
+            return;
+        }
+        
+        Debug. Log($"[AnchorGUI] Found {unboundAnchors.Count} saved anchor(s), attempting to localize...");
+        
+        int loadedCount = 0;
+        int failedCount = 0;
+        
+        foreach (var unboundAnchor in unboundAnchors)
+        {
+            Debug.Log($"[AnchorGUI] Processing anchor {unboundAnchor. Uuid}");
+            Debug.Log($"[AnchorGUI]   - Localized: {unboundAnchor.Localized}");
+            
+            bool localized = await unboundAnchor.LocalizeAsync();
+            
+            Debug.Log($"[AnchorGUI]   - Localize result: {localized}");
+            
+            if (localized)
+            {
+                var anchorGO = new GameObject("SavedAnchor_" + unboundAnchor. Uuid. ToString(). Substring(0, 8));
+                var spatialAnchor = anchorGO.AddComponent<OVRSpatialAnchor>();
+                unboundAnchor. BindTo(spatialAnchor);
+                
+                GameObject visualPrefab = anchorMarkerPrefab != null ? anchorMarkerPrefab : anchorCursorPrefab;
+                if (visualPrefab != null)
+                {
+                    GameObject visual = Instantiate(visualPrefab, anchorGO. transform);
+                    visual.name = "Visual";
+                    visual.transform.localPosition = Vector3.zero;
+                    visual. transform.localRotation = Quaternion.identity;
+                    visual.transform.localScale = Vector3.one * anchorScale;
+                }
+                
+                currentAnchors. Add(spatialAnchor);
+                savedAnchors[spatialAnchor.Uuid] = true;
+                loadedCount++;
+                
+                Debug.Log($"[AnchorGUI] SUCCESS: Loaded anchor {unboundAnchor. Uuid}");
+            }
+            else
+            {
+                failedCount++;
+                Debug.LogWarning($"[AnchorGUI] FAILED to localize anchor {unboundAnchor.Uuid}");
+            }
+        }
+        
+        Debug.Log("[AnchorGUI] ===== LOAD LOCAL ANCHORS DEBUG END =====");
+        Debug.Log($"[AnchorGUI] Loaded: {loadedCount}, Failed: {failedCount}");
+        
+        LogStatus($"Loaded {loadedCount} saved anchor(s)");
+        SetSessionState(SessionState.Connected);
+        UpdateAllUI();
+    }
+    catch (Exception e)
+    {
+        Debug.LogError($"[AnchorGUI] Exception loading saved anchors: {e}");
+        Debug.LogError($"[AnchorGUI] Stack trace: {e.StackTrace}");
+        LogStatus("Error loading saved anchors", true);
+        SetSessionState(SessionState.Connected);
+    }
 }
 
 
+
+#endif
 
     private void OnCreateAnchorClicked()
     {
@@ -736,148 +656,67 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
             return;
         }
 
-        // Only host can create additional anchors after initial colocation anchor
         if (!isHost && currentAnchors.Count == 0)
         {
-            LogStatus("Only host can create the first anchor!  Join a session to load anchors.", true);
+            LogStatus("Only host can create the first anchor!", true);
             return;
         }
 
-        //  Enter placement mode
         EnterAnchorPlacementMode();
     }
-    // ============================================================================
-    // CONTROLLER-BASED ANCHOR PLACEMENT METHODS
-    // ============================================================================
 
-    /// <summary>
-    /// Enters placement mode - shows cursors on controllers
-    /// </summary>
     private void EnterAnchorPlacementMode()
     {
-        Debug.Log("[AnchorGUI] ===== ENTERING PLACEMENT MODE =====");
-
-        // Verify controllers exist
         if (leftControllerTransform == null || rightControllerTransform == null)
         {
-            Debug.LogWarning("[AnchorGUI] Controllers NULL, trying to find them...");
             FindControllers();
 
             if (leftControllerTransform == null || rightControllerTransform == null)
             {
-                LogStatus(" Controllers not detected!", true);
-                Debug.LogError($"[AnchorGUI] Still NULL!  Left: {leftControllerTransform == null}, Right: {rightControllerTransform == null}");
+                LogStatus("Controllers not detected!", true);
                 return;
             }
         }
 
-        Debug.Log($"[AnchorGUI]  Controllers found - Left: {leftControllerTransform.name}, Right: {rightControllerTransform.name}");
-
         isPlacingAnchor = true;
-        LogStatus("👉 Press A, B, X, or Y button to place anchor");
+        LogStatus("Press A, B, X, or Y to place anchor");
 
-        // Check cursor prefab
         if (anchorCursorPrefab == null)
         {
-            Debug.LogError("[AnchorGUI]  ANCHOR CURSOR PREFAB IS NULL!  Check Inspector assignment!");
+            Debug.LogError("[AnchorGUI] Cursor prefab is NULL");
             LogStatus("ERROR: Cursor prefab not assigned!", true);
             return;
         }
 
-        Debug.Log($"[AnchorGUI]  Cursor prefab assigned: {anchorCursorPrefab.name}");
-
-        // LEFT CONTROLLER CURSOR
         if (leftControllerTransform != null && leftCursorInstance == null)
         {
-            Debug.Log($"[AnchorGUI] Creating LEFT cursor at controller position: {leftControllerTransform.position}");
-
             leftCursorInstance = Instantiate(anchorCursorPrefab, leftControllerTransform);
-
-            if (leftCursorInstance == null)
-            {
-                Debug.LogError("[AnchorGUI]  LEFT cursor instantiation FAILED!");
-            }
-            else
-            {
-                leftCursorInstance.name = "LeftControllerCursor";
-                leftCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
-                leftCursorInstance.transform.localRotation = Quaternion.identity;
-                leftCursorInstance.transform.localScale = Vector3.one * cursorScale;
-                leftCursorInstance.SetActive(true);
-
-                Debug.Log($"[AnchorGUI]  LEFT cursor created!");
-                Debug.Log($"[AnchorGUI]    - World Position: {leftCursorInstance.transform.position}");
-                Debug.Log($"[AnchorGUI]    - Local Position: {leftCursorInstance.transform.localPosition}");
-                Debug.Log($"[AnchorGUI]    - Scale: {leftCursorInstance.transform.localScale}");
-                Debug.Log($"[AnchorGUI]    - Active: {leftCursorInstance.activeSelf}");
-                Debug.Log($"[AnchorGUI]    - Parent: {leftCursorInstance.transform.parent.name}");
-
-                // Check if it has a renderer
-                Renderer[] renderers = leftCursorInstance.GetComponentsInChildren<Renderer>();
-                Debug.Log($"[AnchorGUI]    - Renderers found: {renderers.Length}");
-                foreach (var r in renderers)
-                {
-                    Debug.Log($"[AnchorGUI]       - Renderer: {r.name}, Enabled: {r.enabled}, Material: {r.material.name}");
-                }
-            }
+            leftCursorInstance.name = "LeftControllerCursor";
+            leftCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
+            leftCursorInstance.transform.localRotation = Quaternion.identity;
+            leftCursorInstance.transform.localScale = Vector3.one * cursorScale;
         }
         else if (leftCursorInstance != null)
         {
-            Debug.Log("[AnchorGUI] LEFT cursor already exists, reusing");
             leftCursorInstance.SetActive(true);
         }
 
-        // RIGHT CONTROLLER CURSOR
         if (rightControllerTransform != null && rightCursorInstance == null)
         {
-            Debug.Log($"[AnchorGUI] Creating RIGHT cursor at controller position: {rightControllerTransform.position}");
-
             rightCursorInstance = Instantiate(anchorCursorPrefab, rightControllerTransform);
-
-            if (rightCursorInstance == null)
-            {
-                Debug.LogError("[AnchorGUI]  RIGHT cursor instantiation FAILED!");
-            }
-            else
-            {
-                rightCursorInstance.name = "RightControllerCursor";
-                rightCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
-                rightCursorInstance.transform.localRotation = Quaternion.identity;
-                rightCursorInstance.transform.localScale = Vector3.one * cursorScale;
-                rightCursorInstance.SetActive(true);
-
-                Debug.Log($"[AnchorGUI]  RIGHT cursor created!");
-                Debug.Log($"[AnchorGUI]    - World Position: {rightCursorInstance.transform.position}");
-                Debug.Log($"[AnchorGUI]    - Local Position: {rightCursorInstance.transform.localPosition}");
-                Debug.Log($"[AnchorGUI]    - Scale: {rightCursorInstance.transform.localScale}");
-                Debug.Log($"[AnchorGUI]    - Active: {rightCursorInstance.activeSelf}");
-                Debug.Log($"[AnchorGUI]    - Parent: {rightCursorInstance.transform.parent.name}");
-
-                // Check if it has a renderer
-                Renderer[] renderers = rightCursorInstance.GetComponentsInChildren<Renderer>();
-                Debug.Log($"[AnchorGUI]    - Renderers found: {renderers.Length}");
-                foreach (var r in renderers)
-                {
-                    Debug.Log($"[AnchorGUI]       - Renderer: {r.name}, Enabled: {r.enabled}, Material: {r.material.name}");
-                }
-            }
+            rightCursorInstance.name = "RightControllerCursor";
+            rightCursorInstance.transform.localPosition = Vector3.forward * cursorOffset;
+            rightCursorInstance.transform.localRotation = Quaternion.identity;
+            rightCursorInstance.transform.localScale = Vector3.one * cursorScale;
         }
         else if (rightCursorInstance != null)
         {
-            Debug.Log("[AnchorGUI] RIGHT cursor already exists, reusing");
             rightCursorInstance.SetActive(true);
         }
-
-        Debug.Log("[AnchorGUI] ===== PLACEMENT MODE ENTERED =====");
     }
 
-    /// <summary>
-    /// Updates cursor visibility (runs every frame when in placement mode)
-    /// </summary>
     private void UpdateCursorPositions()
     {
-        // Cursors automatically follow controllers since they're parented! 
-        // Just make sure they're visible
         if (leftCursorInstance != null)
             leftCursorInstance.SetActive(true);
 
@@ -885,61 +724,41 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
             rightCursorInstance.SetActive(true);
     }
 
-    /// <summary>
-    /// Checks for A/B button presses to confirm placement
-    /// </summary>
     private void CheckPlacementButtons()
     {
-        // Check A button (right controller)
         bool pressedA = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
-
-        // Check B button (right controller) 
         bool pressedB = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
-
-        // Check X button (left controller)
         bool pressedX = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
-
-        // Check Y button (left controller)
         bool pressedY = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.LTouch);
 
         if (pressedA || pressedB)
         {
-            // Right controller button pressed
             CreateAnchorAtController(rightControllerTransform, OVRInput.Controller.RTouch);
         }
         else if (pressedX || pressedY)
         {
-            // Left controller button pressed
             CreateAnchorAtController(leftControllerTransform, OVRInput.Controller.LTouch);
         }
 
-        // Cancel with grip buttons
         if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger))
         {
             CancelAnchorPlacement();
         }
     }
-    /// <summary>
-    /// Gets controller position using OVRInput (backup method)
-    /// </summary>
+
     private Vector3 GetControllerPosition(OVRInput.Controller controller)
     {
-        // Get local position from OVR
         Vector3 localPos = OVRInput.GetLocalControllerPosition(controller);
 
-        // Convert to world space
         OVRCameraRig cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig != null && cameraRig.trackingSpace != null)
         {
             return cameraRig.trackingSpace.TransformPoint(localPos);
         }
 
-        return localPos; // Fallback to local
+        return localPos;
     }
 
-    /// <summary>
-    /// Gets controller rotation using OVRInput (backup method)
-    /// </summary>
     private Quaternion GetControllerRotation(OVRInput.Controller controller)
     {
         Quaternion localRot = OVRInput.GetLocalControllerRotation(controller);
@@ -953,14 +772,9 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         return localRot;
     }
 
-    /// <summary>
-    /// Creates anchor at the specified controller's cursor position
-    /// </summary>
     private async void CreateAnchorAtController(Transform controllerTransform, OVRInput.Controller controller)
     {
         LogStatus("Creating anchor.. .");
-
-        // Haptic feedback
         OVRInput.SetControllerVibration(0.5f, 0.5f, controller);
 
         try
@@ -968,16 +782,13 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
             Vector3 anchorPosition;
             Quaternion anchorRotation;
 
-            // TRY TRANSFORM FIRST
             if (controllerTransform != null)
             {
                 anchorPosition = controllerTransform.position + controllerTransform.forward * cursorOffset;
                 anchorRotation = controllerTransform.rotation;
             }
-            // FALLBACK TO OVRINPUT
             else
             {
-                Debug.LogWarning("[AnchorGUI] Using OVRInput fallback for controller position");
                 anchorPosition = GetControllerPosition(controller);
                 anchorRotation = GetControllerRotation(controller);
                 anchorPosition += anchorRotation * Vector3.forward * cursorOffset;
@@ -988,9 +799,8 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
             if (anchor != null)
             {
                 currentAnchors.Add(anchor);
-                LogStatus(" Anchor created!   ({currentAnchors.Count} total)");
+                LogStatus($"Anchor created!  ({currentAnchors.Count} total)");
 
-                // Success vibration
                 OVRInput.SetControllerVibration(1f, 1f, controller);
                 await System.Threading.Tasks.Task.Delay(100);
                 OVRInput.SetControllerVibration(0, 0, controller);
@@ -1012,37 +822,28 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
             ExitAnchorPlacementMode();
         }
     }
-    /// <summary>
-    /// Cancels anchor placement without creating anchor
-    /// </summary>
+
     private void CancelAnchorPlacement()
     {
         LogStatus("Anchor placement cancelled");
         ExitAnchorPlacementMode();
     }
 
-    /// <summary>
-    /// Exits placement mode - hides cursors and resets state
-    /// </summary>
     private void ExitAnchorPlacementMode()
     {
         isPlacingAnchor = false;
 
-        // Destroy left cursor
         if (leftCursorInstance != null)
         {
             Destroy(leftCursorInstance);
             leftCursorInstance = null;
         }
 
-        // Destroy right cursor
         if (rightCursorInstance != null)
         {
             Destroy(rightCursorInstance);
             rightCursorInstance = null;
         }
-
-        Debug.Log("[AnchorGUI] Exited anchor placement mode");
     }
 
     private async void OnSaveAnchorClicked()
@@ -1054,31 +855,65 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         }
 
         LogStatus("Saving " + currentAnchors.Count + " anchor(s)...");
+        Debug.Log($"[AnchorGUI] ===== SAVE ANCHOR DEBUG START =====");
+        Debug.Log($"[AnchorGUI] Total anchors to save: {currentAnchors.Count}");
 
         try
         {
             int savedCount = 0;
+            int failedCount = 0;
+
             foreach (var anchor in currentAnchors)
             {
-                if (anchor == null) continue;
+                if (anchor == null)
+                {
+                    Debug.LogWarning("[AnchorGUI] Skipping null anchor");
+                    continue;
+                }
+
+                Debug.Log($"[AnchorGUI] Attempting to save anchor {anchor.Uuid}");
+                Debug.Log($"[AnchorGUI]   - Created: {anchor.Created}");
+                Debug.Log($"[AnchorGUI]   - Localized: {anchor.Localized}");
+                Debug.Log($"[AnchorGUI]   - Pending: {anchor.PendingCreation}");
+
+                if (!anchor.Created)
+                {
+                    Debug.LogError($"[AnchorGUI] Anchor {anchor.Uuid} not created yet, cannot save!");
+                    failedCount++;
+                    continue;
+                }
 
                 var saveResult = await anchor.SaveAnchorAsync();
+
+                Debug.Log($"[AnchorGUI] Save result for {anchor.Uuid}:");
+                Debug.Log($"[AnchorGUI]   - Success: {saveResult.Success}");
+                Debug.Log($"[AnchorGUI]   - Status: {saveResult.Status}");
+
                 if (saveResult.Success)
                 {
                     savedCount++;
                     savedAnchors[anchor.Uuid] = true;
+                    Debug.Log($"[AnchorGUI] SUCCESS: Anchor {anchor.Uuid} saved to device");
+                }
+                else
+                {
+                    failedCount++;
+                    Debug.LogError($"[AnchorGUI] FAILED: Anchor {anchor.Uuid} - Status: {saveResult.Status}");
                 }
             }
 
-            LogStatus("Saved " + savedCount + "/" + currentAnchors.Count + " anchor(s)");
+            Debug.Log($"[AnchorGUI] ===== SAVE ANCHOR DEBUG END =====");
+            Debug.Log($"[AnchorGUI] Saved: {savedCount}, Failed: {failedCount}");
+
+            LogStatus($"Saved {savedCount}/{currentAnchors.Count} anchor(s) (Failed: {failedCount})");
             UpdateAllUI();
         }
         catch (Exception e)
         {
+            Debug.LogError($"[AnchorGUI] Exception during save: {e}");
             LogStatus("Error: " + e.Message, true);
         }
     }
-
     private async void OnLoadAnchorsClicked()
     {
         if (currentGroupUuid == Guid.Empty)
@@ -1128,22 +963,21 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
 
             var shareResult = await OVRSpatialAnchor.ShareAsync(validAnchors, currentGroupUuid);
 
-           if (shareResult.Success)
-{
-    foreach (var anchor in validAnchors)
-    {
-        sharedAnchors[anchor.Uuid] = true;
-    }
-    
-    // If this is the first share, start advertising the Group UUID
-    if (!  isAdvertising)
-    {
-        await StartAdvertisingGroupUuid();
-        Debug.Log("[AnchorGUI] Started advertising Group UUID after share");
-    }
-    
-    LogStatus("Shared " + validAnchors.Count + " anchor(s)!");
-}
+            if (shareResult.Success)
+            {
+                foreach (var anchor in validAnchors)
+                {
+                    sharedAnchors[anchor.Uuid] = true;
+                }
+
+                if (!isAdvertising)
+                {
+                    await StartAdvertisingGroupUuid();
+                    Debug.Log("[AnchorGUI] Started advertising after share");
+                }
+
+                LogStatus("Shared " + validAnchors.Count + " anchor(s)!");
+            }
             else
             {
                 LogStatus("Failed to share: " + shareResult.Status, true);
@@ -1166,8 +1000,9 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
             LogStatus("No anchors to clear!", true);
             return;
         }
+
         ShowConfirmationDialog(
-            "Clear " + currentAnchors.Count + " anchor(s)?",
+            "Clear " + currentAnchors.Count + " anchor(s)? ",
             () =>
             {
                 foreach (var anchor in currentAnchors)
@@ -1179,8 +1014,6 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
                 }
 
                 currentAnchors.Clear();
-
-                // ADD: Clear tracking when clearing anchors
                 savedAnchors.Clear();
                 sharedAnchors.Clear();
 
@@ -1209,7 +1042,7 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         else if (currentState == SessionState.Hosting)
             stateText = "Hosting... ";
         else if (currentState == SessionState.Joining)
-            stateText = "Joining... ";
+            stateText = "Joining...";
         else if (currentState == SessionState.Connected)
             stateText = isHost ? "HOST (Connected)" : "CLIENT (Connected)";
         else if (currentState == SessionState.Loading)
@@ -1247,9 +1080,10 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         }
         else
         {
-            groupUuidText.text = "UUID: " + currentGroupUuid.ToString().Substring(0, 13) + "... ";
+            groupUuidText.text = "UUID: " + currentGroupUuid.ToString().Substring(0, 13) + "...";
         }
     }
+
     private void UpdateAnchorCount()
     {
         if (anchorText == null) return;
@@ -1262,7 +1096,6 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
 
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
 
-        // Header with role and count
         string roleIcon = isHost ? "[HOST]" : "[CLIENT]";
 
         int localizedCount = 0;
@@ -1282,14 +1115,10 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
 
             sb.AppendLine($"\nAnchor #{index}");
 
-            // Short UUID
             string uuidShort = anchor.Uuid.ToString().Substring(0, 8);
             sb.AppendLine($"  ID: {uuidShort}");
-
-            // Full UUID
             sb.AppendLine($"  Full: {anchor.Uuid}");
 
-            // Status badges (text only)
             List<string> badges = new List<string>();
 
             if (anchor.Created)
@@ -1310,14 +1139,12 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
 
             sb.AppendLine($"  Status: {string.Join(" | ", badges)}");
 
-            // Position
             Vector3 pos = anchor.transform.position;
             sb.AppendLine($"  Pos: ({pos.x:F1}, {pos.y:F1}, {pos.z:F1})");
 
             index++;
         }
 
-        // Footer with Group UUID
         if (currentGroupUuid != Guid.Empty)
         {
             sb.AppendLine("\n================================");
@@ -1327,6 +1154,7 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
 
         anchorText.text = sb.ToString();
     }
+
     private void UpdateButtonStates()
     {
         bool canStartSession = (currentState == SessionState.Idle);
@@ -1341,26 +1169,22 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         if (leaveSessionButton != null)
             leaveSessionButton.interactable = inSession;
 
-        // CREATE ANCHOR: Only host can create
         if (createAnchorButton != null)
             createAnchorButton.interactable = isHost && inSession;
 
-        // SAVE ANCHOR: Only host can save (clients just load shared ones)
         if (saveAnchorButton != null)
             saveAnchorButton.interactable = isHost && currentAnchors.Count > 0;
 
-        // SHARE ANCHOR: Only host can share
         if (shareAnchorsButton != null)
             shareAnchorsButton.interactable = isHost && currentAnchors.Count > 0 && inSession;
 
-        // LOAD ANCHOR: Client can load if UUID exists, Host doesn't need it
         if (loadAnchorsButton != null)
             loadAnchorsButton.interactable = currentGroupUuid != Guid.Empty && inSession;
 
-        // CLEAR ANCHOR: Both can clear their local anchors
         if (clearAnchorsButton != null)
             clearAnchorsButton.interactable = currentAnchors.Count > 0;
     }
+
     private void UpdateStatusIndicator()
     {
         if (statusIndicator == null) return;
@@ -1399,7 +1223,7 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         {
             Debug.LogWarning("[AnchorGUI] " + message);
         }
-        else
+        else if (enableVerboseLogging)
         {
             Debug.Log("[AnchorGUI] " + message);
         }
@@ -1438,13 +1262,10 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
     {
         try
         {
-            // Create anchor GameObject
             var anchorGameObject = new GameObject("Anchor_" + DateTime.Now.ToString("HHmmss"));
             anchorGameObject.transform.position = position;
             anchorGameObject.transform.rotation = rotation;
 
-            // Add visual using cursor prefab
-            // Add visual using ANCHOR MARKER prefab (not cursor!)
             GameObject visualPrefab = anchorMarkerPrefab != null ? anchorMarkerPrefab : anchorCursorPrefab;
 
             if (visualPrefab != null)
@@ -1454,18 +1275,10 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
                 visual.transform.localPosition = Vector3.zero;
                 visual.transform.localRotation = Quaternion.identity;
                 visual.transform.localScale = Vector3.one * anchorScale;
-
-                Debug.Log($"[AnchorGUI]  Added visual marker to anchor using: {visualPrefab.name}");
-            }
-            else
-            {
-                Debug.LogWarning("[AnchorGUI]  No visual prefab available for anchor!");
             }
 
-            // Add spatial anchor component
             var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
 
-            // Wait for anchor creation
             int timeout = 100;
             while (!spatialAnchor.Created && timeout > 0)
             {
@@ -1473,7 +1286,6 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
                 timeout--;
             }
 
-            // Check if successful
             if (!spatialAnchor.Created)
             {
                 Debug.LogError("[AnchorGUI] Anchor creation timed out");
@@ -1494,10 +1306,7 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
     private void InitializeRoomDropdown()
     {
         if (roomNameDropdown == null)
-        {
-            Debug.LogWarning("[AnchorGUI] Room name dropdown not assigned!");
             return;
-        }
 
         roomNameDropdown.ClearOptions();
         roomNameDropdown.AddOptions(new List<string>(roomNameOptions));
@@ -1509,8 +1318,6 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         {
             roomNameInputField.gameObject.SetActive(false);
         }
-
-        Debug.Log("[AnchorGUI] Room dropdown initialized with " + roomNameOptions.Length + " options");
     }
 
     private void OnRoomNameDropdownChanged(int index)
@@ -1521,22 +1328,17 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         {
             roomNameInputField.gameObject.SetActive(true);
             roomNameInputField.text = "";
-            Debug.Log("[AnchorGUI] Custom room name selected - input field shown");
         }
         else
         {
             roomNameInputField.gameObject.SetActive(false);
-            Debug.Log("[AnchorGUI] Preset room selected: " + roomNameOptions[index]);
         }
     }
 
     private string GetSelectedRoomName()
     {
         if (roomNameDropdown == null)
-        {
-            Debug.LogWarning("[AnchorGUI] Dropdown not assigned!");
             return "";
-        }
 
         int selectedIndex = roomNameDropdown.value;
 
@@ -1544,24 +1346,15 @@ private async void OnColocationSessionDiscovered(OVRColocationSession. Data data
         {
             if (roomNameInputField != null)
             {
-                string customName = roomNameInputField.text.Trim();
-                Debug.Log("[AnchorGUI] Using custom room name: " + customName);
-                return customName;
+                return roomNameInputField.text.Trim();
             }
-            else
-            {
-                Debug.LogWarning("[AnchorGUI] Input field not assigned!");
-                return "";
-            }
+            return "";
         }
         else if (selectedIndex >= 0 && selectedIndex < roomNameOptions.Length)
         {
-            string presetName = roomNameOptions[selectedIndex];
-            Debug.Log("[AnchorGUI] Using preset room name: " + presetName);
-            return presetName;
+            return roomNameOptions[selectedIndex];
         }
 
         return "";
     }
 }
-#endif
