@@ -664,7 +664,7 @@ private async System.Threading.Tasks.Task LoadLocalSavedAnchors()
 
         if (cubeSpawner == null)
         {
-            cubeSpawner = FindAnyObjectByType<CubeSpawner>();
+            cubeSpawner = FindObjectOfType<CubeSpawner>();
         }
 
         if (cubeSpawner != null)

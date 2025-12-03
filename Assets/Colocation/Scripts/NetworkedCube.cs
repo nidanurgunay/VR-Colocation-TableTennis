@@ -23,6 +23,7 @@ public class NetworkedCube : NetworkBehaviour
     private Renderer cubeRenderer;
     private Rigidbody rigidBody;
     private MaterialPropertyBlock propertyBlock;
+    private bool previousGrabState;
 
     public override void Spawned()
     {
@@ -42,6 +43,7 @@ public class NetworkedCube : NetworkBehaviour
         }
 
         propertyBlock = new MaterialPropertyBlock();
+        previousGrabState = IsGrabbed;
         UpdateVisualState();
 
         Debug.Log($"[NetworkedCube] Spawned with Id: {Object.Id}");
@@ -49,8 +51,17 @@ public class NetworkedCube : NetworkBehaviour
 
     public override void FixedUpdateNetwork()
     {
-        // Update visual state based on grab status
-        UpdateVisualState();
+        // Empty - visual updates are handled in Render() for smooth visuals
+    }
+
+    public override void Render()
+    {
+        // Only update visual state when grab state has changed (optimization)
+        if (previousGrabState != IsGrabbed)
+        {
+            previousGrabState = IsGrabbed;
+            UpdateVisualState();
+        }
     }
 
     /// <summary>
@@ -114,8 +125,13 @@ public class NetworkedCube : NetworkBehaviour
 
         if (rigidBody != null)
         {
-            rigidBody.isKinematic = grabbed;
+            // When grabbed, cube follows hand movement (kinematic)
+            // When released, cube becomes dynamic for physics (unless useGravity is false)
+            rigidBody.isKinematic = grabbed || !useGravity;
         }
+
+        // Update visual state when grab state changes
+        UpdateVisualState();
 
         Debug.Log($"[NetworkedCube] Grab state changed - IsGrabbed: {grabbed}, Player: {player}");
     }

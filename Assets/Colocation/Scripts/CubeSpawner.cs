@@ -21,7 +21,7 @@ public class CubeSpawner : NetworkBehaviour
     {
         if (cameraRigTransform == null)
         {
-            var cameraRig = FindAnyObjectByType<OVRCameraRig>();
+            var cameraRig = FindObjectOfType<OVRCameraRig>();
             if (cameraRig != null)
             {
                 cameraRigTransform = cameraRig.transform;
