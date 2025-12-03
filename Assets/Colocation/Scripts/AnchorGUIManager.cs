@@ -22,6 +22,9 @@ public class AnchorGUIManager : MonoBehaviour
     [SerializeField] private Button loadAnchorsButton;
     [SerializeField] private Button shareAnchorsButton;
     [SerializeField] private Button clearAnchorsButton;
+    
+    [Header("Demo 2 - Cube Spawning")]
+    [SerializeField] private Button spawnCubeButton;
 
     [Header("Room Name Selection")]
     [SerializeField] private TMP_Dropdown roomNameDropdown;
@@ -85,6 +88,7 @@ public class AnchorGUIManager : MonoBehaviour
 
 #if FUSION2
     private NetworkRunner networkRunner;
+    private CubeSpawner cubeSpawner;
 #endif
     private bool isAdvertising = false;
     private bool isDiscovering = false;
@@ -199,6 +203,7 @@ public class AnchorGUIManager : MonoBehaviour
         clearAnchorsButton?.onClick.AddListener(OnClearAnchorsClicked);
         confirmYesButton?.onClick.AddListener(OnConfirmationYes);
         confirmNoButton?.onClick.AddListener(OnConfirmationNo);
+        spawnCubeButton?.onClick.AddListener(OnSpawnCubeClicked);
     }
 
     private void SetupInputFields()
@@ -647,6 +652,35 @@ private async System.Threading.Tasks.Task LoadLocalSavedAnchors()
 
 
 #endif
+
+    private void OnSpawnCubeClicked()
+    {
+#if FUSION2
+        if (networkRunner == null || !networkRunner.IsRunning)
+        {
+            LogStatus("Not connected to a session!", true);
+            return;
+        }
+
+        if (cubeSpawner == null)
+        {
+            cubeSpawner = FindObjectOfType<CubeSpawner>();
+        }
+
+        if (cubeSpawner != null)
+        {
+            cubeSpawner.SpawnCube();
+            LogStatus("Spawning cube...");
+        }
+        else
+        {
+            LogStatus("CubeSpawner not found in scene!", true);
+            Debug.LogError("[AnchorGUI] CubeSpawner component not found. Add CubeSpawner to your ColocationManager prefab.");
+        }
+#else
+        LogStatus("Photon Fusion not available!", true);
+#endif
+    }
 
     private void OnCreateAnchorClicked()
     {
@@ -1183,6 +1217,10 @@ private async System.Threading.Tasks.Task LoadLocalSavedAnchors()
 
         if (clearAnchorsButton != null)
             clearAnchorsButton.interactable = currentAnchors.Count > 0;
+
+        // Demo 2: Spawn Cube button - available when connected to a session
+        if (spawnCubeButton != null)
+            spawnCubeButton.interactable = inSession;
     }
 
     private void UpdateStatusIndicator()
