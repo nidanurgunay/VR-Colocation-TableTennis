@@ -2,20 +2,19 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System;
+using System.Text;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 #if FUSION2
 using Fusion;
 #endif
 
 /// <summary>
-/// Simplified Anchor GUI Manager - Only Auto Align and Spawn Cube
-/// Session management is handled by ColocationManager
-/// 
-/// IMPORTANT: Make sure your UI Canvas is set to "Screen Space - Overlay" 
-/// (not parented to camera rig) to prevent it from moving when alignment happens.
+/// Simplified Anchor GUI Manager - Auto Align and Spawn Cube with built-in session management
+/// Inherits from ColocationManager to reuse alignment logic.
 /// </summary>
-public class AnchorAutoGUIManager : MonoBehaviour
+public class AnchorAutoGUIManager : ColocationManager
 {
     [Header("UI Buttons")]
     [SerializeField] private Button autoAlignButton;
@@ -24,17 +23,33 @@ public class AnchorAutoGUIManager : MonoBehaviour
     [Header("Status Display")]
     [SerializeField] private TextMeshProUGUI statusText;
     [SerializeField] private TextMeshProUGUI anchorText;
-    [SerializeField] private Image statusIndicator;
+    [SerializeField] private Image statusIndicator; // Alignment Status
+    [SerializeField] private Image networkIndicator; // Host/Client Status
 
     [Header("Settings")]
-    [SerializeField] private AlignmentManager alignmentManager;
-    [SerializeField] private Color alignedColor = Color.green;
-    [SerializeField] private Color notAlignedColor = Color.red;
-    [SerializeField] private float anchorScale = 0.1f;
-
+    // alignmentManager is in base class
+    [SerializeField] private float anchorScale = 0.3f; // Larger for better visibility
+    
+    [Header("Status Colors")]
+    [SerializeField] private Color hostColor = Color.blue;
+    [SerializeField] private Color clientColor = Color.yellow;
+    [SerializeField] private Color anchorAlignedColor = Color.green;
+    [SerializeField] private Color anchorNotAlignedColor = Color.red;
+    [SerializeField] private Color advertisingColor = new Color(0.5f, 0f, 1f); // Purple
+    [SerializeField] private Color discoveringColor = new Color(1f, 0.5f, 0f); // Orange
+    
+    [Header("Network Settings")]
+    [SerializeField] private string sessionName = "MyVRSession";
+    [SerializeField] private bool autoStartSession = true;
+    [SerializeField] private bool autoAlignOnStart = false;
+    
     private List<OVRSpatialAnchor> currentAnchors;
     private Transform cameraTransform;
     private GameObject anchorMarkerPrefab;
+    // _sharedAnchorGroupId is in base class
+    private bool isHost = false;
+    private enum SessionState { Idle, Advertising, Discovering, HostAligned, ClientAligned }
+    private SessionState currentState = SessionState.Idle;
 
 #if FUSION2
     private NetworkRunner networkRunner;
@@ -48,14 +63,24 @@ public class AnchorAutoGUIManager : MonoBehaviour
         cameraTransform = Camera.main?.transform;
         if (cameraTransform == null)
         {
-            LogStatus("No main camera found!");
+            Log("No main camera found!");
             return;
         }
 
         anchorMarkerPrefab = Resources.Load<GameObject>("AnchorMarker");
         if (anchorMarkerPrefab == null)
         {
+            Debug.LogWarning("[AnchorGUI] AnchorMarker prefab not found, trying AnchorCursorSphere...");
             anchorMarkerPrefab = Resources.Load<GameObject>("AnchorCursorSphere");
+        }
+        
+        if (anchorMarkerPrefab != null)
+        {
+            Debug.Log($"[AnchorGUI] Anchor prefab loaded: {anchorMarkerPrefab.name}");
+        }
+        else
+        {
+            Debug.LogError("[AnchorGUI] NO ANCHOR PREFAB FOUND! Anchors will have no visual.");
         }
 
         if (alignmentManager == null)
@@ -67,12 +92,69 @@ public class AnchorAutoGUIManager : MonoBehaviour
         spawnCubeButton?.onClick.AddListener(OnSpawnCubeClicked);
 
 #if FUSION2
-        networkRunner = FindObjectOfType<NetworkRunner>();
+        // Start Photon Fusion session automatically
+        if (autoStartSession)
+        {
+            StartNetworkSession();
+        }
 #endif
 
         UpdateAllUI();
-        LogStatus("Ready - Click Auto Align to start");
+        Log("Ready - Click Auto Align to start");
     }
+
+#if FUSION2
+    private async void StartNetworkSession()
+    {
+        Log("Starting network session...");
+        
+        // Find or create NetworkRunner
+        networkRunner = FindObjectOfType<NetworkRunner>();
+        if (networkRunner == null)
+        {
+            var runnerGO = new GameObject("NetworkRunner");
+            networkRunner = runnerGO.AddComponent<NetworkRunner>();
+            DontDestroyOnLoad(runnerGO);
+        }
+
+        // Start Fusion in Shared mode (peer-to-peer)
+        var result = await networkRunner.StartGame(new StartGameArgs
+        {
+            GameMode = GameMode.Shared,
+            SessionName = sessionName,
+            Scene = default,
+            SceneManager = networkRunner.GetComponent<INetworkSceneManager>()
+        });
+
+        if (result.Ok)
+        {
+            Log($"Network session started: {sessionName}");
+            Debug.Log($"[AnchorGUI] Fusion session started successfully");
+            
+            // Make sure CubeSpawner is in the scene and ready
+            await System.Threading.Tasks.Task.Delay(100);
+            EnsureCubeSpawnerExists();
+        }
+        else
+        {
+            Log($"Failed to start session: {result.ShutdownReason}", true);
+            Debug.LogError($"[AnchorGUI] Failed to start Fusion session: {result.ShutdownReason}");
+        }
+    }
+    
+    private void EnsureCubeSpawnerExists()
+    {
+        cubeSpawner = FindObjectOfType<CubeSpawner>();
+        if (cubeSpawner == null)
+        {
+            Debug.LogWarning("[AnchorGUI] CubeSpawner not found in scene! Make sure it exists and has a NetworkObject component.");
+        }
+        else
+        {
+            Debug.Log("[AnchorGUI] CubeSpawner found and ready.");
+        }
+    }
+#endif
 
     private void Update()
     {
@@ -93,81 +175,90 @@ public class AnchorAutoGUIManager : MonoBehaviour
     {
         if (cameraTransform == null)
         {
-            LogStatus("Camera not found!");
+            Log("Camera not found!", true);
+            Debug.LogError("[AnchorGUI] Camera.main is null! Make sure OVRCameraRig has MainCamera tag.");
             return;
         }
 
-        LogStatus("Creating alignment anchor...");
-        await CreateAndAlignAnchor();
+#if FUSION2
+        if (networkRunner == null || !networkRunner.IsRunning)
+        {
+            Log("Network not ready! Starting session...");
+            StartNetworkSession();
+            return;
+        }
+
+        // Determine if this is host or client
+        isHost = networkRunner.IsServer || networkRunner.IsSharedModeMasterClient;
+        
+        Debug.Log($"[AnchorGUI] Auto Align clicked. Role: {(isHost ? "HOST" : "CLIENT")}");
+        Debug.Log($"[AnchorGUI] Camera position: {cameraTransform.position}");
+        
+        // Update status indicator color based on role
+        if (statusIndicator != null)
+        {
+            statusIndicator.color = isHost ? hostColor : clientColor;
+        }
+        
+        Log("Starting Colocation...");
+        PrepareColocation();
+#else
+        Log("Creating alignment anchor...");
+        await CreateAnchor(Vector3.zero, Quaternion.identity);
+#endif
     }
 
-    private async System.Threading.Tasks.Task CreateAndAlignAnchor()
+    // ==================== STANDALONE ALIGN (NO NETWORK) ====================
+    
+    // CreateAndAlignAnchor removed as it is now handled by CreateAnchor override and base class logic
+
+    public override void Spawned()
     {
-        try
-        {
-            // Create anchor 30cm in front of camera
-            Vector3 anchorPosition = cameraTransform.position + cameraTransform.forward * 0.3f;
-            Quaternion anchorRotation = Quaternion.Euler(0, cameraTransform.eulerAngles.y, 0);
-
-            LogStatus("Creating anchor...");
-            var anchor = await CreateAnchorAtPosition(anchorPosition, anchorRotation);
-
-            if (anchor == null)
-            {
-                LogStatus("Failed to create anchor!");
-                return;
-            }
-
-            currentAnchors.Add(anchor);
-
-            // Wait for localization
-            LogStatus("Localizing anchor...");
-            int timeout = 100;
-            while (!anchor.Localized && timeout > 0)
-            {
-                await System.Threading.Tasks.Task.Delay(10);
-                timeout--;
-            }
-
-            if (!anchor.Localized)
-            {
-                LogStatus("Anchor not fully localized");
-                UpdateAllUI();
-                return;
-            }
-
-            // Align camera rig
-            if (alignmentManager != null)
-            {
-                LogStatus("Aligning camera rig...");
-                alignmentManager.AlignUserToAnchor(anchor);
-                await System.Threading.Tasks.Task.Delay(500);
-            }
-
-            LogStatus("ALIGNED! Ready to spawn cubes.");
-            UpdateAllUI();
-        }
-        catch (Exception e)
-        {
-            LogStatus($"Error: {e.Message}");
-            Debug.LogError($"[AnchorGUI] CreateAndAlignAnchor error: {e}");
-        }
+        base.Spawned(); // Calls PrepareColocation if autoStartColocation is true
+        
+        isHost = Object.HasStateAuthority;
+        UpdateStatusIndicator();
     }
 
-    // ==================== SPAWN CUBE ====================
+    protected override void Log(string message, bool isError = false)
+    {
+        base.Log(message, isError);
+
+        // Anchor-related keywords
+        bool isAnchorMsg = message.Contains("anchor") || message.Contains("Anchor") || message.Contains("Advertisement started") || message.Contains("Discovery started") || message.Contains("localized successfully") || message.Contains("shared") || message.Contains("UUID");
+
+        if (isAnchorMsg && anchorText != null)
+        {
+            anchorText.text = message;
+        }
+        else if (statusText != null)
+        {
+            statusText.text = message;
+        }
+
+        if (message.Contains("Advertisement started")) currentState = SessionState.Advertising;
+        else if (message.Contains("Discovery started")) currentState = SessionState.Discovering;
+        else if (message.Contains("Alignment anchor shared")) currentState = SessionState.HostAligned;
+        else if (message.Contains("Anchor localized successfully")) currentState = SessionState.ClientAligned;
+
+        UpdateStatusIndicator();
+    }
+
+    // ==================== STANDALONE ALIGN (NO NETWORK) ====================
 
     private void OnSpawnCubeClicked()
     {
 #if FUSION2
         if (networkRunner == null || !networkRunner.IsRunning)
         {
-            LogStatus("No network session! Start from ColocationManager.");
+            Log("Starting network session first...");
+            StartNetworkSession();
             return;
         }
 
         if (!IsAlignmentComplete())
         {
-            LogStatus("Not aligned! Click Auto Align first.");
+            Log("Not aligned! Click Auto Align first.", true);
             return;
         }
 
@@ -181,15 +272,35 @@ public class AnchorAutoGUIManager : MonoBehaviour
             // Get right controller position for spawn location
             Vector3 spawnPos = GetControllerSpawnPosition();
             cubeSpawner.SpawnCubeAtPosition(spawnPos, Quaternion.identity);
-            LogStatus("Spawning cube at controller!");
+            Log("Spawning cube at controller!");
         }
         else
         {
-            LogStatus("CubeSpawner not found!");
+            Log("CubeSpawner not found!", true);
         }
 #else
-        LogStatus("Photon Fusion not available!");
+        Log("Photon Fusion not available!", true);
 #endif
+    }
+
+    private Vector3 GetControllerAnchorPosition()
+    {
+        // Try to get right controller position for anchor placement
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null && cameraRig.rightControllerAnchor != null)
+        {
+            Transform rightHand = cameraRig.rightControllerAnchor;
+            // Create anchor 2cm in front of controller
+            return rightHand.position + rightHand.forward * 0.02f;
+        }
+
+        // Fallback to camera position if controller not found
+        if (cameraTransform != null)
+        {
+            return cameraTransform.position + cameraTransform.forward * 0.3f;
+        }
+
+        return Vector3.zero;
     }
 
     private Vector3 GetControllerSpawnPosition()
@@ -199,25 +310,46 @@ public class AnchorAutoGUIManager : MonoBehaviour
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
         {
             Transform rightHand = cameraRig.rightControllerAnchor;
-            // Spawn slightly in front of the controller
-            return rightHand.position + rightHand.forward * 0.2f;
+            // Spawn 30cm in front and 10cm above the controller for better visibility and stability
+            Vector3 spawnPos = rightHand.position + rightHand.forward * 0.3f + Vector3.up * 0.1f;
+            
+            // Ensure minimum height above ground (prevent spawning below floor)
+            if (spawnPos.y < 0.5f)
+            {
+                spawnPos.y = 0.5f;
+            }
+            
+            return spawnPos;
         }
 
         // Fallback to camera forward if controller not found
         if (cameraTransform != null)
         {
-            return cameraTransform.position + cameraTransform.forward * 0.5f + Vector3.up * 0.3f;
+            Vector3 spawnPos = cameraTransform.position + cameraTransform.forward * 0.5f;
+            
+            // Ensure it's at a visible height
+            if (spawnPos.y < 1.0f)
+            {
+                spawnPos.y = 1.0f;
+            }
+            
+            return spawnPos;
         }
 
-        return Vector3.zero;
+        return new Vector3(0, 1.0f, 0); // Default to 1m above origin
     }
 
-    // ==================== ANCHOR HELPERS ====================
-
-    private async System.Threading.Tasks.Task<OVRSpatialAnchor> CreateAnchorAtPosition(Vector3 position, Quaternion rotation)
+    protected override async Task<OVRSpatialAnchor> CreateAnchor(Vector3 position, Quaternion rotation)
     {
         try
         {
+            // Override position to be in front of the user/controller if position is zero
+            if (position == Vector3.zero)
+            {
+                position = GetControllerAnchorPosition();
+                rotation = Quaternion.Euler(0, cameraTransform.eulerAngles.y, 0);
+            }
+
             var anchorGO = new GameObject("Anchor_" + DateTime.Now.ToString("HHmmss"));
             anchorGO.transform.position = position;
             anchorGO.transform.rotation = rotation;
@@ -232,7 +364,7 @@ public class AnchorAutoGUIManager : MonoBehaviour
                 float validScale = Mathf.Max(anchorScale, 0.01f);
                 visual.transform.localScale = Vector3.one * validScale;
                 
-                // Remove physics components
+                // Remove physics components from visual to avoid interference
                 foreach (var col in visual.GetComponentsInChildren<Collider>())
                     Destroy(col);
                 foreach (var rb in visual.GetComponentsInChildren<Rigidbody>())
@@ -244,23 +376,24 @@ public class AnchorAutoGUIManager : MonoBehaviour
             int timeout = 100;
             while (!spatialAnchor.Created && timeout > 0)
             {
-                await System.Threading.Tasks.Task.Yield();
+                await Task.Yield();
                 timeout--;
             }
 
             if (!spatialAnchor.Created)
             {
-Debug.LogError($"[AnchorGUI] Anchor creation timed out");
-            Destroy(anchorGO);
-            return null;
-        }
+                Log("Anchor creation timed out", true);
+                Destroy(anchorGO);
+                return null;
+            }
 
-        Debug.Log($"[AnchorGUI] Anchor created: {spatialAnchor.Uuid}");
-        return spatialAnchor;
-    }
-    catch (Exception e)
-    {
-        Debug.LogError($"[AnchorGUI] Anchor creation error: {e.Message}");
+            Log($"Anchor created: {spatialAnchor.Uuid}");
+            currentAnchors.Add(spatialAnchor); // Track it locally for UI
+            return spatialAnchor;
+        }
+        catch (Exception e)
+        {
+            Log($"Anchor creation error: {e.Message}", true);
             return null;
         }
     }
@@ -325,22 +458,58 @@ Debug.LogError($"[AnchorGUI] Anchor creation timed out");
 #endif
 
         if (autoAlignButton != null)
-            autoAlignButton.interactable = !isAligned;
+            autoAlignButton.interactable = !isAligned; // Disable once aligned
 
         if (spawnCubeButton != null)
             spawnCubeButton.interactable = hasNetwork && isAligned;
     }
 
     private void UpdateStatusIndicator()
-    {
+    {// 1. Update Network Indicator (Host/Client)
+        if (networkIndicator != null)
+        {
+#if FUSION2
+            if (networkRunner != null && networkRunner.IsRunning)
+            {
+                networkIndicator.color = isHost ? hostColor : clientColor;
+            }
+            else
+            {
+                networkIndicator.color = Color.gray;
+            }
+#else
+            networkIndicator.color = Color.gray;
+#endif
+        }
+
+        // 2. Update Alignment Indicator
         if (statusIndicator == null) return;
 
-        bool isAligned = IsAlignmentComplete();
-        statusIndicator.color = isAligned ? alignedColor : notAlignedColor;
+        switch (currentState)
+        {
+            case SessionState.Advertising:
+                statusIndicator.color = advertisingColor; // Purple while advertising
+                break;
+            case SessionState.Discovering:
+                statusIndicator.color = discoveringColor; // Orange while discovering
+                break;
+            case SessionState.HostAligned:
+            case SessionState.ClientAligned:
+                statusIndicator.color = anchorAlignedColor; // Green when
+                statusIndicator.color = clientColor; // Yellow when client is aligned
+                break;
+            case SessionState.Idle:
+            default:
+                bool isAligned = IsAlignmentComplete();
+                statusIndicator.color = isAligned ? anchorAlignedColor : anchorNotAlignedColor;
+                break;
+        }
     }
 
     private bool IsAlignmentComplete()
     {
+        if (currentState == SessionState.HostAligned || currentState == SessionState.ClientAligned) return true;
+
         if (currentAnchors == null || currentAnchors.Count == 0)
             return false;
 
@@ -353,13 +522,5 @@ Debug.LogError($"[AnchorGUI] Anchor creation timed out");
         return false;
     }
 
-    private void LogStatus(string message)
-    {
-        if (statusText != null)
-        {
-            statusText.text = message;
-        }
 
-        Debug.Log($"[AnchorGUI] {message}");
-    }
 }

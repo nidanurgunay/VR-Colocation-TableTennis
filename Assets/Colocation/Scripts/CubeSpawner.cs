@@ -31,13 +31,13 @@ public class CubeSpawner : NetworkBehaviour
 
     /// <summary>
     /// Spawns a networked cube at the specified position.
-    /// Only the host/state authority should call this method.
+    /// Can be called by any client - will use RPC if not host.
     /// </summary>
     public void SpawnCube()
     {
         if (!Object.HasStateAuthority)
         {
-            Debug.LogWarning("[CubeSpawner] Only host can spawn cubes. Requesting via RPC...");
+            Debug.Log("[CubeSpawner] Requesting spawn via RPC...");
             RPC_RequestSpawnCube();
             return;
         }
@@ -47,13 +47,13 @@ public class CubeSpawner : NetworkBehaviour
 
     /// <summary>
     /// Spawns a cube at a specific world position.
-    /// Only the host/state authority should call this method.
+    /// Can be called by any client - will use RPC if not host.
     /// </summary>
     public void SpawnCubeAtPosition(Vector3 position, Quaternion rotation)
     {
         if (!Object.HasStateAuthority)
         {
-            Debug.LogWarning("[CubeSpawner] Only host can spawn cubes. Requesting via RPC...");
+            Debug.Log("[CubeSpawner] Requesting spawn at position via RPC...");
             RPC_RequestSpawnCubeAtPosition(position, rotation);
             return;
         }

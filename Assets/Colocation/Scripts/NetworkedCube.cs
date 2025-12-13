@@ -39,7 +39,18 @@ public class NetworkedCube : NetworkBehaviour
         if (rigidBody != null)
         {
             rigidBody.useGravity = useGravity;
-            rigidBody.isKinematic = true; // Start kinematic, becomes dynamic when thrown
+            // If not using gravity, make kinematic so it stays in place and doesn't fly away on collision
+            rigidBody.isKinematic = !useGravity; 
+            
+            // Add some drag to prevent flying away if it does become dynamic
+            rigidBody.drag = 1f;
+            rigidBody.angularDrag = 1f;
+            
+            Debug.Log($"[NetworkedCube] Rigidbody setup: useGravity={useGravity}, isKinematic={rigidBody.isKinematic}");
+        }
+        else
+        {
+            Debug.LogError("[NetworkedCube] No Rigidbody found! Cube won't be grabbable.");
         }
 
         propertyBlock = new MaterialPropertyBlock();
@@ -126,8 +137,15 @@ public class NetworkedCube : NetworkBehaviour
         if (rigidBody != null)
         {
             // When grabbed, cube follows hand movement (kinematic)
-            // When released, cube becomes dynamic for physics (unless useGravity is false)
-            rigidBody.isKinematic = grabbed || !useGravity;
+            // When released, cube becomes kinematic so it stays in place
+            rigidBody.isKinematic = true;
+
+            // When released, stop all motion so it stays in place
+            if (!grabbed)
+            {
+                rigidBody.velocity = Vector3.zero;
+                rigidBody.angularVelocity = Vector3.zero;
+            }
         }
 
         // Update visual state when grab state changes

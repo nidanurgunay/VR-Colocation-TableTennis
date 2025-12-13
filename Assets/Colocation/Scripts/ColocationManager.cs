@@ -9,31 +9,35 @@ using System.Collections.Generic;
 
 public class ColocationManager : NetworkBehaviour
 {
-    [SerializeField] private AlignmentManager alignmentManager;
+    [SerializeField] protected AlignmentManager alignmentManager;
+    [SerializeField] protected bool autoStartColocation = true;
 
-    private Guid _sharedAnchorGroupId;
+    protected Guid _sharedAnchorGroupId;
 
     public override void Spawned()
     {
         base.Spawned();
-        PrepareColocation();
+        if (autoStartColocation)
+        {
+            PrepareColocation();
+        }
     }
 
-    private void PrepareColocation()
+    public virtual void PrepareColocation()
     {
         if (Object.HasStateAuthority)
         {
-            Debug.Log("Colocation: Starting advertisement...");
+            Log("Colocation: Starting advertisement...");
             AdvertiseColocationSession();
         }
         else
         {
-            Debug.Log("Colocation: Starting discovery...");
+            Log("Colocation: Starting discovery...");
             DiscoverNearbySession();
         }
     }
 
-    private async void AdvertiseColocationSession()
+    protected virtual async void AdvertiseColocationSession()
     {
         try
         {
@@ -43,21 +47,21 @@ public class ColocationManager : NetworkBehaviour
             if (startAdvertisementResult.Success)
             {
                 _sharedAnchorGroupId = startAdvertisementResult.Value;
-                Debug.Log($"Colocation: Advertisement started successfully. UUID: {_sharedAnchorGroupId}");
+                Log($"Colocation: Advertisement started successfully. UUID: {_sharedAnchorGroupId}");
                 CreateAndShareAlignmentAnchor();
             }
             else
             {
-                Debug.LogError($"Colocation: Advertisement failed with status: {startAdvertisementResult.Status}");
+                Log($"Colocation: Advertisement failed with status: {startAdvertisementResult.Status}", true);
             }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Colocation: Error during advertisement: {e.Message}");
+            Log($"Colocation: Error during advertisement: {e.Message}", true);
         }
     }
 
-    private async void DiscoverNearbySession()
+    protected virtual async void DiscoverNearbySession()
     {
         try
         {
@@ -66,72 +70,72 @@ public class ColocationManager : NetworkBehaviour
             var discoveryResult = await OVRColocationSession.StartDiscoveryAsync();
             if (!discoveryResult.Success)
             {
-                Debug.LogError($"Colocation: Discovery failed with status: {discoveryResult.Status}");
+                Log($"Colocation: Discovery failed with status: {discoveryResult.Status}", true);
                 return;
             }
 
-            Debug.Log("Colocation: Discovery started successfully.");
+            Log("Colocation: Discovery started successfully.");
         }
         catch (Exception e)
         {
-            Debug.LogError($"Colocation: Error during discovery: {e.Message}");
+            Log($"Colocation: Error during discovery: {e.Message}", true);
         }
     }
 
-    private void OnColocationSessionDiscovered(OVRColocationSession.Data session)
+    protected virtual void OnColocationSessionDiscovered(OVRColocationSession.Data session)
     {
         OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
 
         _sharedAnchorGroupId = session.AdvertisementUuid;
-        Debug.Log($"Colocation: Discovered session with UUID: {_sharedAnchorGroupId}");
+        Log($"Colocation: Discovered session with UUID: {_sharedAnchorGroupId}");
         LoadAndAlignToAnchor(_sharedAnchorGroupId);
     }
 
-    private async void CreateAndShareAlignmentAnchor()
+    protected virtual async void CreateAndShareAlignmentAnchor()
     {
         try
         {
-            Debug.Log("Colocation: Creating alignment anchor...");
+            Log("Colocation: Creating alignment anchor...");
             var anchor = await CreateAnchor(Vector3.zero, Quaternion.identity);
 
             if (anchor == null)
             {
-                Debug.LogError("Colocation: Failed to create alignment anchor.");
+                Log("Colocation: Failed to create alignment anchor.", true);
                 return;
             }
 
             if (!anchor.Localized)
             {
-                Debug.LogError("Colocation: Anchor is not localized. Cannot proceed with sharing.");
+                Log("Colocation: Anchor is not localized. Cannot proceed with sharing.", true);
                 return;
             }
 
             var saveResult = await anchor.SaveAnchorAsync();
             if (!saveResult.Success)
             {
-                Debug.LogError($"Colocation: Failed to save alignment anchor. Error: {saveResult}");
+                Log($"Colocation: Failed to save alignment anchor. Error: {saveResult}", true);
                 return;
             }
 
-            Debug.Log($"Colocation: Alignment anchor saved successfully. UUID: {anchor.Uuid}");
+            Log($"Colocation: Alignment anchor saved successfully. UUID: {anchor.Uuid}");
             
             var shareResult = await OVRSpatialAnchor.ShareAsync(new List<OVRSpatialAnchor> { anchor }, _sharedAnchorGroupId);
 
             if (!shareResult.Success)
             {
-                Debug.LogError($"Colocation: Failed to share alignment anchor. Error: {shareResult}");
+                Log($"Colocation: Failed to share alignment anchor. Error: {shareResult}", true);
                 return;
             }
 
-            Debug.Log($"Colocation: Alignment anchor shared successfully. Group UUID: {_sharedAnchorGroupId}");
+            Log($"Colocation: Alignment anchor shared successfully. Group UUID: {_sharedAnchorGroupId}");
         }
         catch (Exception e)
         {
-            Debug.LogError($"Colocation: Error during anchor creation and sharing: {e.Message}");
+            Log($"Colocation: Error during anchor creation and sharing: {e.Message}", true);
         }
     }
 
-    private async Task<OVRSpatialAnchor> CreateAnchor(Vector3 position, Quaternion rotation)
+    protected virtual async Task<OVRSpatialAnchor> CreateAnchor(Vector3 position, Quaternion rotation)
     {
         try
         {
@@ -150,28 +154,28 @@ public class ColocationManager : NetworkBehaviour
                 await Task.Yield();
             }
 
-            Debug.Log($"Colocation: Anchor created successfully. UUID: {spatialAnchor.Uuid}");
+            Log($"Colocation: Anchor created successfully. UUID: {spatialAnchor.Uuid}");
             return spatialAnchor;
         }
         catch (Exception e)
         {
-            Debug.LogError($"Colocation: Error during anchor creation: {e.Message}");
+            Log($"Colocation: Error during anchor creation: {e.Message}", true);
             return null;
         }
     }
 
-    private async void LoadAndAlignToAnchor(Guid groupUuid)
+    protected virtual async void LoadAndAlignToAnchor(Guid groupUuid)
     {
         try
         {
-            Debug.Log($"Colocation: Loading anchors for Group UUID: {groupUuid}...");
+            Log($"Colocation: Loading anchors for Group UUID: {groupUuid}...");
 
             var unboundAnchors = new List<OVRSpatialAnchor.UnboundAnchor>();
             var loadResult = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, unboundAnchors);
 
             if (!loadResult.Success || unboundAnchors.Count == 0)
             {
-                Debug.LogError($"Colocation: Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}");
+                Log($"Colocation: Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}", true);
                 return;
             }
 
@@ -179,7 +183,7 @@ public class ColocationManager : NetworkBehaviour
             {
                 if (await unboundAnchor.LocalizeAsync())
                 {
-                    Debug.Log($"Colocation: Anchor localized successfully. UUID: {unboundAnchor.Uuid}");
+                    Log($"Colocation: Anchor localized successfully. UUID: {unboundAnchor.Uuid}");
 
                     var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
@@ -189,12 +193,24 @@ public class ColocationManager : NetworkBehaviour
                     return;
                 }
 
-                Debug.LogWarning($"Colocation: Failed to localize anchor: {unboundAnchor.Uuid}");
+                Log($"Colocation: Failed to localize anchor: {unboundAnchor.Uuid}", true);
             }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Colocation: Error during anchor loading and alignment: {e.Message}");
+            Log($"Colocation: Error during anchor loading and alignment: {e.Message}", true);
+        }
+    }
+
+    protected virtual void Log(string message, bool isError = false)
+    {
+        if (isError)
+        {
+            Debug.LogError(message);
+        }
+        else
+        {
+            Debug.Log(message);
         }
     }
 }
