@@ -4,26 +4,16 @@ using Fusion;
 using UnityEngine;
 
 /// <summary>
-/// Networked cube that can be grabbed and manipulated by multiple headsets.
-/// Synchronizes position, rotation, and grab state across all clients.
+/// Simple networked cube that spawns and stays in place.
+/// Parented to the local spatial anchor to stay aligned across devices.
 /// </summary>
-[RequireComponent(typeof(NetworkTransform))]
 public class NetworkedCube : NetworkBehaviour
 {
     [Header("Visual Settings")]
-    [SerializeField] private Color defaultColor = Color.cyan;
-    [SerializeField] private Color grabbedColor = Color.yellow;
-
-    [Header("Physics Settings")]
-    [SerializeField] private bool useGravity = false;
-
-    [Networked] public NetworkBool IsGrabbed { get; set; }
-    [Networked] public PlayerRef GrabbingPlayer { get; set; }
+    [SerializeField] private Color cubeColor = Color.cyan;
 
     private Renderer cubeRenderer;
-    private Rigidbody rigidBody;
     private MaterialPropertyBlock propertyBlock;
-    private bool previousGrabState;
 
     public override void Spawned()
     {
@@ -35,123 +25,54 @@ public class NetworkedCube : NetworkBehaviour
             cubeRenderer = GetComponentInChildren<Renderer>();
         }
 
-        rigidBody = GetComponent<Rigidbody>();
-        if (rigidBody != null)
+        // Remove any Rigidbody - we want static objects
+        var rb = GetComponent<Rigidbody>();
+        if (rb != null)
         {
-            rigidBody.useGravity = useGravity;
-            // If not using gravity, make kinematic so it stays in place and doesn't fly away on collision
-            rigidBody.isKinematic = !useGravity; 
-            
-            // Add some drag to prevent flying away if it does become dynamic
-            rigidBody.drag = 1f;
-            rigidBody.angularDrag = 1f;
-            
-            Debug.Log($"[NetworkedCube] Rigidbody setup: useGravity={useGravity}, isKinematic={rigidBody.isKinematic}");
+            Destroy(rb);
         }
-        else
-        {
-            Debug.LogError("[NetworkedCube] No Rigidbody found! Cube won't be grabbable.");
-        }
+
+        // Parent to local anchor if not already parented (for clients receiving the spawn)
+        ParentToLocalAnchor();
 
         propertyBlock = new MaterialPropertyBlock();
-        previousGrabState = IsGrabbed;
         UpdateVisualState();
 
-        Debug.Log($"[NetworkedCube] Spawned with Id: {Object.Id}");
+        Debug.Log($"[NetworkedCube] Spawned at local pos {transform.localPosition}, parent: {(transform.parent != null ? transform.parent.name : "none")}");
     }
 
-    public override void FixedUpdateNetwork()
+    private void ParentToLocalAnchor()
     {
-        // Empty - visual updates are handled in Render() for smooth visuals
-    }
-
-    public override void Render()
-    {
-        // Only update visual state when grab state has changed (optimization)
-        if (previousGrabState != IsGrabbed)
+        // If already parented to an anchor, skip
+        if (transform.parent != null && transform.parent.GetComponent<OVRSpatialAnchor>() != null)
         {
-            previousGrabState = IsGrabbed;
-            UpdateVisualState();
-        }
-    }
-
-    /// <summary>
-    /// Called when a player starts grabbing this cube.
-    /// </summary>
-    public void OnGrabbed(PlayerRef player)
-    {
-        if (!Object.HasStateAuthority)
-        {
-            RPC_RequestGrab(player);
+            Debug.Log("[NetworkedCube] Already parented to anchor");
             return;
         }
 
-        SetGrabState(true, player);
-    }
-
-    /// <summary>
-    /// Called when a player releases this cube.
-    /// </summary>
-    public void OnReleased()
-    {
-        if (!Object.HasStateAuthority)
+        // Find the AnchorAutoGUIManager to get the localized anchor
+        var guiManager = FindObjectOfType<AnchorAutoGUIManager>();
+        if (guiManager != null)
         {
-            RPC_RequestRelease();
-            return;
-        }
-
-        SetGrabState(false, PlayerRef.None);
-    }
-
-    /// <summary>
-    /// Request authority transfer to allow another player to manipulate the cube.
-    /// </summary>
-    public void RequestAuthority()
-    {
-        if (Runner == null) return;
-
-        if (!Object.HasStateAuthority)
-        {
-            Object.RequestStateAuthority();
-            Debug.Log($"[NetworkedCube] Requested state authority for cube {Object.Id}");
-        }
-    }
-
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestGrab(PlayerRef player)
-    {
-        SetGrabState(true, player);
-    }
-
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestRelease()
-    {
-        SetGrabState(false, PlayerRef.None);
-    }
-
-    private void SetGrabState(bool grabbed, PlayerRef player)
-    {
-        IsGrabbed = grabbed;
-        GrabbingPlayer = player;
-
-        if (rigidBody != null)
-        {
-            // When grabbed, cube follows hand movement (kinematic)
-            // When released, cube becomes kinematic so it stays in place
-            rigidBody.isKinematic = true;
-
-            // When released, stop all motion so it stays in place
-            if (!grabbed)
+            var anchor = guiManager.GetLocalizedAnchor();
+            if (anchor != null && anchor.Localized)
             {
-                rigidBody.velocity = Vector3.zero;
-                rigidBody.angularVelocity = Vector3.zero;
+                // Store current local position before reparenting
+                Vector3 localPos = transform.localPosition;
+                Quaternion localRot = transform.localRotation;
+                Vector3 localScale = transform.localScale;
+                
+                transform.SetParent(anchor.transform, worldPositionStays: false);
+                transform.localPosition = localPos;
+                transform.localRotation = localRot;
+                transform.localScale = localScale;
+                
+                Debug.Log($"[NetworkedCube] Parented to anchor {anchor.name} at local pos {localPos}");
+                return;
             }
         }
 
-        // Update visual state when grab state changes
-        UpdateVisualState();
-
-        Debug.Log($"[NetworkedCube] Grab state changed - IsGrabbed: {grabbed}, Player: {player}");
+        Debug.LogWarning("[NetworkedCube] Could not find localized anchor to parent to!");
     }
 
     private void UpdateVisualState()
@@ -159,8 +80,8 @@ public class NetworkedCube : NetworkBehaviour
         if (cubeRenderer == null || propertyBlock == null) return;
 
         cubeRenderer.GetPropertyBlock(propertyBlock);
-        propertyBlock.SetColor("_Color", IsGrabbed ? grabbedColor : defaultColor);
-        propertyBlock.SetColor("_BaseColor", IsGrabbed ? grabbedColor : defaultColor);
+        propertyBlock.SetColor("_Color", cubeColor);
+        propertyBlock.SetColor("_BaseColor", cubeColor);
         cubeRenderer.SetPropertyBlock(propertyBlock);
     }
 

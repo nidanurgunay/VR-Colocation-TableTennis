@@ -19,6 +19,7 @@ public class AnchorAutoGUIManager : ColocationManager
     [Header("UI Buttons")]
     [SerializeField] private Button autoAlignButton;
     [SerializeField] private Button spawnCubeButton;
+    [SerializeField] private Button resetButton; // Add this
 
     [Header("Status Display")]
     [SerializeField] private TextMeshProUGUI statusText;
@@ -29,6 +30,10 @@ public class AnchorAutoGUIManager : ColocationManager
     [Header("Settings")]
     // alignmentManager is in base class
     [SerializeField] private float anchorScale = 0.3f; // Larger for better visibility
+    
+    [Header("Cube Spawn Settings")]
+    [SerializeField] private NetworkPrefabRef cubePrefab;
+    [SerializeField] private float cubeScale = 0.1f;
     
     [Header("Status Colors")]
     [SerializeField] private Color hostColor = Color.blue;
@@ -46,14 +51,14 @@ public class AnchorAutoGUIManager : ColocationManager
     private List<OVRSpatialAnchor> currentAnchors;
     private Transform cameraTransform;
     private GameObject anchorMarkerPrefab;
-    // _sharedAnchorGroupId is in base class
+    // _sharedAnchorGroupId and _localizedAnchor are in base class
     private bool isHost = false;
     private enum SessionState { Idle, Advertising, Discovering, HostAligned, ClientAligned }
     private SessionState currentState = SessionState.Idle;
 
 #if FUSION2
     private NetworkRunner networkRunner;
-    private CubeSpawner cubeSpawner;
+    private NetworkObject spawnedCube; // Track the single spawned cube
 #endif
 
     private void Start()
@@ -90,14 +95,7 @@ public class AnchorAutoGUIManager : ColocationManager
 
         autoAlignButton?.onClick.AddListener(OnAutoAlignClicked);
         spawnCubeButton?.onClick.AddListener(OnSpawnCubeClicked);
-
-#if FUSION2
-        // Start Photon Fusion session automatically
-        if (autoStartSession)
-        {
-            StartNetworkSession();
-        }
-#endif
+        resetButton?.onClick.AddListener(OnResetClicked); // Add this
 
         UpdateAllUI();
         Log("Ready - Click Auto Align to start");
@@ -106,55 +104,9 @@ public class AnchorAutoGUIManager : ColocationManager
 #if FUSION2
     private async void StartNetworkSession()
     {
-        Log("Starting network session...");
-        
-        // Find or create NetworkRunner
-        networkRunner = FindObjectOfType<NetworkRunner>();
-        if (networkRunner == null)
-        {
-            var runnerGO = new GameObject("NetworkRunner");
-            networkRunner = runnerGO.AddComponent<NetworkRunner>();
-            DontDestroyOnLoad(runnerGO);
-        }
-
-        // Start Fusion in Shared mode (peer-to-peer)
-        var result = await networkRunner.StartGame(new StartGameArgs
-        {
-            GameMode = GameMode.Shared,
-            SessionName = sessionName,
-            Scene = default,
-            SceneManager = networkRunner.GetComponent<INetworkSceneManager>()
-        });
-
-        if (result.Ok)
-        {
-            Log($"Network session started: {sessionName}");
-            Debug.Log($"[AnchorGUI] Fusion session started successfully");
-            
-            // Make sure CubeSpawner is in the scene and ready
-            await System.Threading.Tasks.Task.Delay(100);
-            EnsureCubeSpawnerExists();
-        }
-        else
-        {
-            Log($"Failed to start session: {result.ShutdownReason}", true);
-            Debug.LogError($"[AnchorGUI] Failed to start Fusion session: {result.ShutdownReason}");
-        }
+        Log("Network session ready. Awaiting user action to start colocation.");
     }
-    
-    private void EnsureCubeSpawnerExists()
-    {
-        cubeSpawner = FindObjectOfType<CubeSpawner>();
-        if (cubeSpawner == null)
-        {
-            Debug.LogWarning("[AnchorGUI] CubeSpawner not found in scene! Make sure it exists and has a NetworkObject component.");
-        }
-        else
-        {
-            Debug.Log("[AnchorGUI] CubeSpawner found and ready.");
-        }
-    }
-#endif
+    #endif
 
     private void Update()
     {
@@ -203,7 +155,7 @@ public class AnchorAutoGUIManager : ColocationManager
         Log("Starting Colocation...");
         PrepareColocation();
 #else
-        Log("Creating alignment anchor...");
+        Log("Creating alignment anchor..");
         await CreateAnchor(Vector3.zero, Quaternion.identity);
 #endif
     }
@@ -214,10 +166,18 @@ public class AnchorAutoGUIManager : ColocationManager
 
     public override void Spawned()
     {
-        base.Spawned(); // Calls PrepareColocation if autoStartColocation is true
-        
+        base.Spawned();
         isHost = Object.HasStateAuthority;
         UpdateStatusIndicator();
+        // Do NOT auto-start colocation/alignment here
+    }
+
+    /// <summary>
+    /// Returns the localized spatial anchor for parenting cubes.
+    /// </summary>
+    public OVRSpatialAnchor GetLocalizedAnchor()
+    {
+        return _localizedAnchor;
     }
 
     protected override void Log(string message, bool isError = false)
@@ -246,6 +206,70 @@ public class AnchorAutoGUIManager : ColocationManager
 
     // ==================== STANDALONE ALIGN (NO NETWORK) ====================
 
+    protected override async void LoadAndAlignToAnchor(Guid groupUuid)
+    {
+        try
+        {
+            Log($"Loading anchors for Group UUID: {groupUuid}...");
+
+            var unboundAnchors = new List<OVRSpatialAnchor.UnboundAnchor>();
+            var loadResult = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, unboundAnchors);
+
+            if (!loadResult.Success || unboundAnchors.Count == 0)
+            {
+                Log($"Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}", true);
+                return;
+            }
+
+            foreach (var unboundAnchor in unboundAnchors)
+            {
+                if (await unboundAnchor.LocalizeAsync())
+                {
+                    Log($"Anchor localized successfully. UUID: {unboundAnchor.Uuid}");
+
+                    var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
+                    var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
+                    unboundAnchor.BindTo(spatialAnchor);
+
+                    // Add visual to the anchor so client can see it too
+                    if (anchorMarkerPrefab != null)
+                    {
+                        GameObject visual = Instantiate(anchorMarkerPrefab, anchorGameObject.transform);
+                        visual.name = "Visual";
+                        visual.transform.localPosition = Vector3.zero;
+                        visual.transform.localRotation = Quaternion.identity;
+                        
+                        float validScale = Mathf.Max(anchorScale, 0.01f);
+                        visual.transform.localScale = Vector3.one * validScale;
+                        
+                        // Remove physics components from visual
+                        foreach (var col in visual.GetComponentsInChildren<Collider>())
+                            Destroy(col);
+                        foreach (var rb in visual.GetComponentsInChildren<Rigidbody>())
+                            Destroy(rb);
+                            
+                        Debug.Log("[AnchorGUI] Added visual to client anchor");
+                    }
+
+                    // Track this anchor locally for UI and reset
+                    currentAnchors.Add(spatialAnchor);
+                    
+                    _localizedAnchor = spatialAnchor; // Store for relative positioning
+                    alignmentManager.AlignUserToAnchor(spatialAnchor);
+                    
+                    UpdateAllUI();
+                    return;
+                }
+
+                Log($"Failed to localize anchor: {unboundAnchor.Uuid}", true);
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Error during anchor loading and alignment: {e.Message}", true);
+        }
+    }
+
     private void OnSpawnCubeClicked()
     {
 #if FUSION2
@@ -262,25 +286,157 @@ public class AnchorAutoGUIManager : ColocationManager
             return;
         }
 
-        if (cubeSpawner == null)
+        if (!cubePrefab.IsValid)
         {
-            cubeSpawner = FindObjectOfType<CubeSpawner>();
+            Log("Cube prefab not assigned!", true);
+            return;
         }
 
-        if (cubeSpawner != null)
+        // Get controller position and convert to anchor-relative
+        Vector3 worldPos = GetControllerSpawnPosition();
+        Vector3 anchorRelativePos = worldPos;
+        
+        if (_localizedAnchor != null && _localizedAnchor.Localized)
         {
-            // Get right controller position for spawn location
-            Vector3 spawnPos = GetControllerSpawnPosition();
-            cubeSpawner.SpawnCubeAtPosition(spawnPos, Quaternion.identity);
-            Log("Spawning cube at controller!");
+            anchorRelativePos = _localizedAnchor.transform.InverseTransformPoint(worldPos);
+            Debug.Log($"[AnchorGUI] Spawn: World {worldPos} -> Anchor-relative {anchorRelativePos}");
         }
         else
         {
-            Log("CubeSpawner not found!", true);
+            Debug.LogWarning("[AnchorGUI] No localized anchor! Using world position directly.");
         }
+
+        // Request spawn via RPC if not host
+        if (!Object.HasStateAuthority)
+        {
+            RPC_RequestSpawnCube(anchorRelativePos);
+        }
+        else
+        {
+            SpawnCubeAtAnchorPosition(anchorRelativePos);
+        }
+        
+        Log("Spawning cube!");
 #else
         Log("Photon Fusion not available!", true);
 #endif
+    }
+
+#if FUSION2
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestSpawnCube(Vector3 anchorRelativePos)
+    {
+        Debug.Log($"[AnchorGUI] Host received spawn request at anchor-relative: {anchorRelativePos}");
+        SpawnCubeAtAnchorPosition(anchorRelativePos);
+    }
+
+    private void SpawnCubeAtAnchorPosition(Vector3 anchorRelativePos)
+    {
+        // Clear existing cube first (limit to 1)
+        if (spawnedCube != null && Runner != null)
+        {
+            Debug.Log($"[AnchorGUI] Despawning existing cube: {spawnedCube.Id}");
+            Runner.Despawn(spawnedCube);
+            spawnedCube = null;
+        }
+
+        if (_localizedAnchor == null || !_localizedAnchor.Localized)
+        {
+            Debug.LogError("[AnchorGUI] Cannot spawn cube - no localized anchor!");
+            return;
+        }
+
+        // Spawn at world position first (required by Fusion)
+        Vector3 worldPos = _localizedAnchor.transform.TransformPoint(anchorRelativePos);
+        Debug.Log($"[AnchorGUI] Spawning cube at world {worldPos}, will parent to anchor");
+
+        var newCube = Runner.Spawn(
+            cubePrefab,
+            worldPos,
+            Quaternion.identity,
+            Object.InputAuthority
+        );
+
+        if (newCube != null)
+        {
+            // Parent to anchor so position is relative to anchor on all devices
+            newCube.transform.SetParent(_localizedAnchor.transform, worldPositionStays: false);
+            newCube.transform.localPosition = anchorRelativePos;
+            newCube.transform.localRotation = Quaternion.identity;
+            newCube.transform.localScale = Vector3.one * cubeScale;
+            
+            spawnedCube = newCube;
+            Debug.Log($"[AnchorGUI] Cube parented to anchor at local pos {anchorRelativePos}! NetworkId: {newCube.Id}");
+        }
+        else
+        {
+            Debug.LogError("[AnchorGUI] Failed to spawn cube!");
+        }
+    }
+
+    private void ClearAllCubesLocal()
+    {
+        // Find and destroy all cube GameObjects directly
+        var allCubes = FindObjectsOfType<NetworkedCube>();
+        Debug.Log($"[AnchorGUI] Force clearing {allCubes.Length} cubes locally");
+        
+        foreach (var cube in allCubes)
+        {
+            if (cube != null && cube.gameObject != null)
+            {
+                Destroy(cube.gameObject);
+            }
+        }
+        spawnedCube = null;
+    }
+#endif
+
+    private void OnResetClicked()
+    {
+        Debug.Log("[AnchorGUI] Reset clicked - clearing scene and session");
+        
+        // Stop periodic alignment
+        if (alignmentManager != null)
+        {
+            alignmentManager.StopPeriodicAlignment();
+        }
+        
+        // Clear all spawned cubes
+#if FUSION2
+        // Try network despawn first, then force local destroy
+        if (spawnedCube != null && Object.HasStateAuthority && Runner != null && Runner.IsRunning)
+        {
+            Debug.Log($"[AnchorGUI] Despawning cube via network: {spawnedCube.Id}");
+            Runner.Despawn(spawnedCube);
+        }
+        
+        // Always do local cleanup to ensure cubes are gone
+        ClearAllCubesLocal();
+        Log("Cleared all cubes");
+#endif
+
+        // Destroy all anchors
+        foreach (var anchor in currentAnchors)
+        {
+            if (anchor != null)
+            {
+                Debug.Log($"[AnchorGUI] Destroying anchor: {anchor.Uuid}");
+                Destroy(anchor.gameObject);
+            }
+        }
+        currentAnchors.Clear();
+
+        // Reset colocation session
+        ResetColocationSession();
+
+        // Reset state
+        currentState = SessionState.Idle;
+        _sharedAnchorGroupId = Guid.Empty;
+        _localizedAnchor = null;
+        
+        // Reset UI
+        UpdateAllUI();
+        Log("Scene reset. Click Auto Align to start fresh alignment");
     }
 
     private Vector3 GetControllerAnchorPosition()
@@ -290,8 +446,8 @@ public class AnchorAutoGUIManager : ColocationManager
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
         {
             Transform rightHand = cameraRig.rightControllerAnchor;
-            // Create anchor 2cm in front of controller
-            return rightHand.position + rightHand.forward * 0.02f;
+            // Create anchor 5cm in front of controller tip
+            return rightHand.position + rightHand.forward * 0.05f;
         }
 
         // Fallback to camera position if controller not found
@@ -305,45 +461,40 @@ public class AnchorAutoGUIManager : ColocationManager
 
     private Vector3 GetControllerSpawnPosition()
     {
+        Vector3 worldPos;
+        
         // Try to get right controller position
         var cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
         {
             Transform rightHand = cameraRig.rightControllerAnchor;
-            // Spawn 30cm in front and 10cm above the controller for better visibility and stability
-            Vector3 spawnPos = rightHand.position + rightHand.forward * 0.3f + Vector3.up * 0.1f;
-            
-            // Ensure minimum height above ground (prevent spawning below floor)
-            if (spawnPos.y < 0.5f)
-            {
-                spawnPos.y = 0.5f;
-            }
-            
-            return spawnPos;
+            // Spawn 30cm in front and 10cm above the controller
+            worldPos = rightHand.position + rightHand.forward * 0.3f + Vector3.up * 0.1f;
         }
-
-        // Fallback to camera forward if controller not found
-        if (cameraTransform != null)
+        else if (cameraTransform != null)
         {
-            Vector3 spawnPos = cameraTransform.position + cameraTransform.forward * 0.5f;
-            
-            // Ensure it's at a visible height
-            if (spawnPos.y < 1.0f)
-            {
-                spawnPos.y = 1.0f;
-            }
-            
-            return spawnPos;
+            // Fallback to camera forward
+            worldPos = cameraTransform.position + cameraTransform.forward * 0.5f;
         }
-
-        return new Vector3(0, 1.0f, 0); // Default to 1m above origin
+        else
+        {
+            worldPos = new Vector3(0, 1.0f, 0);
+        }
+        
+        // Ensure minimum height above ground
+        if (worldPos.y < 0.5f)
+        {
+            worldPos.y = 0.5f;
+        }
+        
+        return worldPos;
     }
 
     protected override async Task<OVRSpatialAnchor> CreateAnchor(Vector3 position, Quaternion rotation)
     {
         try
         {
-            // Override position to be in front of the user/controller if position is zero
+            // Create anchor at controller position
             if (position == Vector3.zero)
             {
                 position = GetControllerAnchorPosition();
@@ -389,6 +540,7 @@ public class AnchorAutoGUIManager : ColocationManager
 
             Log($"Anchor created: {spatialAnchor.Uuid}");
             currentAnchors.Add(spatialAnchor); // Track it locally for UI
+            _localizedAnchor = spatialAnchor; // Store as the shared anchor for relative positioning
             return spatialAnchor;
         }
         catch (Exception e)
@@ -462,6 +614,9 @@ public class AnchorAutoGUIManager : ColocationManager
 
         if (spawnCubeButton != null)
             spawnCubeButton.interactable = hasNetwork && isAligned;
+
+        if (resetButton != null)
+            resetButton.interactable = true; // Always available
     }
 
     private void UpdateStatusIndicator()
@@ -495,8 +650,7 @@ public class AnchorAutoGUIManager : ColocationManager
                 break;
             case SessionState.HostAligned:
             case SessionState.ClientAligned:
-                statusIndicator.color = anchorAlignedColor; // Green when
-                statusIndicator.color = clientColor; // Yellow when client is aligned
+                statusIndicator.color = anchorAlignedColor; // Green when aligned
                 break;
             case SessionState.Idle:
             default:

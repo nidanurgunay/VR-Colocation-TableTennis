@@ -10,9 +10,10 @@ using System.Collections.Generic;
 public class ColocationManager : NetworkBehaviour
 {
     [SerializeField] protected AlignmentManager alignmentManager;
-    [SerializeField] protected bool autoStartColocation = true;
+    [SerializeField] protected bool autoStartColocation = false;
 
     protected Guid _sharedAnchorGroupId;
+    protected OVRSpatialAnchor _localizedAnchor; // The anchor used for alignment (host-created or client-localized)
 
     public override void Spawned()
     {
@@ -189,6 +190,7 @@ public class ColocationManager : NetworkBehaviour
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
                     unboundAnchor.BindTo(spatialAnchor);
 
+                    _localizedAnchor = spatialAnchor; // Store for relative positioning
                     alignmentManager.AlignUserToAnchor(spatialAnchor);
                     return;
                 }
@@ -199,6 +201,31 @@ public class ColocationManager : NetworkBehaviour
         catch (Exception e)
         {
             Log($"Colocation: Error during anchor loading and alignment: {e.Message}", true);
+        }
+    }
+
+    /// <summary>
+    /// Resets the colocation session by stopping advertisement/discovery
+    /// </summary>
+    protected virtual void ResetColocationSession()
+    {
+        try
+        {
+            // Unsubscribe from discovery events
+            OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
+
+            // Stop any active advertisement or discovery
+            OVRColocationSession.StopAdvertisementAsync();
+            OVRColocationSession.StopDiscoveryAsync();
+
+            _sharedAnchorGroupId = Guid.Empty;
+            _localizedAnchor = null;
+            
+            Log("Colocation: Session reset successfully");
+        }
+        catch (Exception e)
+        {
+            Log($"Colocation: Error during session reset: {e.Message}", true);
         }
     }
 
