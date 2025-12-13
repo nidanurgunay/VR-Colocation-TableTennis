@@ -15,6 +15,10 @@ GameObject:
   - component: {fileID: 6789012345678901234}
   - component: {fileID: 7890123456789012345}
   - component: {fileID: 8901234567890123456}
+  - component: {fileID: 9012345678901234567}
+  - component: {fileID: 5687511128324523829}
+  - component: {fileID: 1073786558303108035}
+  - component: {fileID: 9206045023554722191}
   m_Layer: 0
   m_Name: NetworkedCube
   m_TagString: Untagged
@@ -147,13 +151,13 @@ MonoBehaviour:
   m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  SortKey: 0
+  SortKey: 209558528
   ObjectInterest: 1
   Flags: 524289
   NestedObjects: []
   NetworkedBehaviours:
-  - {fileID: 9012345678901234567}
   - {fileID: 8901234567890123456}
+  - {fileID: 9012345678901234567}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &8901234567890123456
 MonoBehaviour:
@@ -187,3 +191,51 @@ MonoBehaviour:
   defaultColor: {r: 0.2, g: 0.8, b: 0.9, a: 1}
   grabbedColor: {r: 1, g: 0.9, b: 0.2, a: 1}
   useGravity: 0
+  _IsGrabbed:
+    _value: 0
+--- !u!114 &5687511128324523829
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1234567890123456789}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 02d61468f8b77ae4b92c344bc9a600fb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_allowOffhandGrab: 1
+  m_snapPosition: 0
+  m_snapOrientation: 0
+  m_snapOffset: {fileID: 0}
+  m_grabPoints: []
+--- !u!114 &1073786558303108035
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1234567890123456789}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f7cb22d87b5f84d3fb429bfc61809e76, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &9206045023554722191
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1234567890123456789}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 02d61468f8b77ae4b92c344bc9a600fb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_allowOffhandGrab: 1
+  m_snapPosition: 0
+  m_snapOrientation: 0
+  m_snapOffset: {fileID: 0}
+  m_grabPoints: []
