@@ -143,13 +143,19 @@ public class AnchorAutoGUIManager : ColocationManager
         // Determine if this is host or client
         isHost = networkRunner.IsServer || networkRunner.IsSharedModeMasterClient;
         
-        Debug.Log($"[AnchorGUI] Auto Align clicked. Role: {(isHost ? "HOST" : "CLIENT")}");
-        Debug.Log($"[AnchorGUI] Camera position: {cameraTransform.position}");
+        Debug.Log($"[AnchorGUI] Auto Align clicked. Role: {(isHost ? "HOST" : "CLIENT")}, Existing anchors: {currentAnchors.Count}");
+        Debug.Log($"[AnchorGUI] Camera rig position: {cameraTransform.position}, rotation: {cameraTransform.eulerAngles}");
         
         // Update status indicator color based on role
         if (statusIndicator != null)
         {
             statusIndicator.color = isHost ? hostColor : clientColor;
+        }
+        
+        // Ensure clean state before starting colocation
+        if (currentAnchors.Count > 0)
+        {
+            Debug.LogWarning($"[AnchorGUI] Warning: Starting alignment with {currentAnchors.Count} existing anchors. Consider resetting first.");
         }
         
         Log("Starting Colocation...");
@@ -198,8 +204,8 @@ public class AnchorAutoGUIManager : ColocationManager
 
         if (message.Contains("Advertisement started")) currentState = SessionState.Advertising;
         else if (message.Contains("Discovery started")) currentState = SessionState.Discovering;
-        else if (message.Contains("Alignment anchor shared")) currentState = SessionState.HostAligned;
-        else if (message.Contains("Anchor localized successfully")) currentState = SessionState.ClientAligned;
+        else if (message.Contains("Host aligned")) currentState = SessionState.HostAligned;
+        else if (message.Contains("Client aligned")) currentState = SessionState.ClientAligned;
 
         UpdateStatusIndicator();
     }
@@ -225,7 +231,7 @@ public class AnchorAutoGUIManager : ColocationManager
             {
                 if (await unboundAnchor.LocalizeAsync())
                 {
-                    Log($"Anchor localized successfully. UUID: {unboundAnchor.Uuid}");
+                    Log($"Client aligned! Anchor UUID: {unboundAnchor.Uuid}");
 
                     var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
@@ -234,6 +240,7 @@ public class AnchorAutoGUIManager : ColocationManager
                     // Add visual to the anchor so client can see it too
                     if (anchorMarkerPrefab != null)
                     {
+                        Debug.Log($"[AnchorGUI] Creating anchor visual with prefab: {anchorMarkerPrefab.name}");
                         GameObject visual = Instantiate(anchorMarkerPrefab, anchorGameObject.transform);
                         visual.name = "Visual";
                         visual.transform.localPosition = Vector3.zero;
@@ -248,7 +255,11 @@ public class AnchorAutoGUIManager : ColocationManager
                         foreach (var rb in visual.GetComponentsInChildren<Rigidbody>())
                             Destroy(rb);
                             
-                        Debug.Log("[AnchorGUI] Added visual to client anchor");
+                        Debug.Log($"[AnchorGUI] Added visual to client anchor at position: {anchorGameObject.transform.position}");
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[AnchorGUI] anchorMarkerPrefab is null! Client anchor will have no visual.");
                     }
 
                     // Track this anchor locally for UI and reset
@@ -374,20 +385,35 @@ public class AnchorAutoGUIManager : ColocationManager
         }
     }
 
-    private void ClearAllCubesLocal()
+    private void DespawnAllCubesOnHost()
     {
-        // Find and destroy all cube GameObjects directly
+        // Only the host (state authority) should despawn networked cubes
+        if (!Object.HasStateAuthority || Runner == null || !Runner.IsRunning)
+        {
+            Debug.Log("[AnchorGUI] Not host or runner not ready, cannot despawn cubes");
+            return;
+        }
+        
+        // Find and despawn all NetworkedCube objects via Fusion
         var allCubes = FindObjectsOfType<NetworkedCube>();
-        Debug.Log($"[AnchorGUI] Force clearing {allCubes.Length} cubes locally");
+        Debug.Log($"[AnchorGUI] Host despawning {allCubes.Length} cubes via network");
         
         foreach (var cube in allCubes)
         {
-            if (cube != null && cube.gameObject != null)
+            if (cube != null && cube.Object != null && cube.Object.IsValid)
             {
-                Destroy(cube.gameObject);
+                Debug.Log($"[AnchorGUI] Despawning cube: {cube.Object.Id}");
+                Runner.Despawn(cube.Object);
             }
         }
         spawnedCube = null;
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestDespawnAllCubes()
+    {
+        Debug.Log("[AnchorGUI] Host received request to despawn all cubes");
+        DespawnAllCubesOnHost();
     }
 #endif
 
@@ -401,18 +427,23 @@ public class AnchorAutoGUIManager : ColocationManager
             alignmentManager.StopPeriodicAlignment();
         }
         
-        // Clear all spawned cubes
+        // Clear all spawned cubes via network
 #if FUSION2
-        // Try network despawn first, then force local destroy
-        if (spawnedCube != null && Object.HasStateAuthority && Runner != null && Runner.IsRunning)
+        if (Runner != null && Runner.IsRunning)
         {
-            Debug.Log($"[AnchorGUI] Despawning cube via network: {spawnedCube.Id}");
-            Runner.Despawn(spawnedCube);
+            if (Object.HasStateAuthority)
+            {
+                // Host: despawn cubes directly
+                DespawnAllCubesOnHost();
+            }
+            else
+            {
+                // Client: request host to despawn cubes
+                Debug.Log("[AnchorGUI] Client requesting host to despawn cubes");
+                RPC_RequestDespawnAllCubes();
+            }
+            Log("Cleared all cubes");
         }
-        
-        // Always do local cleanup to ensure cubes are gone
-        ClearAllCubesLocal();
-        Log("Cleared all cubes");
 #endif
 
         // Destroy all anchors
@@ -428,6 +459,15 @@ public class AnchorAutoGUIManager : ColocationManager
 
         // Reset colocation session
         ResetColocationSession();
+
+        // Reset camera rig to origin for fresh alignment
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null)
+        {
+            cameraRig.transform.position = Vector3.zero;
+            cameraRig.transform.rotation = Quaternion.identity;
+            Debug.Log("[AnchorGUI] Camera rig reset to origin");
+        }
 
         // Reset state
         currentState = SessionState.Idle;

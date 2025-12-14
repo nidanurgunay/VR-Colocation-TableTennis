@@ -66,6 +66,8 @@ public class ColocationManager : NetworkBehaviour
     {
         try
         {
+            // Ensure we're not already subscribed (prevents duplicate handlers)
+            OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
             OVRColocationSession.ColocationSessionDiscovered += OnColocationSessionDiscovered;
 
             var discoveryResult = await OVRColocationSession.StartDiscoveryAsync();
@@ -85,6 +87,8 @@ public class ColocationManager : NetworkBehaviour
 
     protected virtual void OnColocationSessionDiscovered(OVRColocationSession.Data session)
     {
+        // Stop discovery after finding a session to prevent duplicate callbacks
+        OVRColocationSession.StopDiscoveryAsync();
         OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
 
         _sharedAnchorGroupId = session.AdvertisementUuid;
@@ -128,7 +132,14 @@ public class ColocationManager : NetworkBehaviour
                 return;
             }
 
-            Log($"Colocation: Alignment anchor shared successfully. Group UUID: {_sharedAnchorGroupId}");
+            Log($"Colocation: Host aligned! Anchor shared. Group UUID: {_sharedAnchorGroupId}");
+            
+            // Host also needs to align to the anchor
+            _localizedAnchor = anchor;
+            if (alignmentManager != null)
+            {
+                alignmentManager.AlignUserToAnchor(anchor);
+            }
         }
         catch (Exception e)
         {
@@ -184,7 +195,7 @@ public class ColocationManager : NetworkBehaviour
             {
                 if (await unboundAnchor.LocalizeAsync())
                 {
-                    Log($"Colocation: Anchor localized successfully. UUID: {unboundAnchor.Uuid}");
+                    Log($"Colocation: Client aligned! Anchor UUID: {unboundAnchor.Uuid}");
 
                     var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
