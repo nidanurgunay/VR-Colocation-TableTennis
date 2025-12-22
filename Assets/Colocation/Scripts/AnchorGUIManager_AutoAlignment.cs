@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 using TMPro;
 using System;
 using System.Text;
@@ -20,6 +21,10 @@ public class AnchorAutoGUIManager : ColocationManager
     [SerializeField] private Button autoAlignButton;
     [SerializeField] private Button spawnCubeButton;
     [SerializeField] private Button resetButton; // Add this
+    [SerializeField] private Button startGameButton; // Start Table Tennis game
+
+    [Header("Game Scene Settings")]
+    [SerializeField] private string tableTennisSceneName = "TableTennis";
 
     [Header("Status Display")]
     [SerializeField] private TextMeshProUGUI statusText;
@@ -96,6 +101,7 @@ public class AnchorAutoGUIManager : ColocationManager
         autoAlignButton?.onClick.AddListener(OnAutoAlignClicked);
         spawnCubeButton?.onClick.AddListener(OnSpawnCubeClicked);
         resetButton?.onClick.AddListener(OnResetClicked); // Add this
+        startGameButton?.onClick.AddListener(OnStartGameClicked);
 
         UpdateAllUI();
         Log("Ready - Click Auto Align to start");
@@ -478,6 +484,128 @@ public class AnchorAutoGUIManager : ColocationManager
         UpdateAllUI();
         Log("Scene reset. Click Auto Align to start fresh alignment");
     }
+
+    // ==================== START GAME (TABLE TENNIS) ====================
+    
+    private void OnStartGameClicked()
+    {
+        Debug.Log("[AnchorGUI] Start Game clicked");
+        
+        // Check if aligned first
+        if (_localizedAnchor == null || !_localizedAnchor.Localized)
+        {
+            Log("Please align first before starting game!", true);
+            return;
+        }
+
+#if FUSION2
+        if (networkRunner == null || !networkRunner.IsRunning)
+        {
+            Log("Network not ready!", true);
+            return;
+        }
+
+        // Either player can initiate - request goes to host, host loads scene
+        if (Object.HasStateAuthority)
+        {
+            Log("Starting game for all players...");
+            LoadTableTennisSceneNetworked();
+        }
+        else
+        {
+            Log("Requesting to start game...");
+            RPC_RequestStartGame();
+        }
+#else
+        // Non-networked fallback
+        LoadTableTennisSceneLocal();
+#endif
+    }
+
+#if FUSION2
+    /// <summary>
+    /// Client requests host to start the game
+    /// </summary>
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestStartGame()
+    {
+        Debug.Log("[AnchorGUI] Host received request to start game - loading scene for all");
+        LoadTableTennisSceneNetworked();
+    }
+
+    /// <summary>
+    /// Host loads scene using Fusion's networked scene loading
+    /// This automatically syncs to all connected clients
+    /// </summary>
+    private void LoadTableTennisSceneNetworked()
+    {
+        if (Runner != null && Runner.IsRunning)
+        {
+            Debug.Log($"[AnchorGUI] Host loading networked scene: {tableTennisSceneName}");
+            Log("Loading Table Tennis...");
+            
+            // Preserve anchor and cube across scene load for alignment verification
+            PreserveObjectsForSceneTransition();
+            
+            // Get scene index from Build Settings by name
+            int sceneIndex = SceneUtility.GetBuildIndexByScenePath(tableTennisSceneName);
+            
+            // If not found by name alone, try with path variations
+            if (sceneIndex < 0)
+            {
+                // Try common path patterns
+                sceneIndex = SceneUtility.GetBuildIndexByScenePath($"Assets/Colocation/Scenes/Table Tennis/{tableTennisSceneName}.unity");
+            }
+            
+            if (sceneIndex >= 0)
+            {
+                // Use Fusion's scene loading - this syncs to all clients automatically
+                Runner.LoadScene(SceneRef.FromIndex(sceneIndex));
+            }
+            else
+            {
+                Debug.LogError($"[AnchorGUI] Scene '{tableTennisSceneName}' not found in Build Settings! Add it via File > Build Settings");
+                Log("Scene not in Build Settings!", true);
+            }
+        }
+        else
+        {
+            Debug.LogError("[AnchorGUI] Cannot load scene - Runner not available");
+        }
+    }
+
+    /// <summary>
+    /// Preserve anchor and spawned cube across scene transitions for alignment verification
+    /// </summary>
+    private void PreserveObjectsForSceneTransition()
+    {
+        // Preserve the localized anchor (this is crucial for alignment in new scene)
+        if (_localizedAnchor != null)
+        {
+            DontDestroyOnLoad(_localizedAnchor.gameObject);
+            Debug.Log($"[AnchorGUI] Preserved anchor for scene transition: {_localizedAnchor.Uuid}");
+        }
+
+        // Preserve any spawned cubes for alignment verification
+        if (spawnedCube != null && spawnedCube.gameObject != null)
+        {
+            // Unparent from anchor first (anchor is already preserved)
+            // Keep world position so it stays in the same spot
+            spawnedCube.transform.SetParent(null, worldPositionStays: true);
+            DontDestroyOnLoad(spawnedCube.gameObject);
+            Debug.Log($"[AnchorGUI] Preserved cube for scene transition at position: {spawnedCube.transform.position}");
+        }
+
+        // Also preserve all tracked anchors
+        foreach (var anchor in currentAnchors)
+        {
+            if (anchor != null && anchor.gameObject != null)
+            {
+                DontDestroyOnLoad(anchor.gameObject);
+            }
+        }
+    }
+#endif
 
     private Vector3 GetControllerAnchorPosition()
     {
