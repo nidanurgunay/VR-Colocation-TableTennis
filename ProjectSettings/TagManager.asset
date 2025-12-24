@@ -28,6 +28,7 @@ TagManager:
   - QDSUITextInputField
   - SamplesInfoPanel
   - QDSUIToggleCheckboxRadio
+  - Racket
   layers:
   - Default
   - TransparentFX
