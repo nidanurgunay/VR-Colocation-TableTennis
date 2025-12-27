@@ -8,7 +8,7 @@ using UnityEngine;
 public class GrabbableRacket : MonoBehaviour
 {
     [Header("Grab Settings")]
-    [SerializeField] private float grabRadius = 0.1f;
+    [SerializeField] private float grabRadius = 0.25f; // Increased for easier grabbing
     [SerializeField] private OVRInput.Button grabButton = OVRInput.Button.PrimaryHandTrigger;
     
     [Header("Visual Feedback")]
@@ -67,16 +67,19 @@ public class GrabbableRacket : MonoBehaviour
     
     private void FindHandAnchors()
     {
-        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        // First try to find any OVRCameraRig, including those marked DontDestroyOnLoad
+        var cameraRig = FindObjectOfType<OVRCameraRig>(true); // Include inactive
+        
         if (cameraRig != null)
         {
-            leftHandAnchor = cameraRig.leftHandAnchor;
-            rightHandAnchor = cameraRig.rightHandAnchor;
-            Debug.Log("[GrabbableRacket] Found hand anchors");
+            // Use controller anchors for better position accuracy (hands may not be tracked)
+            leftHandAnchor = cameraRig.leftControllerAnchor ?? cameraRig.leftHandAnchor;
+            rightHandAnchor = cameraRig.rightControllerAnchor ?? cameraRig.rightHandAnchor;
+            Debug.Log($"[GrabbableRacket] Found controller anchors - Left: {leftHandAnchor != null}, Right: {rightHandAnchor != null}");
         }
         else
         {
-            Debug.LogWarning("[GrabbableRacket] OVRCameraRig not found!");
+            Debug.LogWarning("[GrabbableRacket] OVRCameraRig not found! Racket won't be grabbable.");
         }
     }
     
@@ -85,7 +88,10 @@ public class GrabbableRacket : MonoBehaviour
         if (leftHandAnchor == null || rightHandAnchor == null)
         {
             FindHandAnchors();
-            return;
+            if (leftHandAnchor == null && rightHandAnchor == null)
+            {
+                return; // Still not found, skip this frame
+            }
         }
         
         if (!isGrabbed)
@@ -126,6 +132,12 @@ public class GrabbableRacket : MonoBehaviour
         float distance = Vector3.Distance(handAnchor.position, transform.position);
         bool isNear = distance <= grabRadius;
         bool isGrabbing = OVRInput.Get(grabButton, controller);
+        
+        // Debug logging for troubleshooting
+        if (isGrabbing)
+        {
+            Debug.Log($"[GrabbableRacket] {controller} trying to grab - Distance: {distance:F2}m, Required: {grabRadius:F2}m, Near: {isNear}");
+        }
         
         return isNear && isGrabbing;
     }

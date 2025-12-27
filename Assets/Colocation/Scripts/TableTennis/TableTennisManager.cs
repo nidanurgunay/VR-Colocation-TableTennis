@@ -14,9 +14,9 @@ public class TableTennisManager : NetworkBehaviour
     
     [Header("Table Setup")]
     [SerializeField] private Transform tableTransform;
-    [SerializeField] private Vector3 racket1Position = new Vector3(-0.3f, 0.8f, -0.6f); // Relative to table
-    [SerializeField] private Vector3 racket2Position = new Vector3(0.3f, 0.8f, -0.6f);
-    [SerializeField] private Vector3 racketRotation = new Vector3(90f, 0f, 0f); // Lying flat
+    [SerializeField] private Vector3 racket1Position = new Vector3(-0.3f, 0.1f, 0f); // On table surface, player 1 side
+    [SerializeField] private Vector3 racket2Position = new Vector3(0.3f, 0.1f, 0f);  // On table surface, player 2 side
+    [SerializeField] private Vector3 racketRotation = new Vector3(0f, 0f, 0f); // Handle up
     
     [Header("Ball Spawn")]
     [SerializeField] private Vector3 ballSpawnOffset = new Vector3(0f, 0.5f, 0f); // Above table center
@@ -54,14 +54,32 @@ public class TableTennisManager : NetworkBehaviour
         int attempts = 0;
         while (sharedAnchor == null && attempts < 50)
         {
-            var anchors = FindObjectsOfType<OVRSpatialAnchor>();
+            // Look for any OVRSpatialAnchor that was preserved from the previous scene
+            var anchors = FindObjectsOfType<OVRSpatialAnchor>(true); // Include inactive
             foreach (var anchor in anchors)
             {
+                // Check if anchor is localized and valid
+                if (anchor != null && anchor.Localized)
+                {
+                    sharedAnchor = anchor.transform;
+                    Debug.Log($"[TableTennisManager] Found localized anchor: {anchor.gameObject.name}, UUID: {anchor.Uuid}");
+                    
+                    // Also re-align to this anchor
+                    var alignmentManager = FindObjectOfType<AlignmentManager>();
+                    if (alignmentManager != null)
+                    {
+                        Debug.Log("[TableTennisManager] Re-aligning to preserved anchor");
+                        alignmentManager.AlignUserToAnchor(anchor);
+                    }
+                    break;
+                }
+                
+                // Fallback: check by name for anchors that might not be fully localized yet
                 if (anchor.gameObject.name.Contains("Shared") || 
                     anchor.gameObject.name.Contains("Anchor"))
                 {
                     sharedAnchor = anchor.transform;
-                    Debug.Log($"[TableTennisManager] Found anchor: {anchor.gameObject.name}");
+                    Debug.Log($"[TableTennisManager] Found anchor by name: {anchor.gameObject.name}");
                     break;
                 }
             }
@@ -72,12 +90,13 @@ public class TableTennisManager : NetworkBehaviour
         
         if (sharedAnchor == null)
         {
-            Debug.LogWarning("[TableTennisManager] Could not find shared anchor");
+            Debug.LogWarning("[TableTennisManager] Could not find shared anchor after 50 attempts");
             
             // Use table as fallback reference
             if (tableTransform != null)
             {
                 sharedAnchor = tableTransform;
+                Debug.Log("[TableTennisManager] Using table as fallback anchor reference");
             }
         }
     }
@@ -111,7 +130,7 @@ public class TableTennisManager : NetworkBehaviour
         localRackets[1].name = "Racket_2";
         EnsureGrabbableRacket(localRackets[1]);
         
-        Debug.Log("[TableTennisManager] Spawned 2 local rackets on table");
+        Debug.Log($"[TableTennisManager] Spawned 2 local rackets - Racket1 at {worldPos1}, Racket2 at {worldPos2}");
     }
     
     private void EnsureGrabbableRacket(GameObject racket)

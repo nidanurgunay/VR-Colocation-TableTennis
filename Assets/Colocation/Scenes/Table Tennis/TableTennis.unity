@@ -6072,7 +6072,11 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 1336064221633153689, guid: 0359ed46faed84f4ab2e4be3e7bc88c5,
+        type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 237327609}
   m_SourcePrefab: {fileID: 100100000, guid: 0359ed46faed84f4ab2e4be3e7bc88c5, type: 3}
 --- !u!4 &237327607 stripped
 Transform:
@@ -6080,6 +6084,37 @@ Transform:
     type: 3}
   m_PrefabInstance: {fileID: 237327606}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &237327608 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 1336064221633153689, guid: 0359ed46faed84f4ab2e4be3e7bc88c5,
+    type: 3}
+  m_PrefabInstance: {fileID: 237327606}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &237327609
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 237327608}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d144eecf7b61c40f7a4334b96e650f97, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  anchorOffset: {x: 0, y: 0, z: 0}
+  anchorRotationOffset: {x: 0, y: 0, z: 0}
+  autoPlaceOnFloor: 1
+  heightAboveFloor: 0.76
+  floorLayerMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  maxFloorSearchDistance: 3
+  allowRuntimeAdjustment: 1
+  heightAdjustmentStep: 0.05
+  parentToAnchor: 1
+  continuousUpdate: 0
+  showDebugInfo: 1
 --- !u!1 &241701043
 GameObject:
   m_ObjectHideFlags: 0
@@ -11024,7 +11059,11 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 2283905976094625989, guid: 19202626625a64c80a63f3c9191b8d53,
+        type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 450879174}
   m_SourcePrefab: {fileID: 100100000, guid: 19202626625a64c80a63f3c9191b8d53, type: 3}
 --- !u!4 &450879172 stripped
 Transform:
@@ -11032,6 +11071,37 @@ Transform:
     type: 3}
   m_PrefabInstance: {fileID: 450879171}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &450879173 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 2283905976094625989, guid: 19202626625a64c80a63f3c9191b8d53,
+    type: 3}
+  m_PrefabInstance: {fileID: 450879171}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &450879174
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 450879173}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d144eecf7b61c40f7a4334b96e650f97, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  anchorOffset: {x: 0, y: 0, z: 0}
+  anchorRotationOffset: {x: 0, y: 0, z: 0}
+  autoPlaceOnFloor: 0
+  heightAboveFloor: 0.76
+  floorLayerMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  maxFloorSearchDistance: 3
+  allowRuntimeAdjustment: 1
+  heightAdjustmentStep: 0.05
+  parentToAnchor: 1
+  continuousUpdate: 0
+  showDebugInfo: 1
 --- !u!1 &453101235
 GameObject:
   m_ObjectHideFlags: 0
@@ -11682,7 +11752,7 @@ PrefabInstance:
     - target: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
         type: 3}
       propertyPath: m_Name
-      value: PingPongBat
+      value: Racket
       objectReference: {fileID: 0}
     - target: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
         type: 3}
@@ -44108,7 +44178,7 @@ PrefabInstance:
     - target: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
         type: 3}
       propertyPath: m_Name
-      value: PingPongBat (1)
+      value: Racket2
       objectReference: {fileID: 0}
     - target: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
         type: 3}

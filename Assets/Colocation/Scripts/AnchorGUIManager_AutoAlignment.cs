@@ -534,6 +534,16 @@ public class AnchorAutoGUIManager : ColocationManager
     }
 
     /// <summary>
+    /// Called by host to notify all clients to preserve their anchors before scene transition
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_PrepareForSceneTransition()
+    {
+        Debug.Log("[AnchorGUI] Received scene transition notification - preserving anchors");
+        PreserveObjectsForSceneTransition();
+    }
+
+    /// <summary>
     /// Host loads scene using Fusion's networked scene loading
     /// This automatically syncs to all connected clients
     /// </summary>
@@ -543,6 +553,9 @@ public class AnchorAutoGUIManager : ColocationManager
         {
             Debug.Log($"[AnchorGUI] Host loading networked scene: {tableTennisSceneName}");
             Log("Loading Table Tennis...");
+            
+            // Notify ALL clients to preserve their anchors BEFORE scene loads
+            RPC_PrepareForSceneTransition();
             
             // Preserve anchor and cube across scene load for alignment verification
             PreserveObjectsForSceneTransition();
@@ -584,6 +597,25 @@ public class AnchorAutoGUIManager : ColocationManager
         {
             DontDestroyOnLoad(_localizedAnchor.gameObject);
             Debug.Log($"[AnchorGUI] Preserved anchor for scene transition: {_localizedAnchor.Uuid}");
+        }
+        else
+        {
+            Debug.LogWarning("[AnchorGUI] No localized anchor to preserve!");
+        }
+
+        // Preserve the AlignmentManager if it exists
+        if (alignmentManager != null)
+        {
+            DontDestroyOnLoad(alignmentManager.gameObject);
+            Debug.Log("[AnchorGUI] Preserved AlignmentManager for scene transition");
+        }
+
+        // Preserve the camera rig so alignment persists
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null)
+        {
+            DontDestroyOnLoad(cameraRig.gameObject);
+            Debug.Log("[AnchorGUI] Preserved OVRCameraRig for scene transition");
         }
 
         // Preserve any spawned cubes for alignment verification
