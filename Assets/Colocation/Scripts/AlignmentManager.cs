@@ -25,16 +25,26 @@ public class AlignmentManager : MonoBehaviour
     
     public void AlignUserToAnchor(OVRSpatialAnchor anchor)
     {
+        AlignUserToAnchor(anchor, enablePeriodicAlignment);
+    }
+    
+    /// <summary>
+    /// Align user to anchor with option to enable/disable periodic re-alignment
+    /// </summary>
+    /// <param name="anchor">The anchor to align to</param>
+    /// <param name="enablePeriodic">Whether to enable periodic re-alignment after initial alignment</param>
+    public void AlignUserToAnchor(OVRSpatialAnchor anchor, bool enablePeriodic)
+    {
         if (!anchor || !anchor.Localized)
         {
             Debug.LogError("Colocation: Invalid or unlocalized anchor. Cannot align.");
             return;
         }
 
-        Debug.Log($"Colocation: Starting alignment to anchor {anchor.Uuid}.");
+        Debug.Log($"Colocation: Starting alignment to anchor {anchor.Uuid}. Periodic: {enablePeriodic}");
         
         _currentAnchor = anchor;
-        StartCoroutine(AlignmentCoroutine(anchor));
+        StartCoroutine(AlignmentCoroutine(anchor, enablePeriodic));
     }
     
     /// <summary>
@@ -52,7 +62,7 @@ public class AlignmentManager : MonoBehaviour
         Debug.Log("Colocation: Periodic alignment stopped.");
     }
     
-    private IEnumerator AlignmentCoroutine(OVRSpatialAnchor anchor)
+    private IEnumerator AlignmentCoroutine(OVRSpatialAnchor anchor, bool enablePeriodic = true)
     {
         var anchorTransform = anchor.transform;
 
@@ -79,8 +89,8 @@ public class AlignmentManager : MonoBehaviour
         Debug.Log("Colocation: Initial alignment complete.");
         _isAligned = true;
         
-        // Start periodic re-alignment if enabled
-        if (enablePeriodicAlignment)
+        // Start periodic re-alignment if enabled and requested
+        if (enablePeriodic && enablePeriodicAlignment)
         {
             if (_periodicAlignmentCoroutine != null)
             {

@@ -557,7 +557,7 @@ public class AnchorAutoGUIManager : ColocationManager
             // Notify ALL clients to preserve their anchors BEFORE scene loads
             RPC_PrepareForSceneTransition();
             
-            // Preserve anchor and cube across scene load for alignment verification
+            // Host also needs to preserve anchors
             PreserveObjectsForSceneTransition();
             
             // Get scene index from Build Settings by name
@@ -601,31 +601,6 @@ public class AnchorAutoGUIManager : ColocationManager
         else
         {
             Debug.LogWarning("[AnchorGUI] No localized anchor to preserve!");
-        }
-
-        // Preserve the AlignmentManager if it exists
-        if (alignmentManager != null)
-        {
-            DontDestroyOnLoad(alignmentManager.gameObject);
-            Debug.Log("[AnchorGUI] Preserved AlignmentManager for scene transition");
-        }
-
-        // Preserve the camera rig so alignment persists
-        var cameraRig = FindObjectOfType<OVRCameraRig>();
-        if (cameraRig != null)
-        {
-            DontDestroyOnLoad(cameraRig.gameObject);
-            Debug.Log("[AnchorGUI] Preserved OVRCameraRig for scene transition");
-        }
-
-        // Preserve any spawned cubes for alignment verification
-        if (spawnedCube != null && spawnedCube.gameObject != null)
-        {
-            // Unparent from anchor first (anchor is already preserved)
-            // Keep world position so it stays in the same spot
-            spawnedCube.transform.SetParent(null, worldPositionStays: true);
-            DontDestroyOnLoad(spawnedCube.gameObject);
-            Debug.Log($"[AnchorGUI] Preserved cube for scene transition at position: {spawnedCube.transform.position}");
         }
 
         // Also preserve all tracked anchors
