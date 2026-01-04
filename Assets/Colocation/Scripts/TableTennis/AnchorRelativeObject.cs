@@ -101,8 +101,8 @@ public class AnchorRelativeObject : MonoBehaviour
 
     private Transform FindLocalizedAnchor()
     {
-        // Method 1: Find via AnchorAutoGUIManager
-        var guiManager = FindObjectOfType<AnchorAutoGUIManager>();
+        // Method 1: Find via AnchorGUIManager_AutoAlignment
+        var guiManager = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
         if (guiManager != null)
         {
             var anchor = guiManager.GetLocalizedAnchor();

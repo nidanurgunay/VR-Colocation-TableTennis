@@ -14,7 +14,8 @@ public class TableTennisManager : NetworkBehaviour
     
     [Header("Table Placement (relative to anchor)")]
     [SerializeField] private Vector3 tablePositionOffset = Vector3.zero; // Position offset from anchor
-    [SerializeField] private float tableXRotationOffset = 180f; // X rotation offset in degrees (180 to flip upside-down table)
+    [SerializeField] private float defaultTableHeight = 0.76f; // Standard ping pong table height
+    [SerializeField] private float tableXRotationOffset = 180f; // X rotation offset in degrees
     [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset in degrees
     
     [Header("Runtime Adjustment Controls")]
@@ -44,6 +45,8 @@ public class TableTennisManager : NetworkBehaviour
     // References
     private NetworkedBall spawnedBall;
     private Transform sharedAnchor;
+    private Transform secondaryAnchor; // For 2-point alignment after scene transition
+    private AlignmentManager alignmentManager;
     private GameObject[] localRackets = new GameObject[2];
     
     public override void Spawned()
@@ -262,10 +265,13 @@ public class TableTennisManager : NetworkBehaviour
         
         if (tableRoot != null)
         {
-            // Calculate position: X/Z from anchor, Y = 0 (floor level)
+            // Calculate position: X/Z from anchor, Y = Standard Height (since anchor is floor)
             Vector3 rotatedOffset = Quaternion.Euler(0, tableYRotationOffset, 0) * tablePositionOffset;
             Vector3 anchorPos = sharedAnchor.position + rotatedOffset;
-            Vector3 tablePos = new Vector3(anchorPos.x, 0f, anchorPos.z);
+            
+            // Set table at standard height relative to WORLD FLOOR (ignoring anchor Y)
+            // This is safer if anchor was placed in the air (held in hand)
+            Vector3 tablePos = new Vector3(anchorPos.x, defaultTableHeight, anchorPos.z);
             
             // Host initializes networked values
             if (Object.HasStateAuthority)
@@ -354,30 +360,53 @@ public class TableTennisManager : NetworkBehaviour
     private IEnumerator WaitForAnchor()
     {
         int attempts = 0;
-        while (sharedAnchor == null && attempts < 50)
+        OVRSpatialAnchor primaryOVRAnchor = null;
+        OVRSpatialAnchor secondaryOVRAnchor = null;
+        
+        // Find AlignmentManager in scene (or create one)
+        alignmentManager = FindObjectOfType<AlignmentManager>();
+        if (alignmentManager == null)
+        {
+            var alignObj = new GameObject("AlignmentManager");
+            alignmentManager = alignObj.AddComponent<AlignmentManager>();
+            Debug.Log("[TableTennisManager] Created AlignmentManager for scene transition alignment");
+        }
+        
+        // Try getting explicitly from AnchorGUIManager first (most reliable)
+        var anchorGUI = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
+        if (anchorGUI != null)
+        {
+            var localized = anchorGUI.GetLocalizedAnchor();
+            if (localized != null)
+            {
+                sharedAnchor = localized.transform;
+                primaryOVRAnchor = localized;
+                Debug.Log($"[TableTennisManager] Found localized anchor from GUI: {localized.Uuid}");
+            }
+        }
+
+        // Search for all preserved anchors
+        while ((sharedAnchor == null || secondaryAnchor == null) && attempts < 50)
         {
             // Look for any OVRSpatialAnchor that was preserved from the previous scene
             var anchors = FindObjectsOfType<OVRSpatialAnchor>(true); // Include inactive
+            
             foreach (var anchor in anchors)
             {
-                // Check if anchor is localized and valid
                 if (anchor != null && anchor.Localized)
                 {
-                    sharedAnchor = anchor.transform;
-                    Debug.Log($"[TableTennisManager] Found localized anchor: {anchor.gameObject.name}, UUID: {anchor.Uuid}");
-                    
-                    // Don't re-align here - alignment was already done in the first scene
-                    // Re-aligning can cause the scene to flip/rotate incorrectly
-                    break;
-                }
-                
-                // Fallback: check by name for anchors that might not be fully localized yet
-                if (anchor.gameObject.name.Contains("Shared") || 
-                    anchor.gameObject.name.Contains("Anchor"))
-                {
-                    sharedAnchor = anchor.transform;
-                    Debug.Log($"[TableTennisManager] Found anchor by name: {anchor.gameObject.name}");
-                    break;
+                    if (sharedAnchor == null)
+                    {
+                        sharedAnchor = anchor.transform;
+                        primaryOVRAnchor = anchor;
+                        Debug.Log($"[TableTennisManager] Found PRIMARY anchor: {anchor.gameObject.name}, UUID: {anchor.Uuid}");
+                    }
+                    else if (anchor.transform != sharedAnchor && secondaryAnchor == null)
+                    {
+                        secondaryAnchor = anchor.transform;
+                        secondaryOVRAnchor = anchor;
+                        Debug.Log($"[TableTennisManager] Found SECONDARY anchor: {anchor.gameObject.name}, UUID: {anchor.Uuid}");
+                    }
                 }
             }
             
@@ -395,6 +424,26 @@ public class TableTennisManager : NetworkBehaviour
                 sharedAnchor = tableTransform;
                 Debug.Log("[TableTennisManager] Using table as fallback anchor reference");
             }
+        }
+        else
+        {
+            // CRITICAL: Re-align the camera rig to the preserved anchors!
+            // Without this, each headset's OVRCameraRig starts at default (0,0,0) and objects appear misaligned.
+            Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors after scene transition...");
+            
+            if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
+            {
+                alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
+                Debug.Log("[TableTennisManager] Applied 2-point alignment");
+            }
+            else if (primaryOVRAnchor != null)
+            {
+                alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
+                Debug.Log("[TableTennisManager] Applied single-point alignment");
+            }
+            
+            // Wait for alignment to complete before placing table
+            yield return new WaitForSeconds(1.0f);
         }
     }
     

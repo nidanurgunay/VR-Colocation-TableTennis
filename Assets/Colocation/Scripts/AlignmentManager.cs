@@ -14,7 +14,8 @@ public class AlignmentManager : MonoBehaviour
     [SerializeField] private float smoothSpeed = 2.0f; // How fast to interpolate
     
     private Transform _cameraRigTransform;
-    private OVRSpatialAnchor _currentAnchor;
+    private OVRSpatialAnchor _currentAnchor; // Primary
+    private OVRSpatialAnchor _secondaryAnchor; // Secondary (for 2-point alignment)
     private Coroutine _periodicAlignmentCoroutine;
     private bool _isAligned = false;
 
@@ -44,7 +45,23 @@ public class AlignmentManager : MonoBehaviour
         Debug.Log($"Colocation: Starting alignment to anchor {anchor.Uuid}. Periodic: {enablePeriodic}");
         
         _currentAnchor = anchor;
+        _secondaryAnchor = null; // Clear secondary
         StartCoroutine(AlignmentCoroutine(anchor, enablePeriodic));
+    }
+
+    public void AlignUserToTwoAnchors(OVRSpatialAnchor primaryAnchor, OVRSpatialAnchor secondaryAnchor)
+    {
+        if (!primaryAnchor || !primaryAnchor.Localized || !secondaryAnchor || !secondaryAnchor.Localized)
+        {
+            Debug.LogError("Colocation: Invalid or unlocalized anchors for 2-point alignment.");
+            return;
+        }
+
+        Debug.Log($"Colocation: Starting 2-point alignment. Primary: {primaryAnchor.Uuid}, Secondary: {secondaryAnchor.Uuid}");
+        
+        _currentAnchor = primaryAnchor; 
+        _secondaryAnchor = secondaryAnchor;
+        StartCoroutine(TwoPointAlignmentCoroutine(primaryAnchor, secondaryAnchor));
     }
     
     /// <summary>
@@ -59,6 +76,7 @@ public class AlignmentManager : MonoBehaviour
         }
         _isAligned = false;
         _currentAnchor = null;
+        _secondaryAnchor = null;
         Debug.Log("Colocation: Periodic alignment stopped.");
     }
     
@@ -78,7 +96,10 @@ public class AlignmentManager : MonoBehaviour
 
             yield return null;
 
-            _cameraRigTransform.position = anchorTransform.InverseTransformPoint(Vector3.zero);
+            // Align X/Z position and Y rotation only
+            // Y position is kept at 0 to trust Guardian floor calibration
+            Vector3 anchorPos = anchorTransform.InverseTransformPoint(Vector3.zero);
+            _cameraRigTransform.position = new Vector3(anchorPos.x, 0, anchorPos.z);
             _cameraRigTransform.eulerAngles = new Vector3(0, -anchorTransform.eulerAngles.y, 0);
 
             Debug.Log($"Colocation: Alignment iteration {alignmentIterations - alignmentCount + 1}/{alignmentIterations} - Position: {_cameraRigTransform.position}, Rotation: {_cameraRigTransform.eulerAngles}");
@@ -99,6 +120,57 @@ public class AlignmentManager : MonoBehaviour
             _periodicAlignmentCoroutine = StartCoroutine(PeriodicAlignmentCoroutine());
         }
     }
+
+    private IEnumerator TwoPointAlignmentCoroutine(OVRSpatialAnchor primary, OVRSpatialAnchor secondary)
+    {
+        var primaryTransform = primary.transform;
+        var secondaryTransform = secondary.transform;
+
+        Debug.Log($"Colocation: Waiting {stabilizationDelay}s for anchors to stabilize...");
+        yield return new WaitForSeconds(stabilizationDelay);
+
+        for (var alignmentCount = alignmentIterations; alignmentCount > 0; alignmentCount--)
+        {
+            // 1. Reset Rig to Local Identity to measure raw offsets
+            _cameraRigTransform.position = Vector3.zero;
+            _cameraRigTransform.eulerAngles = Vector3.zero;
+            yield return null; // Wait for physics/transform update? Actually standard Unity update is immediate but OVR might need frame.
+            // Safe to force update if needed, but yield is safer.
+
+            // 2. Calculate Correction Rotation
+            Vector3 realVector = secondaryTransform.position - primaryTransform.position;
+            realVector.y = 0; 
+            
+            if (realVector.sqrMagnitude < 0.001f)
+            {
+                Debug.LogWarning("Colocation: Anchors too close! Fallback.");
+                _cameraRigTransform.position = primaryTransform.InverseTransformPoint(Vector3.zero);
+                _cameraRigTransform.eulerAngles = new Vector3(0, -primaryTransform.eulerAngles.y, 0);
+            }
+            else
+            {
+                // We want Real Vector to align with Virtual Forward (+Z)
+                float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
+                Vector3 targetRot = new Vector3(0, -realHeading, 0);
+
+                // Apply Rotation
+                _cameraRigTransform.eulerAngles = targetRot;
+                
+                 // 3. Calculate Correction Position (After Rotation)
+                 // Keep Y at 0 to trust Guardian floor calibration
+                 Vector3 targetPos = -primaryTransform.position;
+                 targetPos.y = 0; // Trust Guardian floor
+                 _cameraRigTransform.position = targetPos;
+            }
+            
+            Debug.Log($"Colocation: 2-Point Iteration {alignmentIterations - alignmentCount + 1}");
+            yield return new WaitForEndOfFrame();
+        }
+
+        Debug.Log("Colocation: 2-Point alignment complete.");
+        _isAligned = true;
+        // Periodic alignment not fully implemented for 2-points yet in this snippet
+    }
     
     private IEnumerator PeriodicAlignmentCoroutine()
     {
@@ -115,8 +187,43 @@ public class AlignmentManager : MonoBehaviour
             }
             
             // Calculate target position/rotation
-            Vector3 targetPosition = _currentAnchor.transform.InverseTransformPoint(Vector3.zero);
-            Vector3 targetRotation = new Vector3(0, -_currentAnchor.transform.eulerAngles.y, 0);
+            Vector3 targetPosition;
+            Vector3 targetRotation;
+            
+            if (_secondaryAnchor != null && _secondaryAnchor.Localized)
+            {
+               // 2-POINT LOGIC
+                Vector3 realVector = _secondaryAnchor.transform.position - _currentAnchor.transform.position;
+                realVector.y = 0; 
+                
+                float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
+                targetRotation = new Vector3(0, -realHeading, 0);
+                
+                // For position, we effectively want to apply the translation that brings _currentAnchor to 0,0,0
+                // BUT we must account for the pivot of rotation.
+                // Since this is SmoothRealign, we are calculating the DESTINATION Rig Pose.
+                // If Rig was at TargetRotation...
+                // Anchor would be at `RotatedPos`.
+                // We want to translate by `-RotatedPos`.
+                // RotatedPos = RefRig.TransformPoint(AnchorLocal).
+                // RefRig is (0,0,0) with rotation TargetRotation.
+                // AnchorLocal = Rig_Current.InverseTransformPoint(Anchor_Current).
+                // So:
+                // 1. Get Anchor Local Pos relative to current rig:
+                Vector3 anchorLocal = _cameraRigTransform.InverseTransformPoint(_currentAnchor.transform.position);
+                // 2. Rotate this local pos by Target Rotation:
+                Vector3 anchorRotatedVector = Quaternion.Euler(targetRotation) * anchorLocal;
+                // 3. Target Position is negative of that:
+                targetPosition = -anchorRotatedVector;
+                
+                // Note: This assumes Rig Origin is the pivot.
+            }
+            else
+            {
+                // SINGLE POINT LOGIC
+                targetPosition = _currentAnchor.transform.InverseTransformPoint(Vector3.zero);
+                targetRotation = new Vector3(0, -_currentAnchor.transform.eulerAngles.y, 0);
+            }
             
             if (smoothRealignment)
             {

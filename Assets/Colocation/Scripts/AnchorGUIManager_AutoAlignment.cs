@@ -15,7 +15,7 @@ using Fusion;
 /// Simplified Anchor GUI Manager - Auto Align and Spawn Cube with built-in session management
 /// Inherits from ColocationManager to reuse alignment logic.
 /// </summary>
-public class AnchorAutoGUIManager : ColocationManager
+public class AnchorGUIManager_AutoAlignment : ColocationManager
 {
     [Header("UI Buttons")]
     [SerializeField] private Button autoAlignButton;
@@ -61,6 +61,16 @@ public class AnchorAutoGUIManager : ColocationManager
     private enum SessionState { Idle, Advertising, Discovering, HostAligned, ClientAligned }
     private SessionState currentState = SessionState.Idle;
 
+    // Wizard State
+    private enum AlignmentStep { 
+        Start, 
+        PlaceAnchor1, 
+        PlaceAnchor2, 
+        ReadyToShare, 
+        Done 
+    }
+    private AlignmentStep currentStep = AlignmentStep.Start;
+
 #if FUSION2
     private NetworkRunner networkRunner;
     private NetworkObject spawnedCube; // Track the single spawned cube
@@ -104,7 +114,8 @@ public class AnchorAutoGUIManager : ColocationManager
         startGameButton?.onClick.AddListener(OnStartGameClicked);
 
         UpdateAllUI();
-        Log("Ready - Click Auto Align to start");
+        UpdateUIWizard(); // Init text
+        Log("Ready - Click Start Alignment (Host) to begin");
     }
 
 #if FUSION2
@@ -114,15 +125,64 @@ public class AnchorAutoGUIManager : ColocationManager
     }
     #endif
 
+    // ==================== AUTO ALIGN ====================
+
+    private bool _discoveryStarted = false;
+    private float _lastDiscoveryTime = 0f;
+    private const float DISCOVERY_RETRY_INTERVAL = 5f;
+
     private void Update()
     {
         UpdateStatusIndicator();
         UpdateButtonStates();
         
 #if FUSION2
-        if (networkRunner == null)
+        // Auto-detect role and update UI text for Client
+        if (networkRunner == null) networkRunner = FindObjectOfType<NetworkRunner>();
+        
+        if (networkRunner != null && networkRunner.IsRunning)
         {
-            networkRunner = FindObjectOfType<NetworkRunner>();
+            // Update role variable
+            bool localIsHost = networkRunner.IsServer || networkRunner.IsSharedModeMasterClient;
+            
+            // If we are a client and NOT aligned yet, handle discovery
+            if (!localIsHost && currentStep != AlignmentStep.Done)
+            {
+                // Auto-switch UI to show Client state
+                if (isHost) // If we previously thought we were host (default)
+                {
+                    isHost = false; 
+                    Log("Client Mode Detected");
+                    UpdateUIWizard();
+                }
+                
+                // Auto-start or retry discovery if not aligned
+                if (!IsAlignmentComplete())
+                {
+                    // Start discovery if not started, OR retry after interval if no anchors found
+                    if (!_discoveryStarted || (Time.time - _lastDiscoveryTime > DISCOVERY_RETRY_INTERVAL))
+                    {
+                        Log("Client: Starting/Retrying anchor discovery...");
+                        _discoveryStarted = true;
+                        _lastDiscoveryTime = Time.time;
+                        PrepareColocation();
+                    }
+                }
+            }
+            else if (localIsHost && !isHost)
+            {
+                isHost = true;
+                Log("Host Mode: Ready to create anchors");
+                UpdateUIWizard();
+            }
+        }
+        else if (networkRunner == null)
+        {
+            // Show "Connecting..." state
+            if (statusText != null && !statusText.text.Contains("Connect"))
+            {
+                statusText.text = "Connecting to network...";
+            }
         }
 #endif
     }
@@ -134,7 +194,6 @@ public class AnchorAutoGUIManager : ColocationManager
         if (cameraTransform == null)
         {
             Log("Camera not found!", true);
-            Debug.LogError("[AnchorGUI] Camera.main is null! Make sure OVRCameraRig has MainCamera tag.");
             return;
         }
 
@@ -143,33 +202,114 @@ public class AnchorAutoGUIManager : ColocationManager
         {
             Log("Network not ready! Starting session...");
             StartNetworkSession();
+             // Don't return, let user click again or handle async? 
+             // Ideally wait, but for now just return.
             return;
         }
 
-        // Determine if this is host or client
+        // Determine role
         isHost = networkRunner.IsServer || networkRunner.IsSharedModeMasterClient;
-        
-        Debug.Log($"[AnchorGUI] Auto Align clicked. Role: {(isHost ? "HOST" : "CLIENT")}, Existing anchors: {currentAnchors.Count}");
-        Debug.Log($"[AnchorGUI] Camera rig position: {cameraTransform.position}, rotation: {cameraTransform.eulerAngles}");
-        
-        // Update status indicator color based on role
-        if (statusIndicator != null)
+        if (statusIndicator != null) statusIndicator.color = isHost ? hostColor : clientColor;
+
+        if (!isHost)
         {
-            statusIndicator.color = isHost ? hostColor : clientColor;
+            Log("Client Mode: Waiting for host...");
+            PrepareColocation(); // Start discovery
+            return;
         }
-        
-        // Ensure clean state before starting colocation
-        if (currentAnchors.Count > 0)
+
+        // HOST WIZARD LOGIC
+        switch (currentStep)
         {
-            Debug.LogWarning($"[AnchorGUI] Warning: Starting alignment with {currentAnchors.Count} existing anchors. Consider resetting first.");
+            case AlignmentStep.Start:
+                // Start -> Place Anchor 1
+                Log("Step 1: Place Anchor 1 on the FLOOR (Origin)");
+                currentStep = AlignmentStep.PlaceAnchor1;
+                UpdateUIWizard();
+                break;
+
+            case AlignmentStep.PlaceAnchor1:
+                // Create Anchor 1 at Controller Position
+                autoAlignButton.interactable = false; // Prevent double click
+                var anchor1 = await CreateAnchor(GetControllerAnchorPosition(), Quaternion.identity);
+                autoAlignButton.interactable = true;
+                
+                if (anchor1 != null)
+                {
+                    Log("Anchor 1 Created! Now Step 2: Place Anchor 2 on FLOOR (Forward)");
+                    currentStep = AlignmentStep.PlaceAnchor2;
+                    UpdateUIWizard();
+                }
+                else
+                {
+                    Log("Failed to create Anchor 1. Try again.", true);
+                }
+                break;
+
+            case AlignmentStep.PlaceAnchor2:
+                // Create Anchor 2 at Controller Position
+                autoAlignButton.interactable = false;
+                var anchor2 = await CreateAnchor(GetControllerAnchorPosition(), Quaternion.identity);
+                autoAlignButton.interactable = true;
+                
+                if (anchor2 != null)
+                {
+                    Log("Anchor 2 Created! Ready to Share.");
+                    currentStep = AlignmentStep.ReadyToShare;
+                    UpdateUIWizard();
+                }
+                else
+                {
+                    Log("Failed to create Anchor 2. Try again.", true);
+                }
+                break;
+
+            case AlignmentStep.ReadyToShare:
+                // Share
+                Log("Sharing anchors and aligning...");
+                PrepareColocation(); // Triggers ShareAnchors()
+                currentStep = AlignmentStep.Done;
+                UpdateUIWizard();
+                break;
+                
+            case AlignmentStep.Done:
+                Log("Already aligned!");
+                break;
         }
-        
-        Log("Starting Colocation...");
-        PrepareColocation();
 #else
-        Log("Creating alignment anchor..");
-        await CreateAnchor(Vector3.zero, Quaternion.identity);
+        Log("Photon Fusion not enabled.");
 #endif
+    }
+
+    private void UpdateUIWizard()
+    {
+        if (autoAlignButton == null) return;
+        
+        var btnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+        if (btnText == null) return;
+
+        switch (currentStep)
+        {
+            case AlignmentStep.Start:
+                if (isHost) 
+                    btnText.text = "Start Alignment (Host)";
+                else 
+                    btnText.text = "Client: Waiting for Host...";
+                break;
+            case AlignmentStep.PlaceAnchor1:
+                btnText.text = "Place Anchor 1 (FLOOR)";
+                break;
+            case AlignmentStep.PlaceAnchor2:
+                btnText.text = "Place Anchor 2 (FLOOR)";
+                break;
+            case AlignmentStep.ReadyToShare:
+                btnText.text = "Share & Align";
+                break;
+            case AlignmentStep.Done:
+                btnText.text = "Aligned (Done)";
+                autoAlignButton.interactable = false;
+                break;
+        }
     }
 
     // ==================== STANDALONE ALIGN (NO NETWORK) ====================
@@ -233,57 +373,163 @@ public class AnchorAutoGUIManager : ColocationManager
                 return;
             }
 
+            Log($"Found {unboundAnchors.Count} shared anchors. Localizing...");
+
+            // Localize ALL found anchors
+            var localizedAnchors = new List<OVRSpatialAnchor>();
+
             foreach (var unboundAnchor in unboundAnchors)
             {
                 if (await unboundAnchor.LocalizeAsync())
                 {
-                    Log($"Client aligned! Anchor UUID: {unboundAnchor.Uuid}");
+                    Log($"Anchor localized: {unboundAnchor.Uuid}");
 
                     var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
                     unboundAnchor.BindTo(spatialAnchor);
 
-                    // Add visual to the anchor so client can see it too
+                    // Add visual
                     if (anchorMarkerPrefab != null)
                     {
-                        Debug.Log($"[AnchorGUI] Creating anchor visual with prefab: {anchorMarkerPrefab.name}");
                         GameObject visual = Instantiate(anchorMarkerPrefab, anchorGameObject.transform);
                         visual.name = "Visual";
                         visual.transform.localPosition = Vector3.zero;
                         visual.transform.localRotation = Quaternion.identity;
-                        
                         float validScale = Mathf.Max(anchorScale, 0.01f);
                         visual.transform.localScale = Vector3.one * validScale;
                         
-                        // Remove physics components from visual
+                         // Remove physics from visual
                         foreach (var col in visual.GetComponentsInChildren<Collider>())
                             Destroy(col);
                         foreach (var rb in visual.GetComponentsInChildren<Rigidbody>())
                             Destroy(rb);
-                            
-                        Debug.Log($"[AnchorGUI] Added visual to client anchor at position: {anchorGameObject.transform.position}");
-                    }
-                    else
-                    {
-                        Debug.LogWarning("[AnchorGUI] anchorMarkerPrefab is null! Client anchor will have no visual.");
                     }
 
-                    // Track this anchor locally for UI and reset
-                    currentAnchors.Add(spatialAnchor);
-                    
-                    _localizedAnchor = spatialAnchor; // Store for relative positioning
-                    alignmentManager.AlignUserToAnchor(spatialAnchor);
-                    
-                    UpdateAllUI();
-                    return;
+                    localizedAnchors.Add(spatialAnchor);
+                    currentAnchors.Add(spatialAnchor); // Track locally
                 }
-
-                Log($"Failed to localize anchor: {unboundAnchor.Uuid}", true);
+                else
+                {
+                    Log($"Failed to localize anchor: {unboundAnchor.Uuid}", true);
+                }
             }
+            
+            // Now Align based on what we found
+            if (localizedAnchors.Count >= 2)
+            {
+                Log("Aligning to TWO anchors...");
+                // Assume first is Primary, second is Secondary (Forward)
+                // Or sort by creation time? OVR doesn't give creation time easily. 
+                // We rely on List order. Usually consistent if created and shared in order.
+                
+                _localizedAnchor = localizedAnchors[0]; // Set primary as main
+                alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1]);
+            }
+            else if (localizedAnchors.Count == 1)
+            {
+                Log("Only 1 anchor localized. Using single point alignment.");
+                _localizedAnchor = localizedAnchors[0];
+                alignmentManager.AlignUserToAnchor(localizedAnchors[0]);
+            }
+            else
+            {
+                Log("No anchors localized!", true);
+            }
+            
+            UpdateAllUI();
         }
         catch (Exception e)
         {
             Log($"Error during anchor loading and alignment: {e.Message}", true);
+        }
+    }
+
+    // Override ShareAnchors to share the list we created
+    protected override async void ShareAnchors()
+    {
+        try
+        {
+            if (currentAnchors.Count == 0)
+            {
+                Log("No anchors to share! Did you create anchors first?", true);
+                return;
+            }
+            
+            // Check if we have a valid group UUID
+            if (_sharedAnchorGroupId == Guid.Empty)
+            {
+                Log("ERROR: Group UUID is empty! Advertisement may not have completed.", true);
+                Log("Attempting to start advertisement first...");
+                AdvertiseColocationSession();
+                return; // Will retry via callback chain
+            }
+            
+            Log($"Saving and sharing {currentAnchors.Count} anchors to Group: {_sharedAnchorGroupId}...");
+            
+            // Save all anchors
+            var anchorsToShare = new List<OVRSpatialAnchor>();
+            foreach (var anchor in currentAnchors)
+            {
+                 if (anchor != null && anchor.Localized)
+                 {
+                     Log($"Saving anchor {anchor.Uuid}...");
+                     var saveResult = await anchor.SaveAnchorAsync();
+                     if (!saveResult.Success)
+                     {
+                         Log($"Failed to save anchor {anchor.Uuid}: Status={saveResult.Status}", true);
+                     }
+                     else
+                     {
+                         Log($"Anchor {anchor.Uuid} saved successfully");
+                         anchorsToShare.Add(anchor);
+                     }
+                 }
+                 else
+                 {
+                     Log($"Skipping anchor: null={anchor == null}, localized={anchor?.Localized}", true);
+                 }
+            }
+            
+            if (anchorsToShare.Count == 0)
+            {
+                Log("No valid anchors to share after save attempt.", true);
+                return;
+            }
+
+            Log($"Sharing {anchorsToShare.Count} anchors to group {_sharedAnchorGroupId}...");
+            var shareResult = await OVRSpatialAnchor.ShareAsync(anchorsToShare, _sharedAnchorGroupId);
+
+            if (shareResult.Success)
+            {
+                Log($"Success! Shared {anchorsToShare.Count} anchors. Group UUID: {_sharedAnchorGroupId}");
+                currentStep = AlignmentStep.Done;
+                
+                // HOST ALIGNMENT
+                if (anchorsToShare.Count >= 2)
+                {
+                    // Host aligns to its own anchors
+                    Log("Host: Aligning to 2 anchors...");
+                    _localizedAnchor = anchorsToShare[0];
+                    alignmentManager.AlignUserToTwoAnchors(anchorsToShare[0], anchorsToShare[1]);
+                }
+                else
+                {
+                    Log("Host: Aligning to single anchor...");
+                    _localizedAnchor = anchorsToShare[0];
+                    alignmentManager.AlignUserToAnchor(anchorsToShare[0]);
+                }
+                
+                UpdateUIWizard();
+            }
+            else
+            {
+                Log($"Failed to share anchors. Status: {shareResult.Status}", true);
+                Log("Make sure both devices have sharing permissions enabled in Meta settings.", true);
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Error in ShareAnchors: {e.Message}", true);
         }
     }
 
@@ -477,12 +723,16 @@ public class AnchorAutoGUIManager : ColocationManager
 
         // Reset state
         currentState = SessionState.Idle;
+        currentStep = AlignmentStep.Start; // Reset wizard
         _sharedAnchorGroupId = Guid.Empty;
         _localizedAnchor = null;
         
+        if (autoAlignButton != null) autoAlignButton.interactable = true; // Re-enable
+        
         // Reset UI
         UpdateAllUI();
-        Log("Scene reset. Click Auto Align to start fresh alignment");
+        UpdateUIWizard();
+        Log("Scene reset. Click Start Alignment to start fresh");
     }
 
     // ==================== START GAME (TABLE TENNIS) ====================
@@ -839,13 +1089,14 @@ public class AnchorAutoGUIManager : ColocationManager
     {
         if (currentState == SessionState.HostAligned || currentState == SessionState.ClientAligned) return true;
 
-        if (currentAnchors == null || currentAnchors.Count == 0)
-            return false;
-
-        foreach (var anchor in currentAnchors)
+        // Bug fix: Don't return true just because one local anchor exists.
+        // Waiting for explicit state change to HostAligned/ClientAligned
+        // OR if locally aligned with 2 anchors (Standalone)
+        
+        if (currentAnchors != null && currentAnchors.Count >= 2 && currentAnchors[0].Localized && currentAnchors[1].Localized)
         {
-            if (anchor != null && anchor.Localized)
-                return true;
+             // Potential standalone alignment?
+             // But for wizard, we prefer explicit state.
         }
 
         return false;
