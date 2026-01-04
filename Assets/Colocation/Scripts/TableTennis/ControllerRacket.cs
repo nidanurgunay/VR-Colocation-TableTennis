@@ -40,21 +40,58 @@ public class ControllerRacket : MonoBehaviour
         Debug.Log($"[RACKET_DEBUG] ControllerRacket Start - Rotation: {racketRotation}, Offset: {racketOffset}, Scale: {racketScale}");
         FindControllers();
         
-        // Auto-find racket prefab if not assigned
-        if (racketPrefab == null)
-        {
-            FindRacketTemplate();
-        }
+        // Try to find racket prefab - if not found, will retry in Update
+        TryFindRacketTemplate();
         
         // Create rackets attached to controllers (hidden initially)
-        CreateControllerRackets();
+        if (racketPrefab != null)
+        {
+            CreateControllerRackets();
+            Debug.Log("[ControllerRacket] Initialized - press B/Y to show racket on controller");
+        }
+        else
+        {
+            Debug.LogWarning("[ControllerRacket] Racket not found yet - will retry...");
+        }
+    }
+    
+    private void TryFindRacketTemplate()
+    {
+        if (racketPrefab != null) return; // Already found
         
-        Debug.Log("[ControllerRacket] Initialized - press grip to show racket on controller");
+        // Method 1: Search by tag (active objects only)
+        var taggedRackets = GameObject.FindGameObjectsWithTag("Racket");
+        foreach (var r in taggedRackets)
+        {
+            // Skip our created copies
+            if (r.name.Contains("Controller") || r.name.Contains("Remote")) continue;
+            racketPrefab = r;
+            Debug.Log($"[ControllerRacket] Found racket by tag: {racketPrefab.name}");
+            return;
+        }
+        
+        // Method 2: Search ALL objects including inactive using Resources
+        var allObjects = Resources.FindObjectsOfTypeAll<Transform>();
+        foreach (var t in allObjects)
+        {
+            if (!t.gameObject.scene.isLoaded) continue; // Skip prefabs
+            
+            string nameLower = t.name.ToLower();
+            if (nameLower.Contains("controller") || nameLower.Contains("remote")) continue;
+            
+            if ((nameLower == "racket" || nameLower == "racket2" || nameLower.Contains("paddle") || nameLower.Contains("bat"))
+                && t.GetComponent<MeshFilter>() != null)
+            {
+                racketPrefab = t.gameObject;
+                Debug.Log($"[ControllerRacket] Found racket by Resources search: {racketPrefab.name}");
+                return;
+            }
+        }
     }
     
     private void FindRacketTemplate()
     {
-        // Try to find by tag
+        // Try to find by tag (only finds active objects)
         var taggedRackets = GameObject.FindGameObjectsWithTag("Racket");
         if (taggedRackets.Length > 0)
         {
@@ -63,16 +100,17 @@ public class ControllerRacket : MonoBehaviour
             return;
         }
         
-        // Try to find by name under pingpong parent
-        var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
+        // Try to find by name under pingpong parent (including inactive!)
+        var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("PingPongTable");
         if (pingPongParent != null)
         {
-            foreach (Transform child in pingPongParent.GetComponentsInChildren<Transform>())
+            foreach (Transform child in pingPongParent.GetComponentsInChildren<Transform>(true)) // true = include inactive
             {
-                if (child.name.ToLower().Contains("racket") || child.name.ToLower().Contains("paddle"))
+                string nameLower = child.name.ToLower();
+                if (nameLower.Contains("racket") || nameLower.Contains("paddle") || nameLower.Contains("bat"))
                 {
                     racketPrefab = child.gameObject;
-                    Debug.Log($"[ControllerRacket] Found racket by name: {racketPrefab.name}");
+                    Debug.Log($"[ControllerRacket] Found racket by name (may be inactive): {racketPrefab.name}");
                     return;
                 }
             }
@@ -232,6 +270,18 @@ public class ControllerRacket : MonoBehaviour
     
     private void Update()
     {
+        // Retry finding racket if not found in Start
+        if (racketPrefab == null)
+        {
+            TryFindRacketTemplate();
+            if (racketPrefab != null)
+            {
+                CreateControllerRackets();
+                Debug.Log("[ControllerRacket] Racket found on retry - initialized!");
+            }
+            return; // Don't process input until we have rackets
+        }
+        
         if (leftController == null || rightController == null)
         {
             FindControllers();
@@ -246,7 +296,6 @@ public class ControllerRacket : MonoBehaviour
             if (leftRacket != null)
             {
                 leftRacket.SetActive(leftActive);
-                // Hide/show controller visual
                 SetControllerVisualActive(leftControllerVisual, !leftActive);
                 Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}");
             }
@@ -261,7 +310,6 @@ public class ControllerRacket : MonoBehaviour
             if (rightRacket != null)
             {
                 rightRacket.SetActive(rightActive);
-                // Hide/show controller visual
                 SetControllerVisualActive(rightControllerVisual, !rightActive);
                 Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}");
             }

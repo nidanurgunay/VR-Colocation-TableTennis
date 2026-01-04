@@ -7,13 +7,17 @@ using UnityEngine;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 
-public class ColocationManager : NetworkBehaviour
+public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
 {
     [SerializeField] protected AlignmentManager alignmentManager;
     [SerializeField] protected bool autoStartColocation = false;
+    [SerializeField] private NetworkPrefabRef networkedPlayerPrefab; // Avatar for players
 
     protected Guid _sharedAnchorGroupId;
     protected OVRSpatialAnchor _localizedAnchor; // The anchor used for alignment (host-created or client-localized)
+    
+    // Track spawned avatars
+    private Dictionary<PlayerRef, NetworkObject> _spawnedPlayerAvatars = new Dictionary<PlayerRef, NetworkObject>();
 
     public override void Spawned()
     {
@@ -49,7 +53,7 @@ public class ColocationManager : NetworkBehaviour
             {
                 _sharedAnchorGroupId = startAdvertisementResult.Value;
                 Log($"Colocation: Advertisement started successfully. UUID: {_sharedAnchorGroupId}");
-                CreateAndShareAlignmentAnchor();
+                ShareAnchors(); // Changed from CreateAndShareAlignmentAnchor
             }
             else
             {
@@ -59,6 +63,41 @@ public class ColocationManager : NetworkBehaviour
         catch (Exception e)
         {
             Log($"Colocation: Error during advertisement: {e.Message}", true);
+        }
+    }
+
+    // Renamed and refactored to share EXISTING anchors if available, or create one if none
+    protected virtual async void ShareAnchors()
+    {
+        try
+        {
+             List<OVRSpatialAnchor> anchorsToShare = new List<OVRSpatialAnchor>();
+
+             // If this class has access to currentAnchors (it doesn't in base class), we need a virtual accessor or pass it in.
+             // But Wait! ColocationManager doesn't have 'currentAnchors' list. AnchorGUIManager does.
+             // We need to override this method in AnchorGUIManager OR make it virtual and robust.
+             
+             // Base implementation: Create one and share it (legacy behavior)
+             Log("Colocation: Creating default alignment anchor...");
+             var anchor = await CreateAnchor(Vector3.zero, Quaternion.identity);
+             if (anchor != null && anchor.Localized)
+             {
+                 var saveResult = await anchor.SaveAnchorAsync();
+                 if (saveResult.Success)
+                 {
+                     var shareResult = await OVRSpatialAnchor.ShareAsync(new List<OVRSpatialAnchor> { anchor }, _sharedAnchorGroupId);
+                     if (shareResult.Success)
+                     {
+                         Log($"Colocation: Host aligned! Anchor shared. Group UUID: {_sharedAnchorGroupId}");
+                         _localizedAnchor = anchor;
+                         if (alignmentManager != null) alignmentManager.AlignUserToAnchor(anchor);
+                     }
+                 }
+             }
+        }
+        catch (Exception e)
+        {
+             Log($"Error share: {e.Message}", true);
         }
     }
 
@@ -98,53 +137,8 @@ public class ColocationManager : NetworkBehaviour
 
     protected virtual async void CreateAndShareAlignmentAnchor()
     {
-        try
-        {
-            Log("Colocation: Creating alignment anchor...");
-            var anchor = await CreateAnchor(Vector3.zero, Quaternion.identity);
-
-            if (anchor == null)
-            {
-                Log("Colocation: Failed to create alignment anchor.", true);
-                return;
-            }
-
-            if (!anchor.Localized)
-            {
-                Log("Colocation: Anchor is not localized. Cannot proceed with sharing.", true);
-                return;
-            }
-
-            var saveResult = await anchor.SaveAnchorAsync();
-            if (!saveResult.Success)
-            {
-                Log($"Colocation: Failed to save alignment anchor. Error: {saveResult}", true);
-                return;
-            }
-
-            Log($"Colocation: Alignment anchor saved successfully. UUID: {anchor.Uuid}");
-            
-            var shareResult = await OVRSpatialAnchor.ShareAsync(new List<OVRSpatialAnchor> { anchor }, _sharedAnchorGroupId);
-
-            if (!shareResult.Success)
-            {
-                Log($"Colocation: Failed to share alignment anchor. Error: {shareResult}", true);
-                return;
-            }
-
-            Log($"Colocation: Host aligned! Anchor shared. Group UUID: {_sharedAnchorGroupId}");
-            
-            // Host also needs to align to the anchor
-            _localizedAnchor = anchor;
-            if (alignmentManager != null)
-            {
-                alignmentManager.AlignUserToAnchor(anchor);
-            }
-        }
-        catch (Exception e)
-        {
-            Log($"Colocation: Error during anchor creation and sharing: {e.Message}", true);
-        }
+       // Legacy method, kept for compatibility if called directly, but redirected to ShareAnchors
+       ShareAnchors();
     }
 
     protected virtual async Task<OVRSpatialAnchor> CreateAnchor(Vector3 position, Quaternion rotation)
@@ -161,6 +155,7 @@ public class ColocationManager : NetworkBehaviour
             };
 
             var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
+            
             while (!spatialAnchor.Created)
             {
                 await Task.Yield();
@@ -237,6 +232,35 @@ public class ColocationManager : NetworkBehaviour
         catch (Exception e)
         {
             Log($"Colocation: Error during session reset: {e.Message}", true);
+        }
+    }
+
+    public void PlayerJoined(PlayerRef player)
+    {
+        if (Runner.IsServer && networkedPlayerPrefab != default)
+        {
+            Log($"[ColocationManager] Player {player} joined. Spawning avatar...");
+            // Host spawns the avatar object, assigning Input Authority to the specific player
+            NetworkObject playerObj = Runner.Spawn(networkedPlayerPrefab, Vector3.zero, Quaternion.identity, player);
+            
+            if (playerObj != null)
+            {
+                _spawnedPlayerAvatars[player] = playerObj;
+                Log($"[ColocationManager] Avatar spawned for Player {player}");
+            }
+        }
+    }
+
+    public void PlayerLeft(PlayerRef player)
+    {
+        if (Runner.IsServer)
+        {
+            Log($"[ColocationManager] Player {player} left. Despawning avatar.");
+            if (_spawnedPlayerAvatars.TryGetValue(player, out var playerObj))
+            {
+                Runner.Despawn(playerObj);
+                _spawnedPlayerAvatars.Remove(player);
+            }
         }
     }
 
