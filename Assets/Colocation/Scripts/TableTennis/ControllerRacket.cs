@@ -11,10 +11,10 @@ public class ControllerRacket : MonoBehaviour
     [SerializeField] private GameObject racketPrefab; // Racket model to show on controller
     
     [Header("Settings")]
-    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller
-    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Four; // Y button for left controller
+    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller (Button.Two = B when using RTouch)
+    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller (Button.Two = Y when using LTouch)
     [SerializeField] private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f); // Position offset from controller
-    [SerializeField] private Vector3 racketRotation = new Vector3(0, 270, 40); // Rotation to align handle with controller grip
+    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 240f, 43f); // Rotation to align handle with controller grip
     [SerializeField] private float racketScale = 10f; // 10x scale for visibility
     
     // Controller references
