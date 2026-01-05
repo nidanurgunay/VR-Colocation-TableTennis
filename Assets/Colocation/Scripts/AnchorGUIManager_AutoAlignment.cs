@@ -70,6 +70,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         Done 
     }
     private AlignmentStep currentStep = AlignmentStep.Start;
+    private bool anchorPlacementMode = false; // True when user can place anchors with A/X buttons
+    private Transform firstAnchorTransform; // Reference to first anchor for distance calculation
+    private GameObject distanceDisplayObj; // Floating text showing distance
+    private TextMeshPro distanceText; // 3D text component
 
 #if FUSION2
     private NetworkRunner networkRunner;
@@ -135,6 +139,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     {
         UpdateStatusIndicator();
         UpdateButtonStates();
+        
+        // Check for anchor placement via controller buttons
+        if (anchorPlacementMode && isHost)
+        {
+            CheckControllerAnchorPlacement();
+            UpdateDistanceDisplay(); // Show distance from first anchor
+        }
+        else if (distanceDisplayObj != null)
+        {
+            // Hide distance display when not in placement mode
+            distanceDisplayObj.SetActive(false);
+        }
         
 #if FUSION2
         // Auto-detect role and update UI text for Client
@@ -222,45 +238,32 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         switch (currentStep)
         {
             case AlignmentStep.Start:
-                // Start -> Place Anchor 1
-                Log("Step 1: Place Anchor 1 on the FLOOR (Origin)");
+                // Start -> Enter placement mode
+                Log("Press A/X at table edges to place anchors");
+                if (statusText != null)
+                {
+                    statusText.text = "Point controller at TABLE EDGE and press A or X";
+                }
                 currentStep = AlignmentStep.PlaceAnchor1;
+                anchorPlacementMode = true; // Enable controller button placement
                 UpdateUIWizard();
                 break;
 
             case AlignmentStep.PlaceAnchor1:
-                // Create Anchor 1 at Controller Position
-                autoAlignButton.interactable = false; // Prevent double click
-                var anchor1 = await CreateAnchor(GetControllerAnchorPosition(), Quaternion.identity);
-                autoAlignButton.interactable = true;
-                
-                if (anchor1 != null)
+                // Already in placement mode, remind user
+                Log("Press A/X at first table edge");
+                if (statusText != null)
                 {
-                    Log("Anchor 1 Created! Now Step 2: Place Anchor 2 on FLOOR (Forward)");
-                    currentStep = AlignmentStep.PlaceAnchor2;
-                    UpdateUIWizard();
-                }
-                else
-                {
-                    Log("Failed to create Anchor 1. Try again.", true);
+                    statusText.text = "Point at TABLE EDGE #1 → Press A or X";
                 }
                 break;
 
             case AlignmentStep.PlaceAnchor2:
-                // Create Anchor 2 at Controller Position
-                autoAlignButton.interactable = false;
-                var anchor2 = await CreateAnchor(GetControllerAnchorPosition(), Quaternion.identity);
-                autoAlignButton.interactable = true;
-                
-                if (anchor2 != null)
+                // Already in placement mode, remind user
+                Log("Press A/X at second table edge");
+                if (statusText != null)
                 {
-                    Log("Anchor 2 Created! Ready to Share.");
-                    currentStep = AlignmentStep.ReadyToShare;
-                    UpdateUIWizard();
-                }
-                else
-                {
-                    Log("Failed to create Anchor 2. Try again.", true);
+                    statusText.text = "Point at TABLE EDGE #2 (opposite side) → Press A or X";
                 }
                 break;
 
@@ -269,6 +272,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 Log("Sharing anchors and aligning...");
                 PrepareColocation(); // Triggers ShareAnchors()
                 currentStep = AlignmentStep.Done;
+                anchorPlacementMode = false;
                 UpdateUIWizard();
                 break;
                 
@@ -292,15 +296,15 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             case AlignmentStep.Start:
                 if (isHost) 
-                    btnText.text = "Start Alignment (Host)";
+                    btnText.text = "Place Anchors";
                 else 
                     btnText.text = "Client: Waiting for Host...";
                 break;
             case AlignmentStep.PlaceAnchor1:
-                btnText.text = "Place Anchor 1 (FLOOR)";
+                btnText.text = "Press A/X: Anchor 1";
                 break;
             case AlignmentStep.PlaceAnchor2:
-                btnText.text = "Place Anchor 2 (FLOOR)";
+                btnText.text = "Press A/X: Anchor 2";
                 break;
             case AlignmentStep.ReadyToShare:
                 btnText.text = "Share & Align";
@@ -863,6 +867,205 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         }
     }
 #endif
+
+    /// <summary>
+    /// Check if A or X button is pressed to place anchor at controller position
+    /// </summary>
+    private void CheckControllerAnchorPlacement()
+    {
+        // A button on right controller (Button.One on RTouch)
+        // X button on left controller (Button.Three on LTouch)
+        bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
+        bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch);
+        
+        if (aPressed || xPressed)
+        {
+            // Get the controller that was pressed
+            var cameraRig = FindObjectOfType<OVRCameraRig>();
+            Vector3 anchorPosition = Vector3.zero;
+            Quaternion anchorRotation = Quaternion.identity;
+            
+            if (cameraRig != null)
+            {
+                Transform controller = aPressed ? cameraRig.rightControllerAnchor : cameraRig.leftControllerAnchor;
+                if (controller != null)
+                {
+                    // Place anchor at controller position, flat rotation (only Y axis)
+                    anchorPosition = controller.position;
+                    anchorRotation = Quaternion.Euler(0, controller.eulerAngles.y, 0);
+                }
+            }
+            
+            if (anchorPosition != Vector3.zero)
+            {
+                PlaceAnchorAtPosition(anchorPosition, anchorRotation);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Place anchor at specified position (called from controller button press)
+    /// </summary>
+    private async void PlaceAnchorAtPosition(Vector3 position, Quaternion rotation)
+    {
+        if (currentStep == AlignmentStep.PlaceAnchor1)
+        {
+            Log("Placing Anchor 1...");
+            var anchor1 = await CreateAnchor(position, rotation);
+            
+            if (anchor1 != null)
+            {
+                // Store reference to first anchor for distance calculation
+                firstAnchorTransform = anchor1.transform;
+                
+                Log("✓ Anchor 1 placed at table edge!");
+                if (statusText != null)
+                {
+                    statusText.text = "✓ Anchor 1 Done! Now point at OPPOSITE table edge → Press A/X";
+                }
+                currentStep = AlignmentStep.PlaceAnchor2;
+                UpdateUIWizard();
+                
+                // Create distance display for second anchor placement
+                CreateDistanceDisplay();
+            }
+            else
+            {
+                Log("Failed to create Anchor 1. Try again.", true);
+                if (statusText != null)
+                {
+                    statusText.text = "Failed! Try again - Press A/X at table edge";
+                }
+            }
+        }
+        else if (currentStep == AlignmentStep.PlaceAnchor2)
+        {
+            Log("Placing Anchor 2...");
+            var anchor2 = await CreateAnchor(position, rotation);
+            
+            if (anchor2 != null)
+            {
+                Log("✓ Anchor 2 placed! Both anchors ready.");
+                if (statusText != null)
+                {
+                    statusText.text = "✓ Both anchors placed! Click 'Share & Align' to continue";
+                }
+                currentStep = AlignmentStep.ReadyToShare;
+                anchorPlacementMode = false; // Exit placement mode
+                UpdateUIWizard();
+                
+                // Hide and destroy distance display
+                if (distanceDisplayObj != null)
+                {
+                    Destroy(distanceDisplayObj);
+                    distanceDisplayObj = null;
+                }
+            }
+            else
+            {
+                Log("Failed to create Anchor 2. Try again.", true);
+                if (statusText != null)
+                {
+                    statusText.text = "Failed! Try again - Press A/X at table edge";
+                }
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Create floating 3D text to show distance from first anchor
+    /// </summary>
+    private void CreateDistanceDisplay()
+    {
+        if (distanceDisplayObj != null) return;
+        
+        distanceDisplayObj = new GameObject("DistanceDisplay");
+        
+        // Add TextMeshPro 3D text
+        distanceText = distanceDisplayObj.AddComponent<TextMeshPro>();
+        distanceText.text = "0.00m";
+        distanceText.fontSize = 0.5f;
+        distanceText.alignment = TextAlignmentOptions.Center;
+        distanceText.color = Color.yellow;
+        
+        // Add background for better visibility
+        var rectTransform = distanceDisplayObj.GetComponent<RectTransform>();
+        if (rectTransform != null)
+        {
+            rectTransform.sizeDelta = new Vector2(0.3f, 0.1f);
+        }
+        
+        Debug.Log("[AnchorGUI] Distance display created");
+    }
+    
+    /// <summary>
+    /// Update distance display position and value
+    /// </summary>
+    private void UpdateDistanceDisplay()
+    {
+        if (currentStep != AlignmentStep.PlaceAnchor2 || firstAnchorTransform == null)
+        {
+            if (distanceDisplayObj != null) distanceDisplayObj.SetActive(false);
+            return;
+        }
+        
+        if (distanceDisplayObj == null) CreateDistanceDisplay();
+        distanceDisplayObj.SetActive(true);
+        
+        // Get active controller position
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig == null) return;
+        
+        // Check which controller is active (prefer right, fallback to left)
+        Transform activeController = null;
+        if (OVRInput.IsControllerConnected(OVRInput.Controller.RTouch))
+        {
+            activeController = cameraRig.rightControllerAnchor;
+        }
+        else if (OVRInput.IsControllerConnected(OVRInput.Controller.LTouch))
+        {
+            activeController = cameraRig.leftControllerAnchor;
+        }
+        
+        if (activeController == null) return;
+        
+        Vector3 controllerPos = activeController.position;
+        
+        // Calculate distance from first anchor
+        float distance = Vector3.Distance(firstAnchorTransform.position, controllerPos);
+        float heightDiff = controllerPos.y - firstAnchorTransform.position.y;
+        
+        // Position text above controller
+        distanceDisplayObj.transform.position = controllerPos + Vector3.up * 0.15f;
+        
+        // Face the camera
+        if (cameraTransform != null)
+        {
+            distanceDisplayObj.transform.LookAt(cameraTransform);
+            distanceDisplayObj.transform.Rotate(0, 180, 0); // Flip to face user
+        }
+        
+        // Update text with distance and height
+        if (distanceText != null)
+        {
+            string heightStr = heightDiff >= 0 ? $"+{heightDiff:F2}m" : $"{heightDiff:F2}m";
+            distanceText.text = $"<size=120%>{distance:F2}m</size>\n<size=80%>Height: {heightStr}</size>";
+            
+            // Color based on typical table tennis table length (2.74m)
+            if (distance >= 2.5f && distance <= 3.0f)
+            {
+                distanceText.color = Color.green; // Good table length
+            }
+            else if (distance >= 2.0f && distance <= 3.5f)
+            {
+                distanceText.color = Color.yellow; // Acceptable
+            }
+            else
+            {
+                distanceText.color = Color.red; // Too short or too long
+            }
+        }
+    }
 
     private Vector3 GetControllerAnchorPosition()
     {

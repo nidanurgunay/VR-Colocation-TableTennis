@@ -15,8 +15,13 @@ public class NetworkedBall : NetworkBehaviour
     [SerializeField] private float tableHeight = 0.76f; // Standard table tennis height
     
     [Header("Serve Settings")]
-    [SerializeField] private Vector3 servePosition = new Vector3(0, 1.2f, -1f); // Relative to anchor
+    [SerializeField] private float serveHeight = 0.4f; // Height above table for serve
+    [SerializeField] private float serveDistanceFromCenter = 0.8f; // How far from table center (toward server)
     [SerializeField] private float serveForce = 3f;
+    
+    [Header("Table Reference")]
+    [SerializeField] private Transform tableObject;
+    [SerializeField] private string tableTag = "Table";
     
     [Header("Sync Settings")]
     [SerializeField] private float syncRate = 30f; // Hz
@@ -37,6 +42,8 @@ public class NetworkedBall : NetworkBehaviour
     private float lastHitTime;
     private Vector3 localVelocity;
     private bool isInitialized;
+    private TableTennisGameManager gameManager;
+    private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
     
     // For interpolation on clients
     private Vector3 targetPosition;
@@ -115,6 +122,9 @@ public class NetworkedBall : NetworkBehaviour
         {
             isInitialized = true;
             
+            // Find game manager
+            gameManager = FindObjectOfType<TableTennisGameManager>();
+            
             if (Object.HasStateAuthority)
             {
                 ResetToServePosition();
@@ -169,6 +179,12 @@ public class NetworkedBall : NetworkBehaviour
                 localVelocity.y = -localVelocity.y * bounciness;
                 rb.velocity = localVelocity;
                 transform.position = new Vector3(transform.position.x, tableHeight + 0.02f, transform.position.z);
+                
+                // Notify game manager of bounce
+                if (gameManager != null)
+                {
+                    gameManager.OnBallBounce(transform.position);
+                }
             }
         }
     }
@@ -219,21 +235,60 @@ public class NetworkedBall : NetworkBehaviour
         if (transform.position.y < resetBelowY)
         {
             Debug.Log("[NetworkedBall] Ball fell below threshold, resetting");
+            
+            // Notify game manager ball went out
+            if (gameManager != null && IsInPlay)
+            {
+                gameManager.OnBallOut();
+            }
+            
             ResetToServePosition();
         }
         
         if (Time.time - lastHitTime > resetAfterSeconds && IsInPlay)
         {
             Debug.Log("[NetworkedBall] Ball inactive too long, resetting");
+            
+            // Notify game manager ball went out
+            if (gameManager != null)
+            {
+                gameManager.OnBallOut();
+            }
+            
             ResetToServePosition();
         }
     }
     
-    private void ResetToServePosition()
+    private void ResetToServePosition(int serverPlayerNumber = 1)
     {
-        if (sharedAnchor == null) return;
+        // Find table if not assigned
+        if (tableObject == null)
+        {
+            FindTableObject();
+        }
         
-        Vector3 worldServePos = sharedAnchor.TransformPoint(servePosition);
+        Vector3 worldServePos;
+        
+        if (tableObject != null)
+        {
+            // Position relative to table
+            // Player 1 is on -Z side, Player 2 is on +Z side
+            float zOffset = serverPlayerNumber == 1 ? -serveDistanceFromCenter : serveDistanceFromCenter;
+            Vector3 localServePos = new Vector3(0, serveHeight, zOffset);
+            worldServePos = tableObject.TransformPoint(localServePos);
+        }
+        else if (sharedAnchor != null)
+        {
+            // Fallback to anchor-relative
+            float zOffset = serverPlayerNumber == 1 ? -serveDistanceFromCenter : serveDistanceFromCenter;
+            Vector3 servePosition = new Vector3(0, tableHeight + serveHeight, zOffset);
+            worldServePos = sharedAnchor.TransformPoint(servePosition);
+        }
+        else
+        {
+            worldServePos = new Vector3(0, 1.2f, serverPlayerNumber == 1 ? -1f : 1f);
+        }
+        
         transform.position = worldServePos;
         rb.velocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
@@ -242,16 +297,46 @@ public class NetworkedBall : NetworkBehaviour
         IsInPlay = false;
         lastHitTime = Time.time;
         
-        AnchorRelativePosition = servePosition;
+        // Update anchor-relative position for sync
+        if (sharedAnchor != null)
+        {
+            AnchorRelativePosition = sharedAnchor.InverseTransformPoint(worldServePos);
+        }
         AnchorRelativeVelocity = Vector3.zero;
         
-        Debug.Log($"[NetworkedBall] Reset to serve position: {worldServePos}");
+        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos}");
+    }
+    
+    private void FindTableObject()
+    {
+        if (tableObject != null) return;
+        
+        // Try to find by tag
+        GameObject tableByTag = GameObject.FindGameObjectWithTag(tableTag);
+        if (tableByTag != null)
+        {
+            tableObject = tableByTag.transform;
+            Debug.Log($"[NetworkedBall] Found table: {tableObject.name}");
+            return;
+        }
+        
+        // Try to find by name
+        var allObjects = FindObjectsOfType<Transform>();
+        foreach (var obj in allObjects)
+        {
+            if (obj.name.ToLower().Contains("table") && obj.GetComponent<Collider>() != null)
+            {
+                tableObject = obj;
+                Debug.Log($"[NetworkedBall] Found table by name: {tableObject.name}");
+                return;
+            }
+        }
     }
     
     /// <summary>
     /// Called when racket hits the ball. Only processed on host.
     /// </summary>
-    public void OnRacketHit(Vector3 hitVelocity, Vector3 hitPoint)
+    public void OnRacketHit(Vector3 hitVelocity, Vector3 hitPoint, int playerNumber = 0)
     {
         if (!Object.HasStateAuthority) return;
         
@@ -260,40 +345,68 @@ public class NetworkedBall : NetworkBehaviour
         IsInPlay = true;
         lastHitTime = Time.time;
         
-        Debug.Log($"[NetworkedBall] Hit with velocity: {hitVelocity}");
+        // Notify game manager
+        if (gameManager != null)
+        {
+            gameManager.OnBallHit(playerNumber);
+        }
+        
+        Debug.Log($"[NetworkedBall] Hit by player {playerNumber} with velocity: {hitVelocity}");
     }
     
     /// <summary>
     /// Request a serve (can be called by any player)
     /// </summary>
-    public void RequestServe(Vector3 direction)
+    /// <param name="serverPlayerNumber">1 for player 1 side, 2 for player 2 side</param>
+    public void RequestServe(int serverPlayerNumber)
     {
         if (Object.HasStateAuthority)
         {
-            Serve(direction);
+            Serve(serverPlayerNumber);
         }
         else
         {
-            RPC_RequestServe(direction);
+            RPC_RequestServe(serverPlayerNumber);
         }
     }
     
+    // Legacy overload for compatibility
+    public void RequestServe(Vector3 direction)
+    {
+        RequestServe(1); // Default to player 1
+    }
+    
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestServe(Vector3 direction)
+    private void RPC_RequestServe(int serverPlayerNumber)
     {
-        Serve(direction);
+        Serve(serverPlayerNumber);
     }
     
-    private void Serve(Vector3 direction)
+    private void Serve(int serverPlayerNumber)
     {
-        ResetToServePosition();
-        StartCoroutine(ApplyServeVelocity(direction.normalized * serveForce));
+        currentServerSide = serverPlayerNumber;
+        ResetToServePosition(serverPlayerNumber);
+        StartCoroutine(ApplyServeVelocity(serverPlayerNumber));
     }
     
-    private IEnumerator ApplyServeVelocity(Vector3 velocity)
+    private IEnumerator ApplyServeVelocity(int serverPlayerNumber)
     {
         yield return new WaitForSeconds(0.5f);
         
+        // Serve direction: toward the opponent's side
+        Vector3 serveDir = serverPlayerNumber == 1 ? Vector3.forward : Vector3.back;
+        
+        // If we have a table, use its forward direction
+        if (tableObject != null)
+        {
+            serveDir = serverPlayerNumber == 1 ? tableObject.forward : -tableObject.forward;
+        }
+        else if (sharedAnchor != null)
+        {
+            serveDir = serverPlayerNumber == 1 ? sharedAnchor.forward : -sharedAnchor.forward;
+        }
+        
+        Vector3 velocity = serveDir * serveForce;
         rb.velocity = velocity;
         localVelocity = velocity;
         IsInPlay = true;
