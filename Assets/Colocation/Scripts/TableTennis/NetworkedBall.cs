@@ -30,10 +30,15 @@ public class NetworkedBall : NetworkBehaviour
     [SerializeField] private float resetBelowY = -1f; // Reset if ball falls below this
     [SerializeField] private float resetAfterSeconds = 5f; // Reset if no activity
     
+    [Header("Positioning Mode")]
+    [SerializeField] private float positionMoveSpeed = 1.5f; // Speed of thumbstick movement
+    [SerializeField] private float positionHeightSpeed = 0.8f; // Speed of vertical movement
+    
     // Networked state - anchor relative
     [Networked] private Vector3 AnchorRelativePosition { get; set; }
     [Networked] private Vector3 AnchorRelativeVelocity { get; set; }
     [Networked] private NetworkBool IsInPlay { get; set; }
+    [Networked] private NetworkBool IsInPositioningMode { get; set; } // Ball can be moved with thumbsticks
     
     // Local state
     private Transform sharedAnchor;
@@ -44,6 +49,7 @@ public class NetworkedBall : NetworkBehaviour
     private bool isInitialized;
     private TableTennisGameManager gameManager;
     private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
+    private bool localPositioningMode = true; // Local flag for positioning
     
     // For interpolation on clients
     private Vector3 targetPosition;
@@ -212,9 +218,13 @@ public class NetworkedBall : NetworkBehaviour
         
         if (Object.HasStateAuthority)
         {
-            SimulatePhysics();
+            // Skip physics simulation if in positioning mode
+            if (!IsInPositioningMode)
+            {
+                SimulatePhysics();
+                CheckForReset();
+            }
             SyncToNetwork();
-            CheckForReset();
         }
     }
     
@@ -222,11 +232,117 @@ public class NetworkedBall : NetworkBehaviour
     {
         if (!isInitialized || sharedAnchor == null) return;
         
+        // Handle positioning mode with thumbsticks
+        if (IsInPositioningMode || localPositioningMode)
+        {
+            HandlePositioningMode();
+        }
+        
         if (!Object.HasStateAuthority)
         {
             InterpolatePosition();
         }
     }
+    
+    /// <summary>
+    /// Handle thumbstick input to move ball position before starting game
+    /// </summary>
+    private void HandlePositioningMode()
+    {
+        // Only allow positioning if we have authority or it's local-only ball
+        if (!Object.HasStateAuthority && Object != null && Object.IsValid) return;
+        
+        // Keep ball kinematic while positioning
+        if (rb != null && !rb.isKinematic)
+        {
+            rb.isKinematic = true;
+            rb.velocity = Vector3.zero;
+        }
+        
+        // Get thumbstick input
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
+        Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
+        
+        // Dead zone
+        if (leftStick.magnitude < 0.1f) leftStick = Vector2.zero;
+        if (rightStick.magnitude < 0.1f) rightStick = Vector2.zero;
+        
+        if (leftStick.magnitude > 0.1f || Mathf.Abs(rightStick.y) > 0.1f)
+        {
+            // Get camera for movement direction
+            Camera cam = Camera.main;
+            if (cam == null) return;
+            
+            // Calculate movement in camera-relative space (horizontal only)
+            Vector3 camForward = cam.transform.forward;
+            camForward.y = 0;
+            camForward.Normalize();
+            Vector3 camRight = cam.transform.right;
+            camRight.y = 0;
+            camRight.Normalize();
+            
+            // Left stick: horizontal movement (X/Z)
+            Vector3 moveDir = (camRight * leftStick.x + camForward * leftStick.y) * positionMoveSpeed * Time.deltaTime;
+            
+            // Right stick Y: vertical movement
+            float verticalMove = rightStick.y * positionHeightSpeed * Time.deltaTime;
+            
+            // Apply movement
+            Vector3 newPos = transform.position + moveDir;
+            newPos.y += verticalMove;
+            
+            // Clamp height to reasonable range (0.5m to 2.5m)
+            newPos.y = Mathf.Clamp(newPos.y, 0.5f, 2.5f);
+            
+            transform.position = newPos;
+            
+            // Update anchor-relative position for sync
+            if (sharedAnchor != null)
+            {
+                AnchorRelativePosition = sharedAnchor.InverseTransformPoint(newPos);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Enter positioning mode - ball floats and can be moved
+    /// </summary>
+    public void EnterPositioningMode()
+    {
+        localPositioningMode = true;
+        IsInPositioningMode = true;
+        IsInPlay = false;
+        
+        if (rb != null)
+        {
+            rb.isKinematic = true;
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+        
+        Debug.Log("[NetworkedBall] Entered positioning mode - use thumbsticks to adjust, hit ball to start");
+    }
+    
+    /// <summary>
+    /// Exit positioning mode and start physics (called when racket hits ball)
+    /// </summary>
+    public void ExitPositioningMode()
+    {
+        localPositioningMode = false;
+        IsInPositioningMode = false;
+        
+        if (rb != null && Object.HasStateAuthority)
+        {
+            rb.isKinematic = false;
+        }
+        
+        Debug.Log("[NetworkedBall] Exited positioning mode - game started!");
+    }
+    
+    /// <summary>
+    /// Check if ball is in positioning mode
+    /// </summary>
+    public bool InPositioningMode => IsInPositioningMode || localPositioningMode;
     
     private void SimulatePhysics()
     {
@@ -358,7 +474,9 @@ public class NetworkedBall : NetworkBehaviour
         rb.angularVelocity = Vector3.zero;
         localVelocity = Vector3.zero;
         
-        IsInPlay = false;
+        // Enter positioning mode - player adjusts with thumbsticks, hit to start
+        EnterPositioningMode();
+        
         lastHitTime = Time.time;
         
         // Update anchor-relative position for sync
@@ -368,7 +486,7 @@ public class NetworkedBall : NetworkBehaviour
         }
         AnchorRelativeVelocity = Vector3.zero;
         
-        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos}");
+        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos} - IN POSITIONING MODE");
     }
     
     private void FindTableObject()
@@ -403,6 +521,19 @@ public class NetworkedBall : NetworkBehaviour
     public void OnRacketHit(Vector3 hitVelocity, Vector3 hitPoint, int playerNumber = 0)
     {
         if (!Object.HasStateAuthority) return;
+        
+        // Exit positioning mode when hit
+        if (IsInPositioningMode || localPositioningMode)
+        {
+            ExitPositioningMode();
+            Debug.Log("[NetworkedBall] Ball hit in positioning mode - starting game!");
+        }
+        
+        // Enable physics
+        if (rb != null && rb.isKinematic)
+        {
+            rb.isKinematic = false;
+        }
         
         rb.velocity = hitVelocity;
         localVelocity = hitVelocity;

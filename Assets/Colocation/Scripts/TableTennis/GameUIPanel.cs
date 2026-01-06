@@ -18,7 +18,7 @@ public class GameUIPanel : MonoBehaviour
     [SerializeField] private Color statusColor = Color.white;
     [SerializeField] private Color controlsColor = Color.cyan; // Color for controls info
     [SerializeField] private Color backgroundColor = new Color(0.1f, 0.1f, 0.3f, 0.95f); // Dark blue
-    [SerializeField] private Vector2 backgroundSize = new Vector2(1.0f, 0.8f); // Background size
+    [SerializeField] private Vector2 backgroundSize = new Vector2(1.2f, 1.2f); // Background size - taller for more text spread
     [SerializeField] private int winScore = 11; // Score needed to win
     
     // Container for all 4 wall panels
@@ -180,34 +180,34 @@ public class GameUIPanel : MonoBehaviour
         // Create background panel
         panel.background = CreateBackground("Background", panel.root, new Vector3(0, 0, 0.01f));
         
-        // Create score text (top) - large spacing between lines
-        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.28f, 0));
+        // Create score text (top) - VERY spread out positions to prevent overlap
+        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.4f, 0));
         panel.scoreText.fontSize = fontSize;
         panel.scoreText.color = scoreColor;
         panel.scoreText.fontStyle = FontStyles.Bold;
         panel.scoreText.alignment = TextAlignmentOptions.Center;
         panel.scoreText.text = "0 - 0";
         
-        // Create info text (player role and win condition)
-        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.12f, 0));
-        panel.infoText.fontSize = fontSize * 0.6f;
+        // Create info text (player role and win condition) - 25cm below score
+        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.15f, 0));
+        panel.infoText.fontSize = fontSize * 0.5f;
         panel.infoText.color = infoColor;
         panel.infoText.alignment = TextAlignmentOptions.Center;
         panel.infoText.text = $"First to {winScore} | Connecting...";
         
-        // Create status text (game state)
-        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, -0.04f, 0));
-        panel.statusText.fontSize = fontSize * 0.7f;
+        // Create status text (game state) - 25cm below info
+        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, -0.1f, 0));
+        panel.statusText.fontSize = fontSize * 0.6f;
         panel.statusText.color = statusColor;
         panel.statusText.alignment = TextAlignmentOptions.Center;
-        panel.statusText.text = "GRIP to Start";
+        panel.statusText.text = "GRIP to Spawn Ball";
         
-        // Create controls info text (detailed controls)
-        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.22f, 0));
-        panel.controlsText.fontSize = fontSize * 0.5f;
+        // Create controls info text (detailed controls) - 25cm below status
+        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.35f, 0));
+        panel.controlsText.fontSize = fontSize * 0.4f;
         panel.controlsText.color = controlsColor;
         panel.controlsText.alignment = TextAlignmentOptions.Center;
-        panel.controlsText.text = "B/Y: Racket | A: Adjust";
+        panel.controlsText.text = "Sticks: Move Ball | Hit to Start";
         
         return panel;
     }
@@ -228,34 +228,34 @@ public class GameUIPanel : MonoBehaviour
         // Create background panel
         panel.background = CreateBackground("Background", panel.root, new Vector3(0, 0, 0.01f));
         
-        // Create score text (top) - large spacing between lines
-        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.28f, 0));
+        // Create score text (top) - VERY spread out positions to prevent overlap
+        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.4f, 0));
         panel.scoreText.fontSize = fontSize;
         panel.scoreText.color = scoreColor;
         panel.scoreText.fontStyle = FontStyles.Bold;
         panel.scoreText.alignment = TextAlignmentOptions.Center;
         panel.scoreText.text = "0 - 0";
         
-        // Create info text (player role and win condition)
-        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.12f, 0));
-        panel.infoText.fontSize = fontSize * 0.6f;
+        // Create info text (player role and win condition) - 25cm below score
+        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.15f, 0));
+        panel.infoText.fontSize = fontSize * 0.5f;
         panel.infoText.color = infoColor;
         panel.infoText.alignment = TextAlignmentOptions.Center;
         panel.infoText.text = $"First to {winScore} | Connecting...";
         
-        // Create status text (game state)
-        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, -0.04f, 0));
-        panel.statusText.fontSize = fontSize * 0.7f;
+        // Create status text (game state) - 25cm below info
+        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, -0.1f, 0));
+        panel.statusText.fontSize = fontSize * 0.6f;
         panel.statusText.color = statusColor;
         panel.statusText.alignment = TextAlignmentOptions.Center;
-        panel.statusText.text = "GRIP to Start";
+        panel.statusText.text = "GRIP to Spawn Ball";
         
-        // Create controls info text (detailed controls)
-        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.22f, 0));
-        panel.controlsText.fontSize = fontSize * 0.5f;
+        // Create controls info text (detailed controls) - 25cm below status
+        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.35f, 0));
+        panel.controlsText.fontSize = fontSize * 0.4f;
         panel.controlsText.color = controlsColor;
         panel.controlsText.alignment = TextAlignmentOptions.Center;
-        panel.controlsText.text = "B/Y: Racket | A: Adjust";
+        panel.controlsText.text = "Sticks: Move Ball | Hit to Start";
         
         return panel;
     }
@@ -372,7 +372,14 @@ public class GameUIPanel : MonoBehaviour
     
     private string GetStatusText()
     {
-        if (gameManager == null) return "GRIP to Start";
+        // Check if ball is in positioning mode
+        var ball = FindObjectOfType<NetworkedBall>();
+        if (ball != null && ball.InPositioningMode)
+        {
+            return "Adjust ball position, hit to start!";
+        }
+        
+        if (gameManager == null) return "GRIP to Spawn Ball";
         
         switch (gameManager.CurrentGameState)
         {
@@ -380,7 +387,7 @@ public class GameUIPanel : MonoBehaviour
                 return gameManager.Player1Score > gameManager.Player2Score ? "P1 Wins!" : "P2 Wins!";
                 
             case TableTennisGameManager.GameState.WaitingToStart:
-                return "GRIP to Start";
+                return "GRIP to Spawn Ball";
                 
             case TableTennisGameManager.GameState.Serving:
             case TableTennisGameManager.GameState.Playing:
@@ -388,7 +395,7 @@ public class GameUIPanel : MonoBehaviour
                 return gameManager.CurrentServer == 1 ? "P1 Serve" : "P2 Serve";
                 
             default:
-                return "GRIP to Start";
+                return "GRIP to Spawn Ball";
         }
     }
 }

@@ -52,7 +52,7 @@ public class TableTennisManager : NetworkBehaviour
     [SerializeField] private Vector3 racketRotation = new Vector3(0f, 0f, 0f); // Handle up
     
     [Header("Ball Spawn")]
-    [SerializeField] private Vector3 ballSpawnOffset = new Vector3(0f, 0.5f, 0f); // Above table center
+    [SerializeField] private Vector3 ballSpawnOffset = new Vector3(0f, 0.4f, 0f); // 40cm above anchor/table
     
     // References
     private NetworkedBall spawnedBall;
@@ -865,67 +865,74 @@ public class TableTennisManager : NetworkBehaviour
     
     private void SpawnBall()
     {
-        if (ballPrefab == default)
-        {
-            Debug.LogError("[TableTennisManager] Ball prefab not assigned! Please assign it in the Inspector.");
-            return;
-        }
-        
         Vector3 spawnPosition = Vector3.zero;
         
-        // Calculate spawn position relative to table
-        if (tableRoot != null)
+        // PRIORITY 1: Use stored anchor positions (40cm above center of anchors)
+        Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
+        Vector3 secondAnchor = AnchorGUIManager_AutoAlignment.SecondAnchorPosition;
+        
+        if (firstAnchor.sqrMagnitude > 0.01f && secondAnchor.sqrMagnitude > 0.01f)
         {
-            spawnPosition = tableRoot.transform.position + ballSpawnOffset;
-            Debug.Log($"[TableTennisManager] Ball spawn using tableRoot: {tableRoot.name} at {tableRoot.transform.position}");
+            Vector3 anchorCenter = (firstAnchor + secondAnchor) / 2f;
+            spawnPosition = anchorCenter + new Vector3(0, 0.4f, 0); // 40cm above anchor center
+            Debug.Log($"[TableTennisManager] Ball spawn using stored anchors: center={anchorCenter}, spawn={spawnPosition}");
         }
-        else if (tableTransform != null)
-        {
-            spawnPosition = tableTransform.TransformPoint(ballSpawnOffset);
-            Debug.Log($"[TableTennisManager] Ball spawn using tableTransform at {tableTransform.position}");
-        }
+        // PRIORITY 2: Use sharedAnchor transform
         else if (sharedAnchor != null)
         {
-            spawnPosition = sharedAnchor.TransformPoint(new Vector3(0, 1.2f, 0));
-            Debug.Log($"[TableTennisManager] Ball spawn using sharedAnchor at {sharedAnchor.position}");
+            spawnPosition = sharedAnchor.position + new Vector3(0, 0.4f, 0); // 40cm above anchor
+            Debug.Log($"[TableTennisManager] Ball spawn using sharedAnchor: {sharedAnchor.position}, spawn={spawnPosition}");
         }
+        // PRIORITY 3: Use table position
+        else if (tableRoot != null)
+        {
+            spawnPosition = tableRoot.transform.position + ballSpawnOffset;
+            Debug.Log($"[TableTennisManager] Ball spawn using tableRoot: {tableRoot.transform.position}");
+        }
+        // PRIORITY 4: Fallback to camera position
         else
         {
-            // Fallback: spawn at a reasonable default position
-            spawnPosition = new Vector3(0, 1.0f, 0);
-            Debug.LogWarning("[TableTennisManager] No table reference, spawning ball at default position");
-        }
-        
-        Debug.Log($"[TableTennisManager] Spawning ball at position: {spawnPosition}");
-        
-        // Try to spawn networked ball
-        if (ballPrefab != default)
-        {
-            var ballObj = Runner.Spawn(
-                ballPrefab,
-                spawnPosition,
-                Quaternion.identity,
-                Object.InputAuthority
-            );
-            
-            if (ballObj != null)
+            var cam = Camera.main;
+            if (cam != null)
             {
-                spawnedBall = ballObj.GetComponent<NetworkedBall>();
-                Debug.Log($"[TableTennisManager] Successfully spawned networked ball at {spawnPosition}, NetworkObject: {ballObj.Id}");
-                return;
+                spawnPosition = cam.transform.position + cam.transform.forward * 0.5f;
+                spawnPosition.y = cam.transform.position.y; // Same height as camera
             }
             else
             {
-                Debug.LogError("[TableTennisManager] Failed to spawn ball! Runner.Spawn returned null.");
+                spawnPosition = new Vector3(0, 1.0f, 0);
             }
-        }
-        else
-        {
-            Debug.LogWarning("[TableTennisManager] Ball prefab not assigned, creating local ball instead.");
+            Debug.LogWarning($"[TableTennisManager] No anchor/table reference, spawning ball at {spawnPosition}");
         }
         
-        // Fallback: Create a simple local ball (visible but not networked)
+        Debug.Log($"[TableTennisManager] SPAWNING BALL at position: {spawnPosition}");
+        
+        // Always create a visible local ball first (guaranteed to be visible)
         CreateLocalBall(spawnPosition);
+        
+        // Also try to spawn networked ball if prefab is assigned
+        if (ballPrefab != default && Runner != null)
+        {
+            try
+            {
+                var ballObj = Runner.Spawn(
+                    ballPrefab,
+                    spawnPosition,
+                    Quaternion.identity,
+                    Object.InputAuthority
+                );
+                
+                if (ballObj != null)
+                {
+                    spawnedBall = ballObj.GetComponent<NetworkedBall>();
+                    Debug.Log($"[TableTennisManager] Also spawned networked ball at {spawnPosition}");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[TableTennisManager] Networked ball spawn failed: {e.Message}");
+            }
+        }
     }
     
     /// <summary>
@@ -939,7 +946,7 @@ public class TableTennisManager : NetworkBehaviour
         GameObject ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         ball.name = "LocalPingPongBall";
         ball.transform.position = position;
-        ball.transform.localScale = Vector3.one * 0.04f; // 4cm diameter
+        ball.transform.localScale = Vector3.one * 0.08f; // 8cm diameter for visibility
         
         // Set material to white/orange for visibility
         var renderer = ball.GetComponent<Renderer>();
@@ -950,16 +957,18 @@ public class TableTennisManager : NetworkBehaviour
             renderer.material = mat;
         }
         
-        // Add rigidbody for physics
+        // Add rigidbody but keep kinematic for positioning mode
         var rb = ball.AddComponent<Rigidbody>();
         rb.mass = 0.0027f;
         rb.drag = 0.1f;
-        rb.useGravity = true;
+        rb.isKinematic = true; // Start kinematic - no gravity until hit
+        rb.useGravity = false;
         
-        // Add NetworkedBall component if available
+        // Add NetworkedBall component - it will enter positioning mode
         var networkedBall = ball.AddComponent<NetworkedBall>();
+        networkedBall.EnterPositioningMode();
         
-        Debug.Log($"[TableTennisManager] Created local ball at {position} - THIS IS A FALLBACK, networked prefab not working");
+        Debug.Log($"[TableTennisManager] Created local ball at {position} - IN POSITIONING MODE (use thumbsticks to adjust, hit to start)");
     }
     
     /// <summary>
