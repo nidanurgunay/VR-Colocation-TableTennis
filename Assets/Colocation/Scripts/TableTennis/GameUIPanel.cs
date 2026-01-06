@@ -11,14 +11,14 @@ public class GameUIPanel : MonoBehaviour
 {
     [Header("Settings")]
     [SerializeField] private float wallHeight = 1.5f; // Height on wall
-    [SerializeField] private float wallDistance = 2.0f; // Distance from table center to wall
-    [SerializeField] private float fontSize = 3f; // Larger font for wall visibility
+    [SerializeField] private float wallDistance = 3.0f; // Distance from table center to wall
+    [SerializeField] private float fontSize = 1.5f; // Font size for wall visibility
     [SerializeField] private Color scoreColor = Color.yellow;
     [SerializeField] private Color infoColor = Color.green; // Player info color
     [SerializeField] private Color statusColor = Color.white;
     [SerializeField] private Color controlsColor = Color.cyan; // Color for controls info
     [SerializeField] private Color backgroundColor = new Color(0.1f, 0.1f, 0.3f, 0.95f); // Dark blue
-    [SerializeField] private Vector2 backgroundSize = new Vector2(1.2f, 1.0f); // Larger background for all info
+    [SerializeField] private Vector2 backgroundSize = new Vector2(0.8f, 0.6f); // Background size
     [SerializeField] private int winScore = 11; // Score needed to win
     
     // Container for all 4 wall panels
@@ -181,7 +181,7 @@ public class GameUIPanel : MonoBehaviour
         panel.background = CreateBackground("Background", panel.root, new Vector3(0, 0, 0.01f));
         
         // Create score text (top)
-        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.35f, 0));
+        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.20f, 0));
         panel.scoreText.fontSize = fontSize;
         panel.scoreText.color = scoreColor;
         panel.scoreText.fontStyle = FontStyles.Bold;
@@ -189,25 +189,25 @@ public class GameUIPanel : MonoBehaviour
         panel.scoreText.text = "0 - 0";
         
         // Create info text (player role and win condition)
-        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.18f, 0));
-        panel.infoText.fontSize = fontSize * 0.4f;
+        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.08f, 0));
+        panel.infoText.fontSize = fontSize * 0.5f;
         panel.infoText.color = infoColor;
         panel.infoText.alignment = TextAlignmentOptions.Center;
         panel.infoText.text = $"First to {winScore} | Connecting...";
         
         // Create status text (game state)
-        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, 0.02f, 0));
-        panel.statusText.fontSize = fontSize * 0.5f;
+        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, -0.04f, 0));
+        panel.statusText.fontSize = fontSize * 0.6f;
         panel.statusText.color = statusColor;
         panel.statusText.alignment = TextAlignmentOptions.Center;
         panel.statusText.text = "GRIP to Start";
         
         // Create controls info text (detailed controls)
-        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.22f, 0));
-        panel.controlsText.fontSize = fontSize * 0.3f;
+        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.18f, 0));
+        panel.controlsText.fontSize = fontSize * 0.4f;
         panel.controlsText.color = controlsColor;
         panel.controlsText.alignment = TextAlignmentOptions.Center;
-        panel.controlsText.text = "B/Y: Show Racket\nA: Toggle Adjust Mode\nL-Stick: Move Table | R-Stick: Rotate/Height";
+        panel.controlsText.text = "B/Y: Racket | A: Adjust | Sticks: Move/Rotate";
         
         return panel;
     }
@@ -229,7 +229,7 @@ public class GameUIPanel : MonoBehaviour
         panel.background = CreateBackground("Background", panel.root, new Vector3(0, 0, 0.01f));
         
         // Create score text (top)
-        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.35f, 0));
+        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.20f, 0));
         panel.scoreText.fontSize = fontSize;
         panel.scoreText.color = scoreColor;
         panel.scoreText.fontStyle = FontStyles.Bold;
@@ -237,25 +237,25 @@ public class GameUIPanel : MonoBehaviour
         panel.scoreText.text = "0 - 0";
         
         // Create info text (player role and win condition)
-        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.18f, 0));
-        panel.infoText.fontSize = fontSize * 0.4f;
+        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.08f, 0));
+        panel.infoText.fontSize = fontSize * 0.5f;
         panel.infoText.color = infoColor;
         panel.infoText.alignment = TextAlignmentOptions.Center;
         panel.infoText.text = $"First to {winScore} | Connecting...";
         
         // Create status text (game state)
-        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, 0.02f, 0));
-        panel.statusText.fontSize = fontSize * 0.5f;
+        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, -0.04f, 0));
+        panel.statusText.fontSize = fontSize * 0.6f;
         panel.statusText.color = statusColor;
         panel.statusText.alignment = TextAlignmentOptions.Center;
         panel.statusText.text = "GRIP to Start";
         
         // Create controls info text (detailed controls)
-        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.22f, 0));
-        panel.controlsText.fontSize = fontSize * 0.3f;
+        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.18f, 0));
+        panel.controlsText.fontSize = fontSize * 0.4f;
         panel.controlsText.color = controlsColor;
         panel.controlsText.alignment = TextAlignmentOptions.Center;
-        panel.controlsText.text = "B/Y: Show Racket\nA: Toggle Adjust Mode\nL-Stick: Move Table | R-Stick: Rotate/Height";
+        panel.controlsText.text = "B/Y: Racket | A: Adjust | Sticks: Move/Rotate";
         
         return panel;
     }
