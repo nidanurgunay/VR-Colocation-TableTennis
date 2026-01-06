@@ -45886,8 +45886,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7edf00b9ddd4148fd8e622c7e7480521, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  wallHeight: 3
-  wallDistance: 3
+  wallHeight: 2
+  wallDistance: 2.5
   fontSize: 3
   scoreColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
   infoColor: {r: 0, g: 1, b: 0, a: 1}

@@ -12,7 +12,7 @@ public class GameUIPanel : MonoBehaviour
     [Header("Settings")]
     [SerializeField] private float wallHeight = 1.5f; // Height on wall
     [SerializeField] private float wallDistance = 2.5f; // Distance from table center to wall
-    [SerializeField] private float fontSize = 0.8f; // Smaller font size
+    [SerializeField] private float fontSize = 0.5f; // Smaller font size
     [SerializeField] private Color scoreColor = Color.yellow;
     [SerializeField] private Color infoColor = Color.green; // Player info color
     [SerializeField] private Color statusColor = Color.white;
