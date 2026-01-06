@@ -145,7 +145,6 @@ public class NetworkedBall : NetworkBehaviour
         
         Debug.Log($"[NetworkedBall] Ball visual ensured. Scale: {transform.localScale}, Position: {transform.position}");
     }
-    }
     
     private IEnumerator TryFindAnchorAndInitialize()
     {
