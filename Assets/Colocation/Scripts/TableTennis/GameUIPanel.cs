@@ -1,32 +1,44 @@
 using UnityEngine;
 using TMPro;
+using Fusion;
+using System.Linq;
 
 /// <summary>
 /// Simple world-space score display using TextMeshPro 3D text.
-/// Shows score on a wall, visible from the table area.
+/// Shows score on all 4 walls around the table, visible from any angle.
 /// </summary>
 public class GameUIPanel : MonoBehaviour
 {
     [Header("Settings")]
     [SerializeField] private float wallHeight = 1.5f; // Height on wall
-    [SerializeField] private float wallDistance = 2.0f; // Distance from table center to wall (along table's right side)
+    [SerializeField] private float wallDistance = 2.0f; // Distance from table center to wall
     [SerializeField] private float fontSize = 3f; // Larger font for wall visibility
     [SerializeField] private Color scoreColor = Color.yellow;
+    [SerializeField] private Color infoColor = Color.green; // Player info color
     [SerializeField] private Color statusColor = Color.white;
+    [SerializeField] private Color controlsColor = Color.cyan; // Color for controls info
     [SerializeField] private Color backgroundColor = new Color(0.1f, 0.1f, 0.3f, 0.95f); // Dark blue
-    [SerializeField] private Vector2 backgroundSize = new Vector2(0.8f, 0.4f); // Larger background for wall
+    [SerializeField] private Vector2 backgroundSize = new Vector2(1.2f, 1.0f); // Larger background for all info
+    [SerializeField] private int winScore = 11; // Score needed to win
     
-    // Text components (single sided now)
-    private TextMeshPro scoreText;
-    private TextMeshPro statusText;
+    // Container for all 4 wall panels
+    private class WallPanel
+    {
+        public GameObject root;
+        public TextMeshPro scoreText;
+        public TextMeshPro infoText; // "First to 11 | You are P1 (Host)"
+        public TextMeshPro statusText;
+        public TextMeshPro controlsText; // Detailed controls
+        public GameObject background;
+    }
     
-    // Background quad
-    private GameObject background;
+    private WallPanel[] wallPanels = new WallPanel[4];
     
     // References
     private Transform tableObject;
     private TableTennisGameManager gameManager;
-    private GameObject panelRoot;
+    private GameObject panelsContainer;
+    private NetworkRunner runner;
     
     private void Start()
     {
@@ -93,59 +105,168 @@ public class GameUIPanel : MonoBehaviour
     
     private void CreateScoreDisplay()
     {
-        // Create root object
-        panelRoot = new GameObject("ScoreDisplay");
+        // Create container for all panels
+        panelsContainer = new GameObject("ScoreDisplays");
         
         if (tableObject != null)
         {
-            // Position on the wall to the right side of the table (perpendicular to long axis)
-            // Table's right direction is its local X axis
-            Vector3 wallPosition = tableObject.position + tableObject.right * wallDistance;
-            wallPosition.y = wallHeight;
+            // Create 4 panels on each wall around the table
+            // Wall 0: Right side (+X direction from table)
+            // Wall 1: Left side (-X direction from table)
+            // Wall 2: Front side (+Z direction from table)
+            // Wall 3: Back side (-Z direction from table)
             
-            panelRoot.transform.position = wallPosition;
-            
-            // Face back toward the table (rotate to look at table center)
-            Vector3 lookDir = tableObject.position - wallPosition;
-            lookDir.y = 0; // Keep panel vertical
-            if (lookDir.sqrMagnitude > 0.01f)
+            Vector3[] directions = new Vector3[]
             {
-                panelRoot.transform.rotation = Quaternion.LookRotation(lookDir, Vector3.up);
+                tableObject.right,      // Right wall
+                -tableObject.right,     // Left wall
+                tableObject.forward,    // Front wall
+                -tableObject.forward    // Back wall
+            };
+            
+            string[] wallNames = { "RightWall", "LeftWall", "FrontWall", "BackWall" };
+            
+            for (int i = 0; i < 4; i++)
+            {
+                wallPanels[i] = CreateWallPanel(wallNames[i], directions[i]);
             }
+            
+            Debug.Log($"[GameUIPanel] Created 4 wall panels around table at {tableObject.position}");
         }
         else
         {
-            panelRoot.transform.position = new Vector3(wallDistance, wallHeight, 0);
-            panelRoot.transform.rotation = Quaternion.Euler(0, -90f, 0); // Face left
+            // Fallback: create panels at fixed positions if no table found
+            Vector3[] directions = new Vector3[]
+            {
+                Vector3.right,
+                Vector3.left,
+                Vector3.forward,
+                Vector3.back
+            };
+            
+            string[] wallNames = { "RightWall", "LeftWall", "FrontWall", "BackWall" };
+            
+            for (int i = 0; i < 4; i++)
+            {
+                wallPanels[i] = CreateWallPanelFixed(wallNames[i], directions[i]);
+            }
+            
+            Debug.LogWarning("[GameUIPanel] Created wall panels without table reference");
         }
-        
-        // Create background panel (slightly behind text)
-        background = CreateBackground("Background", new Vector3(0, 0, 0.01f));
-        
-        // Create score text
-        scoreText = CreateTextMesh("ScoreText", Vector3.zero);
-        scoreText.fontSize = fontSize;
-        scoreText.color = scoreColor;
-        scoreText.fontStyle = FontStyles.Bold;
-        scoreText.alignment = TextAlignmentOptions.Center;
-        scoreText.text = "0 - 0";
-        
-        // Create status text below score
-        statusText = CreateTextMesh("StatusText", new Vector3(0, -0.12f, 0));
-        statusText.fontSize = fontSize * 0.5f;
-        statusText.color = statusColor;
-        statusText.alignment = TextAlignmentOptions.Center;
-        statusText.text = "GRIP to Start";
-        
-        Debug.Log($"[GameUIPanel] Wall panel created at {panelRoot.transform.position}, facing table at {tableObject?.position}");
     }
     
-    private TextMeshPro CreateTextMesh(string name, Vector3 localOffset)
+    private WallPanel CreateWallPanel(string name, Vector3 direction)
+    {
+        WallPanel panel = new WallPanel();
+        
+        // Create root object for this wall
+        panel.root = new GameObject($"ScorePanel_{name}");
+        panel.root.transform.SetParent(panelsContainer.transform);
+        
+        // Position on the wall in the given direction from table
+        Vector3 wallPosition = tableObject.position + direction * wallDistance;
+        wallPosition.y = wallHeight;
+        
+        panel.root.transform.position = wallPosition;
+        
+        // Face back toward the table center
+        Vector3 lookDir = tableObject.position - wallPosition;
+        lookDir.y = 0; // Keep panel vertical
+        if (lookDir.sqrMagnitude > 0.01f)
+        {
+            panel.root.transform.rotation = Quaternion.LookRotation(lookDir, Vector3.up);
+        }
+        
+        // Create background panel
+        panel.background = CreateBackground("Background", panel.root, new Vector3(0, 0, 0.01f));
+        
+        // Create score text (top)
+        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.35f, 0));
+        panel.scoreText.fontSize = fontSize;
+        panel.scoreText.color = scoreColor;
+        panel.scoreText.fontStyle = FontStyles.Bold;
+        panel.scoreText.alignment = TextAlignmentOptions.Center;
+        panel.scoreText.text = "0 - 0";
+        
+        // Create info text (player role and win condition)
+        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.18f, 0));
+        panel.infoText.fontSize = fontSize * 0.4f;
+        panel.infoText.color = infoColor;
+        panel.infoText.alignment = TextAlignmentOptions.Center;
+        panel.infoText.text = $"First to {winScore} | Connecting...";
+        
+        // Create status text (game state)
+        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, 0.02f, 0));
+        panel.statusText.fontSize = fontSize * 0.5f;
+        panel.statusText.color = statusColor;
+        panel.statusText.alignment = TextAlignmentOptions.Center;
+        panel.statusText.text = "GRIP to Start";
+        
+        // Create controls info text (detailed controls)
+        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.22f, 0));
+        panel.controlsText.fontSize = fontSize * 0.3f;
+        panel.controlsText.color = controlsColor;
+        panel.controlsText.alignment = TextAlignmentOptions.Center;
+        panel.controlsText.text = "B/Y: Show Racket\nA: Toggle Adjust Mode\nL-Stick: Move Table | R-Stick: Rotate/Height";
+        
+        return panel;
+    }
+    
+    private WallPanel CreateWallPanelFixed(string name, Vector3 direction)
+    {
+        WallPanel panel = new WallPanel();
+        
+        panel.root = new GameObject($"ScorePanel_{name}");
+        panel.root.transform.SetParent(panelsContainer.transform);
+        
+        Vector3 wallPosition = direction * wallDistance;
+        wallPosition.y = wallHeight;
+        
+        panel.root.transform.position = wallPosition;
+        panel.root.transform.rotation = Quaternion.LookRotation(-direction, Vector3.up);
+        
+        // Create background panel
+        panel.background = CreateBackground("Background", panel.root, new Vector3(0, 0, 0.01f));
+        
+        // Create score text (top)
+        panel.scoreText = CreateTextMesh("ScoreText", panel.root, new Vector3(0, 0.35f, 0));
+        panel.scoreText.fontSize = fontSize;
+        panel.scoreText.color = scoreColor;
+        panel.scoreText.fontStyle = FontStyles.Bold;
+        panel.scoreText.alignment = TextAlignmentOptions.Center;
+        panel.scoreText.text = "0 - 0";
+        
+        // Create info text (player role and win condition)
+        panel.infoText = CreateTextMesh("InfoText", panel.root, new Vector3(0, 0.18f, 0));
+        panel.infoText.fontSize = fontSize * 0.4f;
+        panel.infoText.color = infoColor;
+        panel.infoText.alignment = TextAlignmentOptions.Center;
+        panel.infoText.text = $"First to {winScore} | Connecting...";
+        
+        // Create status text (game state)
+        panel.statusText = CreateTextMesh("StatusText", panel.root, new Vector3(0, 0.02f, 0));
+        panel.statusText.fontSize = fontSize * 0.5f;
+        panel.statusText.color = statusColor;
+        panel.statusText.alignment = TextAlignmentOptions.Center;
+        panel.statusText.text = "GRIP to Start";
+        
+        // Create controls info text (detailed controls)
+        panel.controlsText = CreateTextMesh("ControlsText", panel.root, new Vector3(0, -0.22f, 0));
+        panel.controlsText.fontSize = fontSize * 0.3f;
+        panel.controlsText.color = controlsColor;
+        panel.controlsText.alignment = TextAlignmentOptions.Center;
+        panel.controlsText.text = "B/Y: Show Racket\nA: Toggle Adjust Mode\nL-Stick: Move Table | R-Stick: Rotate/Height";
+        
+        return panel;
+    }
+    
+    private TextMeshPro CreateTextMesh(string name, GameObject parent, Vector3 localOffset)
     {
         GameObject textObj = new GameObject(name);
-        textObj.transform.SetParent(panelRoot.transform);
+        textObj.transform.SetParent(parent.transform);
         textObj.transform.localPosition = localOffset;
-        textObj.transform.localRotation = Quaternion.identity;
+        // TextMeshPro text faces -Z by default, so rotate 180 to face forward (+Z)
+        textObj.transform.localRotation = Quaternion.Euler(0, 180f, 0);
         textObj.transform.localScale = Vector3.one;
         
         TextMeshPro tmp = textObj.AddComponent<TextMeshPro>();
@@ -154,11 +275,11 @@ public class GameUIPanel : MonoBehaviour
         return tmp;
     }
     
-    private GameObject CreateBackground(string name, Vector3 localOffset)
+    private GameObject CreateBackground(string name, GameObject parent, Vector3 localOffset)
     {
         GameObject bgObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
         bgObj.name = name;
-        bgObj.transform.SetParent(panelRoot.transform);
+        bgObj.transform.SetParent(parent.transform);
         bgObj.transform.localPosition = localOffset;
         bgObj.transform.localRotation = Quaternion.identity;
         bgObj.transform.localScale = new Vector3(backgroundSize.x, backgroundSize.y, 1f);
@@ -191,19 +312,61 @@ public class GameUIPanel : MonoBehaviour
             FindTable();
         }
         
-        // Update score text
+        // Find NetworkRunner if not cached
+        if (runner == null)
+        {
+            runner = FindObjectOfType<NetworkRunner>();
+        }
+        
+        // Update all panels
+        string score = "0 - 0";
+        string status = "GRIP to Start";
+        string info = GetPlayerInfo();
+        
         if (gameManager != null)
         {
-            string score = $"{gameManager.Player1Score} - {gameManager.Player2Score}";
-            if (scoreText != null) scoreText.text = score;
-            
-            string status = GetStatusText();
-            if (statusText != null) statusText.text = status;
+            score = $"{gameManager.Player1Score} - {gameManager.Player2Score}";
+            status = GetStatusText();
         }
         else
         {
             gameManager = FindObjectOfType<TableTennisGameManager>();
         }
+        
+        // Update all 4 wall panels
+        foreach (var panel in wallPanels)
+        {
+            if (panel != null)
+            {
+                if (panel.scoreText != null) panel.scoreText.text = score;
+                if (panel.infoText != null) panel.infoText.text = info;
+                if (panel.statusText != null) panel.statusText.text = status;
+            }
+        }
+    }
+    
+    private string GetPlayerInfo()
+    {
+        string playerRole = "Connecting...";
+        string connectionStatus = "";
+        
+        if (runner != null && runner.IsRunning)
+        {
+            bool isHost = runner.IsServer || runner.IsSharedModeMasterClient;
+            playerRole = isHost ? "You are P1 (Host)" : "You are P2 (Client)";
+            
+            int playerCount = runner.ActivePlayers.Count();
+            if (playerCount >= 2)
+            {
+                connectionStatus = " | Connected";
+            }
+            else
+            {
+                connectionStatus = " | Waiting for player...";
+            }
+        }
+        
+        return $"First to {winScore} | {playerRole}{connectionStatus}";
     }
     
     private string GetStatusText()

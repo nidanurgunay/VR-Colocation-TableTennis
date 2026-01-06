@@ -10,13 +10,17 @@ public class TableTennisManager : NetworkBehaviour
 {
     [Header("Prefabs")]
     [SerializeField] private NetworkPrefabRef ballPrefab;
-    [SerializeField] private GameObject racketPrefab; // Local prefab, not networked
+    [SerializeField] private NetworkPrefabRef networkedRacketPrefab; // Networked racket for multiplayer
+    [SerializeField] private GameObject racketPrefab; // Local prefab template
     
     [Header("Table Placement (relative to anchor)")]
     [SerializeField] private Vector3 tablePositionOffset = Vector3.zero; // Position offset from anchor
     [SerializeField] private float defaultTableHeight = 0.76f; // Standard ping pong table height
-    [SerializeField] private float tableXRotationOffset = 180f; // X rotation offset in degrees
+    [SerializeField] private float tableXRotationOffset = 0f; // X rotation offset in degrees (set to 180 if table is upside down)
     [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset in degrees
+    
+    [Header("Feature Toggles")]
+    [SerializeField] private bool enableTableAdjustment = false; // Enable/disable table position/rotation adjustment with controllers
     
     [Header("Runtime Adjustment Controls")]
     [SerializeField] private float moveSpeed = 2.0f; // Meters per second
@@ -93,11 +97,10 @@ public class TableTennisManager : NetworkBehaviour
     /// </summary>
     private void ApplyNetworkedRoomAlignment()
     {
-        // Skip if already aligned locally
+        // Skip if already aligned locally or if we're the host
         if (localRoomAligned) return;
-        
-        // Must be spawned to access networked properties
         if (Object == null || !Object.IsValid) return;
+        if (Object.HasStateAuthority) return; // Host doesn't need to apply - it already aligned
         
         // Check if host has applied room alignment
         if (!RoomAlignmentApplied) return;
@@ -116,32 +119,41 @@ public class TableTennisManager : NetworkBehaviour
             }
         }
         
-        if (roomParentTransform == null) return;
+        if (roomParentTransform == null) 
+        {
+            Debug.Log("[TableTennisManager] Client: Room parent not found yet");
+            return;
+        }
         
-        Debug.Log($"[TableTennisManager] Client applying room alignment: posOffset={NetworkedRoomPositionOffset}, rotOffset={NetworkedRoomRotationOffset}");
-        
-        // Find table for rotation pivot
+        // Find table if not cached
         if (tableRoot == null)
         {
             tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
                         ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
         }
         
-        if (tableRoot != null)
+        if (tableRoot == null)
         {
-            Vector3 tablePivot = tableRoot.transform.position;
-            
-            // Apply rotation around table position
-            if (Mathf.Abs(NetworkedRoomRotationOffset) > 0.1f)
-            {
-                roomParentTransform.RotateAround(tablePivot, Vector3.up, NetworkedRoomRotationOffset);
-            }
-            
-            // Apply position offset
-            roomParentTransform.position += NetworkedRoomPositionOffset;
-            
-            Debug.Log($"[TableTennisManager] Client room aligned. Table now at: {tableRoot.transform.position}");
+            Debug.Log("[TableTennisManager] Client: Table not found yet");
+            return;
         }
+        
+        Debug.Log($"[TableTennisManager] Client applying room alignment from host...");
+        Debug.Log($"[TableTennisManager] Host sent: roomPos={NetworkedRoomPositionOffset}, rotOffset={NetworkedRoomRotationOffset}");
+        Debug.Log($"[TableTennisManager] Current: roomPos={roomParentTransform.position}, tablePos={tableRoot.transform.position}");
+        
+        // The host sent the final room position and rotation offset
+        // We need to:
+        // 1. Set the room to the same final position as the host
+        // 2. Apply the same rotation
+        
+        // First, move the room to match host's final position
+        roomParentTransform.position = NetworkedRoomPositionOffset;
+        
+        // Also set table local position to zero (same as host did)
+        tableRoot.transform.localPosition = Vector3.zero;
+        
+        Debug.Log($"[TableTennisManager] Client room aligned. Room at: {roomParentTransform.position}, Table at: {tableRoot.transform.position}");
         
         localRoomAligned = true;
     }
@@ -167,7 +179,7 @@ public class TableTennisManager : NetworkBehaviour
             NetworkedTablePosition.z
         );
         
-        // Apply networked rotation
+        // Apply networked rotation (Y from network + X offset for upside-down correction)
         tableRoot.transform.rotation = Quaternion.Euler(tableXRotationOffset, NetworkedTableYRotation, 0);
         
         // Apply floor offset to camera rig so player sees correct floor level
@@ -184,6 +196,9 @@ public class TableTennisManager : NetworkBehaviour
     /// </summary>
     private void HandleTableAdjustment()
     {
+        // Skip if table adjustment is disabled in inspector
+        if (!enableTableAdjustment) return;
+        
         // Try to find tableRoot if not set yet
         if (tableRoot == null)
         {
@@ -299,8 +314,28 @@ public class TableTennisManager : NetworkBehaviour
         // Wait for anchor to be available
         yield return StartCoroutine(WaitForAnchor());
         
-        // Place the table at the anchor position
-        PlaceTableAtAnchor();
+        // Only HOST should place/align the table and room
+        // Client will receive alignment via network
+        if (Object.HasStateAuthority)
+        {
+            // Place the table at the anchor position
+            PlaceTableAtAnchor();
+        }
+        else
+        {
+            // Client: Wait for room alignment from host
+            Debug.Log("[TableTennisManager] Client waiting for room alignment from host...");
+            yield return new WaitForSeconds(0.5f);
+            
+            // Find table reference for client
+            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
+            
+            if (tableRoot != null)
+            {
+                Debug.Log($"[TableTennisManager] Client found table: {tableRoot.name}");
+            }
+        }
         
         // Setup controller-based rackets (replaces old grab system)
         SetupControllerRackets();
@@ -341,6 +376,8 @@ public class TableTennisManager : NetworkBehaviour
         Debug.Log($"[TableTennisManager] Static anchor positions: first={firstAnchor}, second={secondAnchor}");
         Debug.Log($"[TableTennisManager] Static first magnitude={firstAnchor.sqrMagnitude}, second magnitude={secondAnchor.sqrMagnitude}");
         Debug.Log($"[TableTennisManager] TableWasAligned={AnchorGUIManager_AutoAlignment.TableWasAligned}, AlignedPos={AnchorGUIManager_AutoAlignment.AlignedTablePosition}");
+        Debug.Log($"[TableTennisManager] Anchor UUIDs: first={AnchorGUIManager_AutoAlignment.FirstAnchorUuid}, second={AnchorGUIManager_AutoAlignment.SecondAnchorUuid}");
+        Debug.Log($"[TableTennisManager] HasStateAuthority={Object.HasStateAuthority}");
         
         // FALLBACK: If static variables are empty, use the localized anchors in scene
         if (firstAnchor.sqrMagnitude < 0.01f || secondAnchor.sqrMagnitude < 0.01f)
@@ -562,7 +599,7 @@ public class TableTennisManager : NetworkBehaviour
         
         // Apply initial position
         tableRoot.transform.position = tablePos;
-        tableRoot.transform.rotation = Quaternion.Euler(tableXRotationOffset, tableYRotationOffset, 0);
+        tableRoot.transform.rotation = Quaternion.Euler(0, tableYRotationOffset, 0); // Keep table upright
         
         tableInitialized = true;
         Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}");
@@ -570,26 +607,58 @@ public class TableTennisManager : NetworkBehaviour
     
     /// <summary>
     /// Setup ControllerRacket component to show racket on controllers
+    /// Now spawns as a networked object so other players can see the racket
     /// </summary>
     private void SetupControllerRackets()
     {
-        // ControllerRacket will auto-find rackets in the scene
-        // Just create the manager if it doesn't exist
-        var existingManager = GameObject.Find("ControllerRacketManager");
-        if (existingManager == null)
+        // Each player spawns their own networked ControllerRacket
+        // The host spawns for itself, client spawns for itself
+        StartCoroutine(SpawnNetworkedRacketController());
+    }
+    
+    private IEnumerator SpawnNetworkedRacketController()
+    {
+        yield return new WaitForSeconds(0.5f);
+        
+        // Check if we already have a ControllerRacket for this player
+        var existingRacket = FindObjectsOfType<ControllerRacket>();
+        foreach (var r in existingRacket)
         {
-            var manager = new GameObject("ControllerRacketManager");
-            // Use string-based AddComponent to avoid compile order issues
-            var component = manager.AddComponent(System.Type.GetType("ControllerRacket"));
-            if (component != null)
+            if (r.Object != null && r.Object.HasInputAuthority)
             {
-                Debug.Log("[TableTennisManager] Created ControllerRacketManager - press grip to show racket on controller");
+                Debug.Log("[TableTennisManager] Already have a ControllerRacket for this player");
+                yield break;
             }
-            else
+        }
+        
+        // If networkedRacketPrefab is set, spawn it via Fusion
+        if (networkedRacketPrefab.IsValid && Runner != null)
+        {
+            Debug.Log("[TableTennisManager] Spawning networked ControllerRacket...");
+            
+            var spawnedRacket = Runner.Spawn(
+                networkedRacketPrefab, 
+                Vector3.zero, 
+                Quaternion.identity, 
+                Runner.LocalPlayer // Input authority to local player
+            );
+            
+            if (spawnedRacket != null)
             {
-                // Fallback: try direct add
+                Debug.Log($"[TableTennisManager] Spawned networked ControllerRacket for player {Runner.LocalPlayer}");
+            }
+        }
+        else
+        {
+            // Fallback: Create local-only ControllerRacket (won't be visible to other players)
+            Debug.LogWarning("[TableTennisManager] networkedRacketPrefab not set - using local-only racket (won't be visible to other players)");
+            
+            var existingManager = GameObject.Find("ControllerRacketManager");
+            if (existingManager == null)
+            {
+                var manager = new GameObject("ControllerRacketManager");
                 manager.AddComponent<ControllerRacket>();
-                Debug.Log("[TableTennisManager] Created ControllerRacketManager (direct)");
+                Debug.Log("[TableTennisManager] Created local ControllerRacketManager");
             }
         }
     }

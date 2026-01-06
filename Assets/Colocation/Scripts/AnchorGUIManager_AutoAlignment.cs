@@ -448,18 +448,38 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             if (localizedAnchors.Count >= 2)
             {
                 Log("Aligning to TWO anchors...");
-                // Assume first is Primary, second is Secondary (Forward)
-                // Or sort by creation time? OVR doesn't give creation time easily. 
-                // We rely on List order. Usually consistent if created and shared in order.
+                
+                // Note: Order doesn't matter for table placement (center = midpoint)
+                // Just use whatever order they were localized in
+                Log($"Client localizing anchors: {localizedAnchors[0].Uuid}, {localizedAnchors[1].Uuid}");
                 
                 _localizedAnchor = localizedAnchors[0]; // Set primary as main
                 alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1]);
+                
+                // CLIENT: Store anchor positions for scene transition
+                // Wait a frame for anchor positions to be updated after localization
+                await Task.Delay(100);
+                
+                FirstAnchorPosition = localizedAnchors[0].transform.position;
+                SecondAnchorPosition = localizedAnchors[1].transform.position;
+                FirstAnchorUuid = localizedAnchors[0].Uuid;
+                SecondAnchorUuid = localizedAnchors[1].Uuid;
+                TableHeightOffsetStatic = tableHeightOffset;
+                
+                Debug.Log($"[AnchorGUI] CLIENT: Stored anchor positions: first={FirstAnchorPosition}, second={SecondAnchorPosition}");
+                Debug.Log($"[AnchorGUI] CLIENT: Anchor UUIDs: first={FirstAnchorUuid}, second={SecondAnchorUuid}");
             }
             else if (localizedAnchors.Count == 1)
             {
                 Log("Only 1 anchor localized. Using single point alignment.");
                 _localizedAnchor = localizedAnchors[0];
                 alignmentManager.AlignUserToAnchor(localizedAnchors[0]);
+                
+                // Store single anchor position
+                await Task.Delay(100);
+                FirstAnchorPosition = localizedAnchors[0].transform.position;
+                FirstAnchorUuid = localizedAnchors[0].Uuid;
+                Debug.Log($"[AnchorGUI] CLIENT: Stored single anchor position: {FirstAnchorPosition}");
             }
             else
             {
@@ -537,10 +557,15 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 // HOST ALIGNMENT
                 if (anchorsToShare.Count >= 2)
                 {
-                    // Host aligns to its own anchors
-                    Log("Host: Aligning to 2 anchors...");
+                    // Note: Host already aligned via AlignTableToAnchors() when placing anchors
+                    // Static FirstAnchorPosition/SecondAnchorPosition already set there
+                    // Just do the camera rig alignment
+                    Log("Host: Aligning camera rig to 2 anchors...");
                     _localizedAnchor = anchorsToShare[0];
                     alignmentManager.AlignUserToTwoAnchors(anchorsToShare[0], anchorsToShare[1]);
+                    
+                    Debug.Log($"[AnchorGUI] HOST: Using existing anchor positions: first={FirstAnchorPosition}, second={SecondAnchorPosition}");
+                    Debug.Log($"[AnchorGUI] HOST: Anchor UUIDs: {anchorsToShare[0].Uuid}, {anchorsToShare[1].Uuid}");
                 }
                 else
                 {

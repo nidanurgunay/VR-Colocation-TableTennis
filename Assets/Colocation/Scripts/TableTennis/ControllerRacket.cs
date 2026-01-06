@@ -1,10 +1,12 @@
 using UnityEngine;
+using Fusion;
 
 /// <summary>
 /// Attaches a racket visual to the controller when grip is pressed.
 /// Controllers remain visible. Racket offset/rotation adjustable with thumbsticks when in adjust mode.
+/// Also syncs racket position/visibility to other players via Fusion.
 /// </summary>
-public class ControllerRacket : MonoBehaviour
+public class ControllerRacket : NetworkBehaviour
 {
     [Header("Racket Prefab (optional - will auto-find if not set)")]
     [SerializeField] private GameObject racketPrefab; // Racket model to show on controller
@@ -18,7 +20,18 @@ public class ControllerRacket : MonoBehaviour
     
     [Header("Adjustment Settings")]
     [SerializeField] private float rotationAdjustSpeed = 45f; // Degrees per second
-    [SerializeField] private bool showControllersAlways = true; // Keep controllers visible
+    [SerializeField] private bool showControllersAlways = false; // Set to true to keep controllers visible alongside rackets
+    
+    [Header("Network Settings")]
+    [SerializeField] private float networkUpdateRate = 0.05f; // 20 updates per second
+    
+    // Networked state for other players to see our racket
+    [Networked] private Vector3 NetworkedRightRacketPos { get; set; }
+    [Networked] private Quaternion NetworkedRightRacketRot { get; set; }
+    [Networked] private NetworkBool NetworkedRightRacketVisible { get; set; }
+    [Networked] private Vector3 NetworkedLeftRacketPos { get; set; }
+    [Networked] private Quaternion NetworkedLeftRacketRot { get; set; }
+    [Networked] private NetworkBool NetworkedLeftRacketVisible { get; set; }
     
     // Adjust mode - toggle with A button
     private bool isAdjustMode = false;
@@ -31,9 +44,13 @@ public class ControllerRacket : MonoBehaviour
     private GameObject leftControllerVisual;
     private GameObject rightControllerVisual;
     
-    // Racket instances attached to controllers
+    // Racket instances attached to controllers (local player)
     private GameObject leftRacket;
     private GameObject rightRacket;
+    
+    // Remote player racket representations
+    private GameObject remoteLeftRacket;
+    private GameObject remoteRightRacket;
     
     // Toggle states
     private bool leftActive = false;
@@ -41,8 +58,56 @@ public class ControllerRacket : MonoBehaviour
     private bool leftWasPressed = false;
     private bool rightWasPressed = false;
     
+    // Network sync timing
+    private float lastNetworkUpdate = 0f;
+    private bool isLocalPlayer = false;
+    private bool isInitialized = false;
+    private bool isNetworked = false; // True if spawned via Fusion, false if local-only
+    
+    /// <summary>
+    /// Called when spawned via Fusion network
+    /// </summary>
+    public override void Spawned()
+    {
+        base.Spawned();
+        isNetworked = true;
+        isLocalPlayer = Object.HasInputAuthority;
+        Debug.Log($"[ControllerRacket] Spawned via Fusion - IsLocalPlayer: {isLocalPlayer}");
+        
+        if (isLocalPlayer)
+        {
+            // Local player - setup controller tracking
+            InitializeLocalPlayer();
+        }
+        else
+        {
+            // Remote player - create visual representations
+            StartCoroutine(CreateRemoteRackets());
+        }
+    }
+    
+    /// <summary>
+    /// Called for local-only (non-networked) instances
+    /// </summary>
     private void Start()
     {
+        // If already initialized via Spawned(), skip
+        if (isInitialized) return;
+        
+        // Check if we have a NetworkObject - if not, this is a local-only instance
+        if (Object == null || !Object.IsValid)
+        {
+            Debug.Log("[ControllerRacket] Starting as local-only (no network sync)");
+            isNetworked = false;
+            isLocalPlayer = true; // Local-only always controls itself
+            InitializeLocalPlayer();
+        }
+    }
+    
+    private void InitializeLocalPlayer()
+    {
+        if (isInitialized) return;
+        isInitialized = true;
         Debug.Log($"[RACKET_DEBUG] ControllerRacket Start - Rotation: {racketRotation}, Offset: {racketOffset}, Scale: {racketScale}");
         FindControllers();
         
@@ -276,6 +341,9 @@ public class ControllerRacket : MonoBehaviour
     
     private void Update()
     {
+        // Only process input for local player
+        if (!isLocalPlayer) return;
+        
         // Retry finding racket if not found in Start
         if (racketPrefab == null)
         {
@@ -477,5 +545,107 @@ public class ControllerRacket : MonoBehaviour
         if (controller == OVRInput.Controller.LTouch) return leftRacket;
         if (controller == OVRInput.Controller.RTouch) return rightRacket;
         return null;
+    }
+    
+    /// <summary>
+    /// Create visual representations of the remote player's rackets
+    /// </summary>
+    private System.Collections.IEnumerator CreateRemoteRackets()
+    {
+        // Wait for racket template to be available
+        while (racketPrefab == null)
+        {
+            TryFindRacketTemplate();
+            yield return new WaitForSeconds(0.2f);
+        }
+        
+        // Create remote racket visuals (not parented to controllers)
+        remoteRightRacket = Instantiate(racketPrefab);
+        remoteRightRacket.name = "RemoteRightRacket";
+        remoteRightRacket.transform.localScale = Vector3.one * racketScale;
+        remoteRightRacket.SetActive(false);
+        CleanupRacketComponents(remoteRightRacket);
+        
+        remoteLeftRacket = Instantiate(racketPrefab);
+        remoteLeftRacket.name = "RemoteLeftRacket";
+        remoteLeftRacket.transform.localScale = Vector3.one * racketScale;
+        remoteLeftRacket.SetActive(false);
+        CleanupRacketComponents(remoteLeftRacket);
+        
+        Debug.Log("[ControllerRacket] Created remote player racket visuals");
+    }
+    
+    /// <summary>
+    /// Sync local racket state to network (called in FixedUpdateNetwork)
+    /// </summary>
+    public override void FixedUpdateNetwork()
+    {
+        if (!isLocalPlayer) return;
+        
+        // Sync right racket
+        if (rightRacket != null && rightActive)
+        {
+            NetworkedRightRacketPos = rightRacket.transform.position;
+            NetworkedRightRacketRot = rightRacket.transform.rotation;
+            NetworkedRightRacketVisible = true;
+        }
+        else
+        {
+            NetworkedRightRacketVisible = false;
+        }
+        
+        // Sync left racket
+        if (leftRacket != null && leftActive)
+        {
+            NetworkedLeftRacketPos = leftRacket.transform.position;
+            NetworkedLeftRacketRot = leftRacket.transform.rotation;
+            NetworkedLeftRacketVisible = true;
+        }
+        else
+        {
+            NetworkedLeftRacketVisible = false;
+        }
+    }
+    
+    /// <summary>
+    /// Update remote racket positions (called in Render for smooth interpolation)
+    /// </summary>
+    public override void Render()
+    {
+        if (isLocalPlayer) return;
+        
+        // Update remote right racket
+        if (remoteRightRacket != null)
+        {
+            remoteRightRacket.SetActive(NetworkedRightRacketVisible);
+            if (NetworkedRightRacketVisible)
+            {
+                remoteRightRacket.transform.position = Vector3.Lerp(
+                    remoteRightRacket.transform.position, 
+                    NetworkedRightRacketPos, 
+                    Time.deltaTime * 20f);
+                remoteRightRacket.transform.rotation = Quaternion.Slerp(
+                    remoteRightRacket.transform.rotation, 
+                    NetworkedRightRacketRot, 
+                    Time.deltaTime * 20f);
+            }
+        }
+        
+        // Update remote left racket
+        if (remoteLeftRacket != null)
+        {
+            remoteLeftRacket.SetActive(NetworkedLeftRacketVisible);
+            if (NetworkedLeftRacketVisible)
+            {
+                remoteLeftRacket.transform.position = Vector3.Lerp(
+                    remoteLeftRacket.transform.position, 
+                    NetworkedLeftRacketPos, 
+                    Time.deltaTime * 20f);
+                remoteLeftRacket.transform.rotation = Quaternion.Slerp(
+                    remoteLeftRacket.transform.rotation, 
+                    NetworkedLeftRacketRot, 
+                    Time.deltaTime * 20f);
+            }
+        }
     }
 }
