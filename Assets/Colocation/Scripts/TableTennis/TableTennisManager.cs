@@ -925,7 +925,14 @@ public class TableTennisManager : NetworkBehaviour
                 if (ballObj != null)
                 {
                     spawnedBall = ballObj.GetComponent<NetworkedBall>();
-                    Debug.Log($"[TableTennisManager] Also spawned networked ball at {spawnPosition}");
+                    
+                    // IMPORTANT: Unparent the ball so it's not affected by PingPong object transforms
+                    ballObj.transform.SetParent(null);
+                    
+                    // Force world position (in case parent had offset)
+                    ballObj.transform.position = spawnPosition;
+                    
+                    Debug.Log($"[TableTennisManager] Spawned networked ball at {spawnPosition}, unparented to world root");
                 }
             }
             catch (System.Exception e)
@@ -940,19 +947,24 @@ public class TableTennisManager : NetworkBehaviour
     /// </summary>
     private void CreateLocalBall(Vector3 position)
     {
-        Debug.Log($"[TableTennisManager] Creating local ball at {position}");
+        Debug.Log($"[TableTennisManager] Creating local ball at WORLD position: {position}");
         
-        // Create sphere primitive
+        // Create sphere primitive (at world root, not parented)
         GameObject ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         ball.name = "LocalPingPongBall";
-        ball.transform.position = position;
+        ball.transform.SetParent(null); // Ensure it's at world root
+        ball.transform.position = position; // Set WORLD position
         ball.transform.localScale = Vector3.one * 0.08f; // 8cm diameter for visibility
         
-        // Set material to white/orange for visibility
+        // Set material to bright orange for visibility
         var renderer = ball.GetComponent<Renderer>();
         if (renderer != null)
         {
             Material mat = new Material(Shader.Find("Standard"));
+            if (mat.shader == null || mat.shader.name == "Hidden/InternalErrorShader")
+            {
+                mat = new Material(Shader.Find("Unlit/Color"));
+            }
             mat.color = new Color(1f, 0.5f, 0f); // Orange color for visibility
             renderer.material = mat;
         }
@@ -968,7 +980,7 @@ public class TableTennisManager : NetworkBehaviour
         var networkedBall = ball.AddComponent<NetworkedBall>();
         networkedBall.EnterPositioningMode();
         
-        Debug.Log($"[TableTennisManager] Created local ball at {position} - IN POSITIONING MODE (use thumbsticks to adjust, hit to start)");
+        Debug.Log($"[TableTennisManager] Created local ball at {ball.transform.position} - WORLD ROOT, IN POSITIONING MODE");
     }
     
     /// <summary>
