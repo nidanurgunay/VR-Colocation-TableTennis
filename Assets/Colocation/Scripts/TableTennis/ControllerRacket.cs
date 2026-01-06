@@ -20,6 +20,9 @@ public class ControllerRacket : NetworkBehaviour
     
     [Header("Adjustment Settings")]
     [SerializeField] private float rotationAdjustSpeed = 45f; // Degrees per second
+    
+    [Header("Controller Visibility")]
+    [Tooltip("When enabled, Quest controllers remain visible alongside the rackets")]
     [SerializeField] private bool showControllersAlways = false; // Set to true to keep controllers visible alongside rackets
     
     [Header("Network Settings")]
