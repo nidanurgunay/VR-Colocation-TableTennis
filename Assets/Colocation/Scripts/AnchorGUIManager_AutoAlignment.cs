@@ -925,12 +925,19 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private void CheckControllerAnchorPlacement()
     {
         // A button on right controller (Button.One on RTouch)
-        // X button on left controller (Button.Three on LTouch)
+        // X button on left controller (Button.Three on LTouch OR Button.One on LTouch)
         bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
-        bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch);
+        bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch) ||
+                        OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
         
-        if (aPressed || xPressed)
+        // Also check without specifying controller (in case controller detection is different)
+        bool anyAPressed = OVRInput.GetDown(OVRInput.Button.One);
+        bool anyXPressed = OVRInput.GetDown(OVRInput.Button.Three);
+        
+        if (aPressed || xPressed || anyAPressed || anyXPressed)
         {
+            Debug.Log($"[AnchorGUI] Button pressed! A={aPressed}, X={xPressed}, anyA={anyAPressed}, anyX={anyXPressed}");
+            
             // Get the controller that was pressed
             var cameraRig = FindObjectOfType<OVRCameraRig>();
             Vector3 anchorPosition = Vector3.zero;
@@ -938,7 +945,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             
             if (cameraRig != null)
             {
-                Transform controller = aPressed ? cameraRig.rightControllerAnchor : cameraRig.leftControllerAnchor;
+                // Prefer right controller for A, left for X
+                Transform controller = (aPressed || anyAPressed) ? cameraRig.rightControllerAnchor : cameraRig.leftControllerAnchor;
                 if (controller != null)
                 {
                     // Place anchor at controller position, flat rotation (only Y axis)
