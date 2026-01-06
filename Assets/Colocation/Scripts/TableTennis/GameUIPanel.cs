@@ -11,14 +11,14 @@ public class GameUIPanel : MonoBehaviour
 {
     [Header("Settings")]
     [SerializeField] private float wallHeight = 1.5f; // Height on wall
-    [SerializeField] private float wallDistance = 3.0f; // Distance from table center to wall
+    [SerializeField] private float wallDistance = 2.5f; // Distance from table center to wall
     [SerializeField] private float fontSize = 0.8f; // Smaller font size
     [SerializeField] private Color scoreColor = Color.yellow;
     [SerializeField] private Color infoColor = Color.green; // Player info color
     [SerializeField] private Color statusColor = Color.white;
     [SerializeField] private Color controlsColor = Color.cyan; // Color for controls info
     [SerializeField] private Color backgroundColor = new Color(0.1f, 0.1f, 0.3f, 0.95f); // Dark blue
-    [SerializeField] private Vector2 backgroundSize = new Vector2(1.2f, 1.2f); // Background size - taller for more text spread
+    [SerializeField] private Vector2 backgroundSize = new Vector2(1.8f, 1.2f); // Wider background panel
     [SerializeField] private int winScore = 11; // Score needed to win
     
     // Container for all 4 wall panels
