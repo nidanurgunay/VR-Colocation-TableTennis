@@ -123,19 +123,35 @@ public class NetworkedBall : NetworkBehaviour
                 existingRenderer = gameObject.AddComponent<MeshRenderer>();
             }
             
-            // Create material
-            Material mat = new Material(Shader.Find("Standard"));
-            if (mat.shader == null || mat.shader.name == "Hidden/InternalErrorShader")
+            // Create material - use URP compatible shader
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Simple Lit");
+            if (shader == null) shader = Shader.Find("Unlit/Color");
+            if (shader == null) shader = Shader.Find("Standard");
+            
+            Material mat;
+            if (shader != null)
             {
-                mat = new Material(Shader.Find("Unlit/Color"));
+                mat = new Material(shader);
+                mat.color = ballColor;
+                // Set base color for URP shaders
+                if (mat.HasProperty("_BaseColor"))
+                {
+                    mat.SetColor("_BaseColor", ballColor);
+                }
             }
-            mat.color = ballColor;
+            else
+            {
+                // Fallback: use primitive's default material
+                mat = sphere.GetComponent<Renderer>().material;
+                mat.color = ballColor;
+            }
             existingRenderer.material = mat;
             
             // Clean up temporary sphere
             Destroy(sphere);
             
-            Debug.Log("[NetworkedBall] Created ball visual");
+            Debug.Log("[NetworkedBall] Created ball visual with URP shader");
         }
         
         // Set correct scale for ping pong ball size
@@ -310,8 +326,13 @@ public class NetworkedBall : NetworkBehaviour
     public void EnterPositioningMode()
     {
         localPositioningMode = true;
-        IsInPositioningMode = true;
-        IsInPlay = false;
+        
+        // Only access networked properties if spawned
+        if (Object != null && Object.IsValid)
+        {
+            IsInPositioningMode = true;
+            IsInPlay = false;
+        }
         
         if (rb != null)
         {
@@ -329,9 +350,14 @@ public class NetworkedBall : NetworkBehaviour
     public void ExitPositioningMode()
     {
         localPositioningMode = false;
-        IsInPositioningMode = false;
         
-        if (rb != null && Object.HasStateAuthority)
+        // Only access networked property if spawned
+        if (Object != null && Object.IsValid)
+        {
+            IsInPositioningMode = false;
+        }
+        
+        if (rb != null && (Object == null || !Object.IsValid || Object.HasStateAuthority))
         {
             rb.isKinematic = false;
         }
@@ -340,9 +366,20 @@ public class NetworkedBall : NetworkBehaviour
     }
     
     /// <summary>
-    /// Check if ball is in positioning mode
+    /// Check if ball is in positioning mode (safe to call before Spawned)
     /// </summary>
-    public bool InPositioningMode => IsInPositioningMode || localPositioningMode;
+    public bool InPositioningMode
+    {
+        get
+        {
+            // Use local flag if not spawned yet, otherwise check networked state
+            if (Object == null || !Object.IsValid)
+            {
+                return localPositioningMode;
+            }
+            return IsInPositioningMode || localPositioningMode;
+        }
+    }
     
     private void SimulatePhysics()
     {

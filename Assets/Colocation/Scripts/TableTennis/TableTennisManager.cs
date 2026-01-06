@@ -956,16 +956,35 @@ public class TableTennisManager : NetworkBehaviour
         ball.transform.position = position; // Set WORLD position
         ball.transform.localScale = Vector3.one * 0.08f; // 8cm diameter for visibility
         
-        // Set material to bright orange for visibility
+        // Set material to bright orange for visibility - use URP compatible shader
         var renderer = ball.GetComponent<Renderer>();
         if (renderer != null)
         {
-            Material mat = new Material(Shader.Find("Standard"));
-            if (mat.shader == null || mat.shader.name == "Hidden/InternalErrorShader")
+            // Try different shaders in order of preference for URP
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Simple Lit");
+            if (shader == null) shader = Shader.Find("Unlit/Color");
+            if (shader == null) shader = Shader.Find("Standard");
+            
+            Material mat;
+            if (shader != null)
             {
-                mat = new Material(Shader.Find("Unlit/Color"));
+                mat = new Material(shader);
+                mat.color = new Color(1f, 0.5f, 0f); // Orange color
+                
+                // Set base color for URP shaders
+                if (mat.HasProperty("_BaseColor"))
+                {
+                    mat.SetColor("_BaseColor", new Color(1f, 0.5f, 0f));
+                }
             }
-            mat.color = new Color(1f, 0.5f, 0f); // Orange color for visibility
+            else
+            {
+                // Fallback: use the primitive's default material and just change color
+                mat = renderer.material;
+                mat.color = new Color(1f, 0.5f, 0f);
+            }
+            
             renderer.material = mat;
         }
         
@@ -976,9 +995,8 @@ public class TableTennisManager : NetworkBehaviour
         rb.isKinematic = true; // Start kinematic - no gravity until hit
         rb.useGravity = false;
         
-        // Add NetworkedBall component - it will enter positioning mode
-        var networkedBall = ball.AddComponent<NetworkedBall>();
-        networkedBall.EnterPositioningMode();
+        // Store reference but don't add NetworkedBall component to local ball
+        // This avoids the Spawned() issue - local ball is just a visual placeholder
         
         Debug.Log($"[TableTennisManager] Created local ball at {ball.transform.position} - WORLD ROOT, IN POSITIONING MODE");
     }
