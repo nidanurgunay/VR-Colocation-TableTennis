@@ -18,6 +18,8 @@ GameObject:
   - component: {fileID: 7914212422977640956}
   - component: {fileID: 5864727435157048093}
   - component: {fileID: 1744576309079787925}
+  - component: {fileID: 5064950107707085232}
+  - component: {fileID: -7981173647025234666}
   m_Layer: 0
   m_Name: NetworkedGrabbableBall
   m_TagString: Untagged
@@ -54,7 +56,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   blockId: e9b4b64f-1c7e-4dff-8f3c-ce409bdc3951
-  instanceId: 7020f3ad-1628-42f5-b529-e8f06bd74130
+  instanceId: b9ef5de5-7571-4f6b-8fa7-495847d7a93d
   version: 1
   installationRoutineCheckpoint:
     _installationRoutineId: 54548176-30f4-4a4a-8057-340a383c6102
@@ -172,6 +174,8 @@ MonoBehaviour:
   NetworkedBehaviours:
   - {fileID: 7914212422977640956}
   - {fileID: 5864727435157048093}
+  - {fileID: 5064950107707085232}
+  - {fileID: -7981173647025234666}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &7914212422977640956
 MonoBehaviour:
@@ -223,6 +227,58 @@ SphereCollider:
   serializedVersion: 3
   m_Radius: 0.2
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &5064950107707085232
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2283905976094625989}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f6ff41d4e9de84ab4850cf940db0e5c2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  gravity: 9.81
+  bounciness: 0.85
+  airResistance: 0.02
+  tableHeight: 0.76
+  serveHeight: 0.4
+  serveDistanceFromCenter: 0.8
+  serveForce: 3
+  tableObject: {fileID: 0}
+  tableTag: Table
+  syncRate: 30
+  resetBelowY: -1
+  resetAfterSeconds: 5
+  ballRadius: 0.04
+  ballColor: {r: 1, g: 0.5, b: 0, a: 1}
+--- !u!114 &-7981173647025234666
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2283905976094625989}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f6ff41d4e9de84ab4850cf940db0e5c2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  gravity: 9.81
+  bounciness: 0.85
+  airResistance: 0.02
+  tableHeight: 0.76
+  serveHeight: 0.4
+  serveDistanceFromCenter: 0.8
+  serveForce: 3
+  tableObject: {fileID: 0}
+  tableTag: Table
+  syncRate: 30
+  resetBelowY: -1
+  resetAfterSeconds: 5
+  ballRadius: 0.04
+  ballColor: {r: 1, g: 0.5, b: 0, a: 1}
 --- !u!1 &2824423258401481701
 GameObject:
   m_ObjectHideFlags: 0
@@ -271,7 +327,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   blockId: f8766c17-aaf8-4b55-9431-de8deea83842
-  instanceId: 0eff00dd-c2be-449d-ab6c-f39446518c53
+  instanceId: e48f0405-f824-4bf9-b206-6fb5ce783938
   version: 1
   installationRoutineCheckpoint:
     _installationRoutineId: f8338144-8280-4ff6-9455-ae2bb9c20fe8
