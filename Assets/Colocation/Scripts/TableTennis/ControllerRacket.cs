@@ -51,6 +51,12 @@ public class ControllerRacket : NetworkBehaviour
     private GameObject leftRacket;
     private GameObject rightRacket;
     
+    // Rigidbodies for velocity tracking
+    private Rigidbody leftRacketRb;
+    private Rigidbody rightRacketRb;
+    private Vector3 lastLeftPos;
+    private Vector3 lastRightPos;
+    
     // Remote player racket representations
     private GameObject remoteLeftRacket;
     private GameObject remoteRightRacket;
@@ -307,6 +313,7 @@ public class ControllerRacket : NetworkBehaviour
             
             // Remove any physics/grab components
             CleanupRacketComponents(leftRacket);
+            leftRacketRb = leftRacket.GetComponent<Rigidbody>();
         }
         
         // Create right controller racket
@@ -328,6 +335,7 @@ public class ControllerRacket : NetworkBehaviour
             
             // Remove any physics/grab components
             CleanupRacketComponents(rightRacket);
+            rightRacketRb = rightRacket.GetComponent<Rigidbody>();
         }
         
         Debug.Log("[ControllerRacket] Created racket visuals on controllers (press B/Y to show)");
@@ -335,11 +343,61 @@ public class ControllerRacket : NetworkBehaviour
     
     private void CleanupRacketComponents(GameObject racket)
     {
-        // Remove components that shouldn't be on the controller-attached version
+        // Remove existing rigidbody - we'll add a kinematic one for velocity tracking
         var rb = racket.GetComponent<Rigidbody>();
         if (rb != null) Destroy(rb);
         
-        // Keep collider for ball hits
+        // Add a kinematic rigidbody for velocity tracking
+        rb = racket.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        
+        // Set tag for collision detection
+        racket.tag = "Racket";
+        
+        // Ensure there's a collider
+        var existingCollider = racket.GetComponent<Collider>();
+        if (existingCollider == null)
+        {
+            // Add a box collider if none exists
+            var boxCollider = racket.AddComponent<BoxCollider>();
+            boxCollider.size = new Vector3(0.15f, 0.01f, 0.15f); // Flat paddle shape
+            boxCollider.isTrigger = false; // Use collision, not trigger
+            Debug.Log("[ControllerRacket] Added box collider to racket");
+        }
+        else
+        {
+            // Make sure existing collider is not a trigger
+            existingCollider.isTrigger = false;
+        }
+        
+        // Also tag all child objects that have colliders
+        foreach (var childCollider in racket.GetComponentsInChildren<Collider>())
+        {
+            childCollider.gameObject.tag = "Racket";
+            childCollider.isTrigger = false;
+        }
+        
+        Debug.Log($"[ControllerRacket] Racket setup complete: {racket.name}, tag={racket.tag}");
+    }
+    
+    private void FixedUpdate()
+    {
+        // Update racket velocities for collision detection
+        if (leftRacketRb != null && leftRacket != null && leftRacket.activeSelf)
+        {
+            Vector3 currentPos = leftRacket.transform.position;
+            leftRacketRb.velocity = (currentPos - lastLeftPos) / Time.fixedDeltaTime;
+            lastLeftPos = currentPos;
+        }
+        
+        if (rightRacketRb != null && rightRacket != null && rightRacket.activeSelf)
+        {
+            Vector3 currentPos = rightRacket.transform.position;
+            rightRacketRb.velocity = (currentPos - lastRightPos) / Time.fixedDeltaTime;
+            lastRightPos = currentPos;
+        }
     }
     
     private void Update()

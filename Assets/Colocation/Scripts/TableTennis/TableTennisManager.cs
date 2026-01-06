@@ -952,6 +952,7 @@ public class TableTennisManager : NetworkBehaviour
         // Create sphere primitive (at world root, not parented)
         GameObject ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         ball.name = "LocalPingPongBall";
+        ball.tag = "Ball"; // Tag for collision detection
         ball.transform.SetParent(null); // Ensure it's at world root
         ball.transform.position = position; // Set WORLD position
         ball.transform.localScale = Vector3.one * 0.08f; // 8cm diameter for visibility
@@ -988,15 +989,17 @@ public class TableTennisManager : NetworkBehaviour
             renderer.material = mat;
         }
         
-        // Add rigidbody but keep kinematic for positioning mode
+        // Add rigidbody - start kinematic for positioning mode
         var rb = ball.AddComponent<Rigidbody>();
         rb.mass = 0.0027f;
         rb.drag = 0.1f;
         rb.isKinematic = true; // Start kinematic - no gravity until hit
         rb.useGravity = false;
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
         
-        // Store reference but don't add NetworkedBall component to local ball
-        // This avoids the Spawned() issue - local ball is just a visual placeholder
+        // Add local ball handler for collision detection
+        var ballHandler = ball.AddComponent<LocalBallHandler>();
+        ballHandler.Initialize(rb);
         
         Debug.Log($"[TableTennisManager] Created local ball at {ball.transform.position} - WORLD ROOT, IN POSITIONING MODE");
     }
