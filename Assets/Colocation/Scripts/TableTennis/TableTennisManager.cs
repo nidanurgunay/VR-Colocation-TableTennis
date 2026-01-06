@@ -867,20 +867,36 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (ballPrefab == default)
         {
-            Debug.LogError("[TableTennisManager] Ball prefab not assigned!");
+            Debug.LogError("[TableTennisManager] Ball prefab not assigned! Please assign it in the Inspector.");
             return;
         }
         
         Vector3 spawnPosition = Vector3.zero;
         
-        if (tableTransform != null)
+        // Calculate spawn position relative to table
+        if (tableRoot != null)
+        {
+            spawnPosition = tableRoot.transform.position + ballSpawnOffset;
+            Debug.Log($"[TableTennisManager] Ball spawn using tableRoot: {tableRoot.name} at {tableRoot.transform.position}");
+        }
+        else if (tableTransform != null)
         {
             spawnPosition = tableTransform.TransformPoint(ballSpawnOffset);
+            Debug.Log($"[TableTennisManager] Ball spawn using tableTransform at {tableTransform.position}");
         }
         else if (sharedAnchor != null)
         {
             spawnPosition = sharedAnchor.TransformPoint(new Vector3(0, 1.2f, 0));
+            Debug.Log($"[TableTennisManager] Ball spawn using sharedAnchor at {sharedAnchor.position}");
         }
+        else
+        {
+            // Fallback: spawn at a reasonable default position
+            spawnPosition = new Vector3(0, 1.0f, 0);
+            Debug.LogWarning("[TableTennisManager] No table reference, spawning ball at default position");
+        }
+        
+        Debug.Log($"[TableTennisManager] Spawning ball at position: {spawnPosition}");
         
         var ballObj = Runner.Spawn(
             ballPrefab,
@@ -892,7 +908,11 @@ public class TableTennisManager : NetworkBehaviour
         if (ballObj != null)
         {
             spawnedBall = ballObj.GetComponent<NetworkedBall>();
-            Debug.Log($"[TableTennisManager] Spawned networked ball at {spawnPosition}");
+            Debug.Log($"[TableTennisManager] Successfully spawned networked ball at {spawnPosition}, NetworkObject: {ballObj.Id}");
+        }
+        else
+        {
+            Debug.LogError("[TableTennisManager] Failed to spawn ball! Runner.Spawn returned null.");
         }
     }
     

@@ -50,6 +50,10 @@ public class NetworkedBall : NetworkBehaviour
     private Vector3 previousPosition;
     private float interpolationTime;
     
+    [Header("Visual Settings")]
+    [SerializeField] private float ballRadius = 0.02f; // 40mm diameter standard ping pong ball
+    [SerializeField] private Color ballColor = Color.white;
+    
     public override void Spawned()
     {
         rb = GetComponent<Rigidbody>();
@@ -58,6 +62,9 @@ public class NetworkedBall : NetworkBehaviour
         {
             rb = gameObject.AddComponent<Rigidbody>();
         }
+        
+        // Ensure ball has a visual mesh
+        EnsureBallVisual();
         
         // Configure rigidbody
         rb.mass = 0.0027f; // Ping pong ball: 2.7 grams
@@ -79,7 +86,65 @@ public class NetworkedBall : NetworkBehaviour
             StartCoroutine(TryFindAnchorAndInitialize());
         }
         
-        Debug.Log($"[NetworkedBall] Spawned. HasStateAuthority: {Object.HasStateAuthority}");
+        Debug.Log($"[NetworkedBall] Spawned. HasStateAuthority: {Object.HasStateAuthority}, Position: {transform.position}");
+    }
+    
+    /// <summary>
+    /// Ensure the ball has a visible mesh and collider
+    /// </summary>
+    private void EnsureBallVisual()
+    {
+        // Check if already has a mesh renderer
+        MeshRenderer existingRenderer = GetComponent<MeshRenderer>();
+        MeshFilter existingFilter = GetComponent<MeshFilter>();
+        
+        if (existingRenderer == null || existingFilter == null)
+        {
+            // Create a sphere visual
+            GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            
+            // Copy mesh filter
+            MeshFilter sphereFilter = sphere.GetComponent<MeshFilter>();
+            if (existingFilter == null)
+            {
+                existingFilter = gameObject.AddComponent<MeshFilter>();
+            }
+            existingFilter.mesh = sphereFilter.sharedMesh;
+            
+            // Copy mesh renderer
+            if (existingRenderer == null)
+            {
+                existingRenderer = gameObject.AddComponent<MeshRenderer>();
+            }
+            
+            // Create material
+            Material mat = new Material(Shader.Find("Standard"));
+            if (mat.shader == null || mat.shader.name == "Hidden/InternalErrorShader")
+            {
+                mat = new Material(Shader.Find("Unlit/Color"));
+            }
+            mat.color = ballColor;
+            existingRenderer.material = mat;
+            
+            // Clean up temporary sphere
+            Destroy(sphere);
+            
+            Debug.Log("[NetworkedBall] Created ball visual");
+        }
+        
+        // Set correct scale for ping pong ball size
+        transform.localScale = Vector3.one * (ballRadius * 2f);
+        
+        // Ensure collider exists
+        SphereCollider collider = GetComponent<SphereCollider>();
+        if (collider == null)
+        {
+            collider = gameObject.AddComponent<SphereCollider>();
+            collider.radius = 0.5f; // Normalized to scale
+        }
+        
+        Debug.Log($"[NetworkedBall] Ball visual ensured. Scale: {transform.localScale}, Position: {transform.position}");
+    }
     }
     
     private IEnumerator TryFindAnchorAndInitialize()
