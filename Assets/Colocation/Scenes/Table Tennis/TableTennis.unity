@@ -3314,6 +3314,7 @@ Transform:
   - {fileID: 1355316891}
   - {fileID: 1109389068}
   - {fileID: 1740373548}
+  - {fileID: 237327607}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &148230977
@@ -6006,12 +6007,17 @@ PrefabInstance:
   serializedVersion: 2
   m_Modification:
     serializedVersion: 3
-    m_TransformParent: {fileID: 0}
+    m_TransformParent: {fileID: 147324723}
     m_Modifications:
     - target: {fileID: 1336064221633153689, guid: 0359ed46faed84f4ab2e4be3e7bc88c5,
         type: 3}
       propertyPath: m_Name
       value: PingPongTable
+      objectReference: {fileID: 0}
+    - target: {fileID: 1336064221633153689, guid: 0359ed46faed84f4ab2e4be3e7bc88c5,
+        type: 3}
+      propertyPath: m_TagString
+      value: Table
       objectReference: {fileID: 0}
     - target: {fileID: 2653181533822351498, guid: 0359ed46faed84f4ab2e4be3e7bc88c5,
         type: 3}
@@ -12951,6 +12957,93 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
+--- !u!1 &513146811
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 513146814}
+  - component: {fileID: 513146813}
+  - component: {fileID: 513146812}
+  m_Layer: 0
+  m_Name: TableTennisGameManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &513146812
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 513146811}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  SortKey: 3038018868
+  ObjectInterest: 1
+  Flags: 786433
+  NestedObjects: []
+  NetworkedBehaviours:
+  - {fileID: 513146813}
+  ForceRemoteRenderTimeframe: 0
+--- !u!114 &513146813
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 513146811}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 26b79f1e43f264f0bb2e067ff403083e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  pointsToWin: 11
+  servesPerPlayer: 2
+  deucePointThreshold: 10
+  tableHalfLength: 1.37
+  tableWidth: 1.525
+  tableHeight: 0.76
+  netHeight: 0.1525
+  tableObject: {fileID: 0}
+  tableTag: Table
+  player1ScoreText: {fileID: 0}
+  player2ScoreText: {fileID: 0}
+  gameStatusText: {fileID: 0}
+  scoreSound: {fileID: 0}
+  bounceSound: {fileID: 0}
+  winSound: {fileID: 0}
+  _Player1Score: 0
+  _Player2Score: 0
+  _CurrentServer: 0
+  _ServeCount: 0
+  _CurrentGameState: 0
+  _LastHitBy: 0
+  _BounceCount: 0
+  _LastBounceSide: 0
+--- !u!4 &513146814
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 513146811}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &518437165
 GameObject:
   m_ObjectHideFlags: 0
@@ -19239,6 +19332,7 @@ MonoBehaviour:
   racketPrefab: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
     type: 3}
   tablePositionOffset: {x: 0, y: 0, z: 0}
+  defaultTableHeight: 0.76
   tableXRotationOffset: 180
   tableYRotationOffset: 0
   moveSpeed: 2
@@ -25466,6 +25560,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   alignmentManager: {fileID: 1453752133}
   autoStartColocation: 0
+  networkedPlayerPrefab:
+    RawGuidValue: 00000000000000000000000000000000
   autoAlignButton: {fileID: 0}
   spawnCubeButton: {fileID: 0}
   resetButton: {fileID: 0}
@@ -25488,6 +25584,9 @@ MonoBehaviour:
   sessionName: MyVRSession
   autoStartSession: 0
   autoAlignOnStart: 0
+  tableObject: {fileID: 0}
+  tableTag: Table
+  tableHeightOffset: 0
 --- !u!114 &1131986600
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -45832,6 +45931,54 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1110691651}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2052588396
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2052588398}
+  - component: {fileID: 2052588397}
+  m_Layer: 0
+  m_Name: GameUIPanel
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &2052588397
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2052588396}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7edf00b9ddd4148fd8e622c7e7480521, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  heightAboveTable: 0.5
+  textSize: 0.15
+  scoreColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  statusColor: {r: 1, g: 1, b: 1, a: 1}
+--- !u!4 &2052588398
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2052588396}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2052689712
 GameObject:
   m_ObjectHideFlags: 0
@@ -48074,4 +48221,5 @@ SceneRoots:
   - {fileID: 463547535}
   - {fileID: 827673575}
   - {fileID: 905452588}
-  - {fileID: 237327606}
+  - {fileID: 2052588398}
+  - {fileID: 513146814}

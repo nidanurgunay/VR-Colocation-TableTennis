@@ -72,9 +72,35 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private AlignmentStep currentStep = AlignmentStep.Start;
     private bool anchorPlacementMode = false; // True when user can place anchors with A/X buttons
     private Transform firstAnchorTransform; // Reference to first anchor for distance calculation
+    private Transform secondAnchorTransform; // Reference to second anchor
+    private Vector3 firstAnchorPosition; // Stored position of first anchor (more reliable than transform)
+    private Vector3 secondAnchorPosition; // Stored position of second anchor
     private GameObject distanceDisplayObj; // Floating text showing distance
     private TextMeshPro distanceText; // 3D text component
-
+    
+    [Header("Table Alignment")]
+    [SerializeField] private Transform tableObject; // The table to align between anchors
+    [SerializeField] private string tableTag = "Table"; // Tag to find table if not assigned
+    [SerializeField] private float tableHeightOffset = 0f; // Height offset from anchor average
+    
+    // Static variables - persist between scenes for TableTennisManager to use
+    public static Vector3 AlignedTablePosition { get; private set; }
+    public static Quaternion AlignedTableRotation { get; private set; }
+    public static bool TableWasAligned { get; private set; } = false;
+    
+    // Static anchor positions - for recalculating in TableTennis scene
+    public static Vector3 FirstAnchorPosition { get; private set; }
+    public static Vector3 SecondAnchorPosition { get; private set; }
+    public static float TableHeightOffsetStatic { get; private set; }
+    
+    // Static anchor UUIDs - to correctly identify anchors after scene transition
+    public static System.Guid FirstAnchorUuid { get; private set; }
+    public static System.Guid SecondAnchorUuid { get; private set; }
+    
+    // Static room offset - for syncing room position across network
+    public static Vector3 RoomPositionOffset { get; private set; }
+    public static float RoomRotationOffset { get; private set; }
+    
 #if FUSION2
     private NetworkRunner networkRunner;
     private NetworkObject spawnedCube; // Track the single spawned cube
@@ -911,6 +937,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         if (currentStep == AlignmentStep.PlaceAnchor1)
         {
             Log("Placing Anchor 1...");
+            
+            // Store the exact position BEFORE creating anchor (anchor transform can shift)
+            firstAnchorPosition = position;
+            Debug.Log($"[AnchorGUI] Storing first anchor position: {position}");
+            
             var anchor1 = await CreateAnchor(position, rotation);
             
             if (anchor1 != null)
@@ -932,6 +963,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             else
             {
                 Log("Failed to create Anchor 1. Try again.", true);
+                firstAnchorPosition = Vector3.zero; // Reset on failure
                 if (statusText != null)
                 {
                     statusText.text = "Failed! Try again - Press A/X at table edge";
@@ -941,14 +973,25 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         else if (currentStep == AlignmentStep.PlaceAnchor2)
         {
             Log("Placing Anchor 2...");
+            
+            // Store the exact position BEFORE creating anchor (anchor transform can shift)
+            secondAnchorPosition = position;
+            Debug.Log($"[AnchorGUI] Storing second anchor position: {position}");
+            
             var anchor2 = await CreateAnchor(position, rotation);
             
             if (anchor2 != null)
             {
-                Log("✓ Anchor 2 placed! Both anchors ready.");
+                // Store reference to second anchor
+                secondAnchorTransform = anchor2.transform;
+                
+                // Align table between the two anchors
+                AlignTableToAnchors();
+                
+                Log("✓ Anchor 2 placed! Table aligned. Click 'Share & Align' to continue");
                 if (statusText != null)
                 {
-                    statusText.text = "✓ Both anchors placed! Click 'Share & Align' to continue";
+                    statusText.text = "✓ Table aligned between anchors! Click 'Share & Align'";
                 }
                 currentStep = AlignmentStep.ReadyToShare;
                 anchorPlacementMode = false; // Exit placement mode
@@ -964,12 +1007,181 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             else
             {
                 Log("Failed to create Anchor 2. Try again.", true);
+                secondAnchorPosition = Vector3.zero; // Reset on failure
                 if (statusText != null)
                 {
                     statusText.text = "Failed! Try again - Press A/X at table edge";
                 }
             }
         }
+    }
+    
+    /// <summary>
+    /// Find the table object if not assigned
+    /// </summary>
+    private void FindTableObject()
+    {
+        if (tableObject != null) return;
+        
+        // Try to find by tag
+        GameObject tableByTag = GameObject.FindGameObjectWithTag(tableTag);
+        if (tableByTag != null)
+        {
+            tableObject = tableByTag.transform;
+            Debug.Log($"[AnchorGUI] Found table by tag: {tableObject.name}");
+            return;
+        }
+        
+        // Try to find by name
+        var allObjects = FindObjectsOfType<Transform>();
+        foreach (var obj in allObjects)
+        {
+            if (obj.name.ToLower().Contains("table") && obj.GetComponent<Collider>() != null)
+            {
+                tableObject = obj;
+                Debug.Log($"[AnchorGUI] Found table by name: {tableObject.name}");
+                return;
+            }
+        }
+        
+        Debug.LogWarning("[AnchorGUI] Could not find table object. Assign it in Inspector or tag as 'Table'");
+    }
+    
+    /// <summary>
+    /// Align the room/table to be centered between the two anchors.
+    /// Moves the entire room parent so the table ends up at the center between anchors.
+    /// </summary>
+    private void AlignTableToAnchors()
+    {
+        // Find table if not assigned
+        FindTableObject();
+        
+        if (tableObject == null)
+        {
+            Log("No table found to align!", true);
+            return;
+        }
+        
+        if (firstAnchorPosition == Vector3.zero || secondAnchorPosition == Vector3.zero)
+        {
+            Log("Need both anchor positions to align table!", true);
+            return;
+        }
+        
+        // Calculate target center (midpoint between anchors)
+        Vector3 anchor1Pos = firstAnchorPosition;
+        Vector3 anchor2Pos = secondAnchorPosition;
+        Vector3 targetCenter = (anchor1Pos + anchor2Pos) / 2f;
+        
+        // Apply height offset
+        targetCenter.y = (anchor1Pos.y + anchor2Pos.y) / 2f + tableHeightOffset;
+        
+        // Calculate target rotation - table long axis should align with anchor direction
+        Vector3 direction = (anchor2Pos - anchor1Pos).normalized;
+        direction.y = 0; // Keep table level
+        
+        Quaternion targetRotation = Quaternion.identity;
+        if (direction.sqrMagnitude > 0.001f)
+        {
+            targetRotation = Quaternion.LookRotation(direction, Vector3.up);
+        }
+        
+        // Find room parent - the table's root parent that contains the whole room
+        Transform roomParent = FindRoomParent(tableObject);
+        
+        if (roomParent != null)
+        {
+            // Calculate how much we need to move the room so table ends up at target
+            Vector3 currentTablePos = tableObject.position;
+            Vector3 positionOffset = targetCenter - currentTablePos;
+            
+            // Calculate rotation offset around Y axis
+            float currentTableYRotation = tableObject.eulerAngles.y;
+            float targetYRotation = targetRotation.eulerAngles.y;
+            float rotationOffset = targetYRotation - currentTableYRotation;
+            
+            Debug.Log($"[AnchorGUI] Moving room: offset={positionOffset}, rotOffset={rotationOffset}°");
+            
+            // Store offsets in static variables for network sync
+            RoomPositionOffset = positionOffset;
+            RoomRotationOffset = rotationOffset;
+            
+            // First rotate the room around the table's position
+            if (Mathf.Abs(rotationOffset) > 0.1f)
+            {
+                roomParent.RotateAround(currentTablePos, Vector3.up, rotationOffset);
+            }
+            
+            // Then move the room
+            roomParent.position += positionOffset;
+            
+            Debug.Log($"[AnchorGUI] Room moved. Table now at: {tableObject.position}");
+            Debug.Log($"[AnchorGUI] Room offsets stored: pos={RoomPositionOffset}, rot={RoomRotationOffset}");
+        }
+        else
+        {
+            // Fallback: move just the table if no room parent found
+            Debug.Log($"[AnchorGUI] No room parent found, moving table directly");
+            tableObject.position = targetCenter;
+            tableObject.rotation = targetRotation;
+        }
+        
+        // Store in static variables so TableTennisManager can use in the OTHER scene
+        AlignedTablePosition = targetCenter;
+        AlignedTableRotation = targetRotation;
+        TableWasAligned = true;
+        
+        // Also store anchor positions so TableTennisManager can recalculate if needed
+        FirstAnchorPosition = anchor1Pos;
+        SecondAnchorPosition = anchor2Pos;
+        TableHeightOffsetStatic = tableHeightOffset;
+        
+        float distance = Vector3.Distance(anchor1Pos, anchor2Pos);
+        Debug.Log($"[AnchorGUI] Alignment complete: center={targetCenter}, distance={distance:F2}m");
+        Debug.Log($"[AnchorGUI] Anchor positions stored: first={anchor1Pos}, second={anchor2Pos}");
+        Log($"Room aligned ({distance:F2}m between anchors)");
+    }
+    
+    /// <summary>
+    /// Find the room parent object that contains the table and room environment
+    /// </summary>
+    private Transform FindRoomParent(Transform table)
+    {
+        // Look for common room parent names - Environment first as it's most common
+        string[] roomNames = { "Environment", "Room", "Scene", "World", "Level", "pingpong", "PingPong", "TableTennisRoom" };
+        
+        // First try to find Environment directly in scene root
+        GameObject envObj = GameObject.Find("Environment");
+        if (envObj != null)
+        {
+            Debug.Log($"[AnchorGUI] Found Environment directly: {envObj.name}");
+            return envObj.transform;
+        }
+        
+        // Check if table's parent or grandparent is the room
+        Transform current = table.parent;
+        while (current != null)
+        {
+            string nameLower = current.name.ToLower();
+            foreach (string roomName in roomNames)
+            {
+                if (nameLower.Contains(roomName.ToLower()))
+                {
+                    Debug.Log($"[AnchorGUI] Found room parent: {current.name}");
+                    return current;
+                }
+            }
+            current = current.parent;
+        }
+        
+        // If table has a parent, use that as the room
+        if (table.parent != null)
+        {
+            Debug.Log($"[AnchorGUI] Using table's parent as room: {table.parent.name}");
+            return table.parent;
+        }
+        
+        return null;
     }
     
     /// <summary>

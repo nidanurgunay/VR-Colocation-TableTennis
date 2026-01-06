@@ -25504,7 +25504,6 @@ GameObject:
   - component: {fileID: 1131986596}
   - component: {fileID: 1131986597}
   - component: {fileID: 1131986599}
-  - component: {fileID: 1131986600}
   m_Layer: 0
   m_Name: AnchorGUIManager
   m_TagString: Untagged
@@ -25560,6 +25559,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   alignmentManager: {fileID: 1453752133}
   autoStartColocation: 0
+  networkedPlayerPrefab:
+    RawGuidValue: 00000000000000000000000000000000
   autoAlignButton: {fileID: 1246328328}
   spawnCubeButton: {fileID: 1022472320}
   resetButton: {fileID: 965380431}
@@ -25582,31 +25583,9 @@ MonoBehaviour:
   sessionName: MyVRSession
   autoStartSession: 0
   autoAlignOnStart: 0
---- !u!114 &1131986600
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1131986594}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8a5c9e7b3d4f6a2e1b0c8d9e7f5a3b2c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  _runner: {fileID: 0}
-  _object: {fileID: 0}
-  InvokeRpc: 0
-  ObjectIndex: 0
-  WordOffset: 0
-  WordCount: 0
-  DefaultReplicated: 1
-  cubePrefab:
-    RawGuidValue:
-    - 6427993318653397601
-    - 6115125421448293192
-  cubeScale: 0.1
-  _sharedAnchor: {fileID: 0}
+  tableObject: {fileID: 0}
+  tableTag: Table
+  tableHeightOffset: 0
 --- !u!1 &1132596022
 GameObject:
   m_ObjectHideFlags: 0

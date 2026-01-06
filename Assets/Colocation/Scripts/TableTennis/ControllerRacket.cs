@@ -2,8 +2,7 @@ using UnityEngine;
 
 /// <summary>
 /// Attaches a racket visual to the controller when grip is pressed.
-/// Since controllers are already visible and synced via colocation alignment,
-/// this just swaps the controller visual with a racket.
+/// Controllers remain visible. Racket offset/rotation adjustable with thumbsticks when in adjust mode.
 /// </summary>
 public class ControllerRacket : MonoBehaviour
 {
@@ -11,11 +10,18 @@ public class ControllerRacket : MonoBehaviour
     [SerializeField] private GameObject racketPrefab; // Racket model to show on controller
     
     [Header("Settings")]
-    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller (Button.Two = B when using RTouch)
-    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller (Button.Two = Y when using LTouch)
+    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller
+    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller
     [SerializeField] private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f); // Position offset from controller
-    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 240f, 43f); // Rotation to align handle with controller grip
+    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 184f, 81f); // Default rotation for natural grip
     [SerializeField] private float racketScale = 10f; // 10x scale for visibility
+    
+    [Header("Adjustment Settings")]
+    [SerializeField] private float rotationAdjustSpeed = 45f; // Degrees per second
+    [SerializeField] private bool showControllersAlways = true; // Keep controllers visible
+    
+    // Adjust mode - toggle with A button
+    private bool isAdjustMode = false;
     
     // Controller references
     private Transform leftController;
@@ -288,6 +294,23 @@ public class ControllerRacket : MonoBehaviour
             return;
         }
         
+        // Toggle adjust mode with A button (Button.One on right controller)
+        if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch))
+        {
+            isAdjustMode = !isAdjustMode;
+            Debug.Log($"[ControllerRacket] Adjust mode: {(isAdjustMode ? "ON - Use thumbsticks to adjust racket" : "OFF")}");
+            if (isAdjustMode)
+            {
+                Debug.Log("[ControllerRacket] Left stick: Position (X/Y), Right stick X: Rotation Z, Right stick Y: Rotation X");
+            }
+        }
+        
+        // Handle racket adjustment when in adjust mode
+        if (isAdjustMode)
+        {
+            HandleRacketAdjustment();
+        }
+        
         // Check for toggle on left controller (Y button)
         bool leftPressed = OVRInput.Get(leftActivateButton, OVRInput.Controller.LTouch);
         if (leftPressed && !leftWasPressed)
@@ -296,7 +319,11 @@ public class ControllerRacket : MonoBehaviour
             if (leftRacket != null)
             {
                 leftRacket.SetActive(leftActive);
-                SetControllerVisualActive(leftControllerVisual, !leftActive);
+                // Keep controller visible if showControllersAlways is true
+                if (!showControllersAlways)
+                {
+                    SetControllerVisualActive(leftControllerVisual, !leftActive);
+                }
                 Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}");
             }
         }
@@ -310,11 +337,61 @@ public class ControllerRacket : MonoBehaviour
             if (rightRacket != null)
             {
                 rightRacket.SetActive(rightActive);
-                SetControllerVisualActive(rightControllerVisual, !rightActive);
+                // Keep controller visible if showControllersAlways is true
+                if (!showControllersAlways)
+                {
+                    SetControllerVisualActive(rightControllerVisual, !rightActive);
+                }
                 Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}");
             }
         }
         rightWasPressed = rightPressed;
+    }
+    
+    /// <summary>
+    /// Handle racket position/rotation adjustment using thumbsticks
+    /// </summary>
+    private void HandleRacketAdjustment()
+    {
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
+        Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch);
+        
+        bool changed = false;
+        
+        // Left stick X: Adjust rotation Y (yaw)
+        if (Mathf.Abs(leftStick.x) > 0.1f)
+        {
+            racketRotation.y += leftStick.x * rotationAdjustSpeed * Time.deltaTime;
+            changed = true;
+        }
+        
+        // Right stick X: Adjust rotation Z (roll)
+        if (Mathf.Abs(rightStick.x) > 0.1f)
+        {
+            racketRotation.z += rightStick.x * rotationAdjustSpeed * Time.deltaTime;
+            changed = true;
+        }
+        
+        // Apply changes to both rackets
+        if (changed)
+        {
+            if (leftRacket != null)
+            {
+                leftRacket.transform.localPosition = racketOffset;
+                leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
+            }
+            if (rightRacket != null)
+            {
+                rightRacket.transform.localPosition = racketOffset;
+                rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
+            }
+            
+            // Log current values periodically
+            if (Time.frameCount % 30 == 0)
+            {
+                Debug.Log($"[ControllerRacket] Rotation: X={racketRotation.x:F1}, Y={racketRotation.y:F1}, Z={racketRotation.z:F1}");
+            }
+        }
     }
     
     private void SetControllerVisualActive(GameObject controllerVisual, bool active)

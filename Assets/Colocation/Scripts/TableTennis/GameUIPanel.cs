@@ -1,410 +1,230 @@
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
-using Fusion;
 
 /// <summary>
-/// World-space UI panels showing game score and instructions.
-/// Creates 4 wall panels (with instructions) and 1 table panel (score only).
+/// Simple world-space score display using TextMeshPro 3D text.
+/// Shows score on a wall, visible from the table area.
 /// </summary>
 public class GameUIPanel : MonoBehaviour
 {
-    [Header("Anchor References")]
-    [SerializeField] private Transform anchor1; // Player 1 side anchor
-    [SerializeField] private Transform anchor2; // Player 2 side anchor
-    
-    [Header("Panel Settings")]
-    [SerializeField] private Vector2 wallPanelSize = new Vector2(1.2f, 0.8f); // Wall panels
-    [SerializeField] private Vector2 tablePanelSize = new Vector2(0.6f, 0.3f); // Table panel (smaller)
-    [SerializeField] private Color backgroundColor = new Color(0.1f, 0.1f, 0.2f, 0.9f);
-    [SerializeField] private Color textColor = Color.white;
+    [Header("Settings")]
+    [SerializeField] private float wallHeight = 1.5f; // Height on wall
+    [SerializeField] private float wallDistance = 2.0f; // Distance from table center to wall (along table's right side)
+    [SerializeField] private float fontSize = 3f; // Larger font for wall visibility
     [SerializeField] private Color scoreColor = Color.yellow;
+    [SerializeField] private Color statusColor = Color.white;
+    [SerializeField] private Color backgroundColor = new Color(0.1f, 0.1f, 0.3f, 0.95f); // Dark blue
+    [SerializeField] private Vector2 backgroundSize = new Vector2(0.8f, 0.4f); // Larger background for wall
     
-    [Header("Wall Panel Positions")]
-    [SerializeField] private float wallDistance = 3f; // Distance from table center to walls
-    [SerializeField] private float wallHeight = 1.8f; // Height of wall panels
+    // Text components (single sided now)
+    private TextMeshPro scoreText;
+    private TextMeshPro statusText;
     
-    [Header("Table Panel Position")]
-    [SerializeField] private float tableHeight = 0.5f; // Height above table surface
-    [SerializeField] private Transform tableObject; // Reference to actual table object
-    [SerializeField] private string tableTag = "Table"; // Tag to find table if not assigned
-    
-    // All created panels for updating
-    private System.Collections.Generic.List<PanelUI> allPanels = new System.Collections.Generic.List<PanelUI>();
+    // Background quad
+    private GameObject background;
     
     // References
+    private Transform tableObject;
     private TableTennisGameManager gameManager;
-    private Vector3 tableCenter;
-    private Quaternion tableRotation;
-    private Transform tablePanelParent; // Parent for table panel to follow table
-    
-    private class PanelUI
-    {
-        public Canvas canvas;
-        public TextMeshProUGUI scoreText;
-        public TextMeshProUGUI statusText;
-        public TextMeshProUGUI instructionsText; // null for table panel
-        public bool isTablePanel;
-    }
+    private GameObject panelRoot;
     
     private void Start()
     {
-        StartCoroutine(Initialize());
+        StartCoroutine(DelayedInit());
     }
     
-    private System.Collections.IEnumerator Initialize()
+    private System.Collections.IEnumerator DelayedInit()
     {
-        yield return new WaitForSeconds(1.5f);
+        // Wait for table to be positioned
+        yield return new WaitForSeconds(3.0f);
         
-        // Find anchors if not assigned
-        FindAnchors();
+        // Find table
+        FindTable();
         
-        // Find the actual table object
-        FindTableObject();
-        
-        // Calculate table center and rotation from anchors
-        CalculateTableTransform();
+        // Keep trying if not found
+        int attempts = 0;
+        while (tableObject == null && attempts < 20)
+        {
+            yield return new WaitForSeconds(0.5f);
+            FindTable();
+            attempts++;
+        }
         
         // Find game manager
         gameManager = FindObjectOfType<TableTennisGameManager>();
         
-        // Create all panels
-        CreateWallPanels();
-        CreateTablePanel();
-        
-        Debug.Log($"[GameUIPanel] Created {allPanels.Count} panels. Table: {(tableObject != null ? tableObject.name : "not found")}");
-    }
-    
-    private void FindAnchors()
-    {
-        if (anchor1 != null && anchor2 != null) return;
-        
-        var anchors = FindObjectsOfType<OVRSpatialAnchor>();
-        var activeAnchors = new System.Collections.Generic.List<OVRSpatialAnchor>();
-        
-        foreach (var anchor in anchors)
-        {
-            if (anchor.gameObject.activeInHierarchy)
-            {
-                activeAnchors.Add(anchor);
-            }
-        }
-        
-        if (activeAnchors.Count >= 2)
-        {
-            anchor1 = activeAnchors[0].transform;
-            anchor2 = activeAnchors[1].transform;
-            Debug.Log($"[GameUIPanel] Found 2 anchors: {anchor1.name}, {anchor2.name}");
-        }
-        else if (activeAnchors.Count == 1)
-        {
-            anchor1 = activeAnchors[0].transform;
-            anchor2 = activeAnchors[0].transform;
-            Debug.LogWarning("[GameUIPanel] Only 1 anchor found, using same for both");
-        }
-        else
-        {
-            // Fallback to camera rig
-            var cameraRig = FindObjectOfType<OVRCameraRig>();
-            if (cameraRig != null)
-            {
-                anchor1 = cameraRig.transform;
-                anchor2 = cameraRig.transform;
-                Debug.LogWarning("[GameUIPanel] No anchors found, using camera rig");
-            }
-        }
-    }
-    
-    private void FindTableObject()
-    {
-        if (tableObject != null) return;
-        
-        // Try to find by tag
-        GameObject tableByTag = GameObject.FindGameObjectWithTag(tableTag);
-        if (tableByTag != null)
-        {
-            tableObject = tableByTag.transform;
-            Debug.Log($"[GameUIPanel] Found table by tag: {tableObject.name}");
-            return;
-        }
-        
-        // Try to find by name containing "table"
-        var allObjects = FindObjectsOfType<Transform>();
-        foreach (var obj in allObjects)
-        {
-            if (obj.name.ToLower().Contains("table") && obj.GetComponent<Collider>() != null)
-            {
-                tableObject = obj;
-                Debug.Log($"[GameUIPanel] Found table by name: {tableObject.name}");
-                return;
-            }
-        }
-        
-        Debug.LogWarning("[GameUIPanel] Could not find table object. Assign it in Inspector or tag it as 'Table'");
-    }
-    
-    private void CalculateTableTransform()
-    {
-        if (anchor1 == null || anchor2 == null)
-        {
-            tableCenter = Vector3.zero;
-            tableRotation = Quaternion.identity;
-            return;
-        }
-        
-        // Table center is midpoint between anchors
-        tableCenter = (anchor1.position + anchor2.position) / 2f;
-        
-        // Table rotation - use anchor1's rotation (assumes anchors are aligned with table)
-        tableRotation = anchor1.rotation;
-    }
-    
-    private void CreateWallPanels()
-    {
-        // 4 wall panels around the table
-        // Using table rotation to orient them correctly
-        
-        Vector3 forward = tableRotation * Vector3.forward;
-        Vector3 right = tableRotation * Vector3.right;
-        
-        // Wall positions: front, back, left, right of table
-        Vector3[] wallPositions = new Vector3[]
-        {
-            tableCenter + forward * wallDistance + Vector3.up * wallHeight,  // Front
-            tableCenter - forward * wallDistance + Vector3.up * wallHeight,  // Back
-            tableCenter + right * wallDistance + Vector3.up * wallHeight,    // Right
-            tableCenter - right * wallDistance + Vector3.up * wallHeight,    // Left
-        };
-        
-        // Each wall faces the table center
-        for (int i = 0; i < wallPositions.Length; i++)
-        {
-            CreateWallPanel(wallPositions[i], i);
-        }
-    }
-    
-    private void CreateWallPanel(Vector3 position, int index)
-    {
-        GameObject panelObj = new GameObject($"WallPanel_{index}");
-        panelObj.transform.SetParent(transform);
-        panelObj.transform.position = position;
-        
-        // Face the table center
-        panelObj.transform.LookAt(new Vector3(tableCenter.x, position.y, tableCenter.z));
-        panelObj.transform.Rotate(0, 180, 0); // Face outward from table
-        
-        PanelUI panel = CreatePanelCanvas(panelObj, wallPanelSize, includeInstructions: true);
-        panel.isTablePanel = false;
-        allPanels.Add(panel);
-    }
-    
-    private void CreateTablePanel()
-    {
-        // Create a container that follows the table
-        tablePanelParent = new GameObject("TablePanelContainer").transform;
+        // Create the score display
+        CreateScoreDisplay();
         
         if (tableObject != null)
         {
-            // Parent to the table so it moves with it
-            tablePanelParent.SetParent(tableObject);
-            tablePanelParent.localPosition = Vector3.up * tableHeight;
-            tablePanelParent.localRotation = Quaternion.identity;
+            Debug.Log($"[GameUIPanel] Score display created above {tableObject.name} at {tableObject.position}");
         }
         else
         {
-            // Fallback to anchor-based position
-            tablePanelParent.SetParent(transform);
-            tablePanelParent.position = tableCenter + Vector3.up * tableHeight;
-            tablePanelParent.rotation = tableRotation;
+            Debug.LogWarning("[GameUIPanel] Could not find table!");
         }
-        
-        // Panel facing one direction
-        GameObject panelObj = new GameObject("TablePanel");
-        panelObj.transform.SetParent(tablePanelParent);
-        panelObj.transform.localPosition = Vector3.zero;
-        panelObj.transform.localRotation = Quaternion.Euler(45, 0, 0); // Tilt toward player
-        
-        PanelUI panel = CreatePanelCanvas(panelObj, tablePanelSize, includeInstructions: false);
-        panel.isTablePanel = true;
-        allPanels.Add(panel);
-        
-        // Panel facing opposite direction (for other player)
-        GameObject panelObj2 = new GameObject("TablePanel_Back");
-        panelObj2.transform.SetParent(tablePanelParent);
-        panelObj2.transform.localPosition = Vector3.zero;
-        panelObj2.transform.localRotation = Quaternion.Euler(45, 180, 0); // Face other way
-        
-        PanelUI panel2 = CreatePanelCanvas(panelObj2, tablePanelSize, includeInstructions: false);
-        panel2.isTablePanel = true;
-        allPanels.Add(panel2);
     }
     
-    private PanelUI CreatePanelCanvas(GameObject parent, Vector2 size, bool includeInstructions)
+    private void FindTable()
     {
-        PanelUI panelUI = new PanelUI();
+        if (tableObject != null) return;
         
-        // Create canvas
-        GameObject canvasObj = new GameObject("Canvas");
-        canvasObj.transform.SetParent(parent.transform);
-        canvasObj.transform.localPosition = Vector3.zero;
-        canvasObj.transform.localRotation = Quaternion.identity;
-        
-        panelUI.canvas = canvasObj.AddComponent<Canvas>();
-        panelUI.canvas.renderMode = RenderMode.WorldSpace;
-        
-        var scaler = canvasObj.AddComponent<CanvasScaler>();
-        scaler.dynamicPixelsPerUnit = 100;
-        
-        canvasObj.AddComponent<GraphicRaycaster>();
-        
-        // Set canvas size
-        RectTransform canvasRect = panelUI.canvas.GetComponent<RectTransform>();
-        canvasRect.sizeDelta = size * 1000; // Convert to UI units
-        canvasRect.localScale = Vector3.one * 0.001f; // Scale down to world units
-        
-        // Create background
-        GameObject bgObj = new GameObject("Background");
-        bgObj.transform.SetParent(canvasRect);
-        var bgImage = bgObj.AddComponent<Image>();
-        bgImage.color = backgroundColor;
-        
-        RectTransform bgRect = bgObj.GetComponent<RectTransform>();
-        bgRect.anchorMin = Vector2.zero;
-        bgRect.anchorMax = Vector2.one;
-        bgRect.offsetMin = Vector2.zero;
-        bgRect.offsetMax = Vector2.zero;
-        
-        if (includeInstructions)
+        // Try by tag
+        GameObject byTag = GameObject.FindGameObjectWithTag("Table");
+        if (byTag != null)
         {
-            // WALL PANEL: Score + Status + Instructions
+            tableObject = byTag.transform;
+            return;
+        }
+        
+        // Try by name
+        string[] names = { "PingPongTable", "pingpongtable", "pingpong", "PingPong", "Table" };
+        foreach (string n in names)
+        {
+            GameObject found = GameObject.Find(n);
+            if (found != null)
+            {
+                tableObject = found.transform;
+                return;
+            }
+        }
+    }
+    
+    private void CreateScoreDisplay()
+    {
+        // Create root object
+        panelRoot = new GameObject("ScoreDisplay");
+        
+        if (tableObject != null)
+        {
+            // Position on the wall to the right side of the table (perpendicular to long axis)
+            // Table's right direction is its local X axis
+            Vector3 wallPosition = tableObject.position + tableObject.right * wallDistance;
+            wallPosition.y = wallHeight;
             
-            // Score text (top)
-            panelUI.scoreText = CreateText("ScoreText", canvasRect,
-                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0, -40), new Vector2(800, 120));
-            panelUI.scoreText.fontSize = 100;
-            panelUI.scoreText.color = scoreColor;
-            panelUI.scoreText.alignment = TextAlignmentOptions.Center;
-            panelUI.scoreText.fontStyle = FontStyles.Bold;
-            panelUI.scoreText.text = "0 - 0";
+            panelRoot.transform.position = wallPosition;
             
-            // Status text (below score)
-            panelUI.statusText = CreateText("StatusText", canvasRect,
-                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0, -140), new Vector2(800, 60));
-            panelUI.statusText.fontSize = 40;
-            panelUI.statusText.color = textColor;
-            panelUI.statusText.alignment = TextAlignmentOptions.Center;
-            panelUI.statusText.text = "Press GRIP to Start";
-            
-            // Instructions text (bottom half)
-            panelUI.instructionsText = CreateText("InstructionsText", canvasRect,
-                new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0, 180), new Vector2(1100, 350));
-            panelUI.instructionsText.fontSize = 28;
-            panelUI.instructionsText.color = textColor;
-            panelUI.instructionsText.alignment = TextAlignmentOptions.Left;
-            panelUI.instructionsText.text = GetInstructionsText();
+            // Face back toward the table (rotate to look at table center)
+            Vector3 lookDir = tableObject.position - wallPosition;
+            lookDir.y = 0; // Keep panel vertical
+            if (lookDir.sqrMagnitude > 0.01f)
+            {
+                panelRoot.transform.rotation = Quaternion.LookRotation(lookDir, Vector3.up);
+            }
         }
         else
         {
-            // TABLE PANEL: Score only (larger text)
-            
-            panelUI.scoreText = CreateText("ScoreText", canvasRect,
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0, 30), new Vector2(500, 150));
-            panelUI.scoreText.fontSize = 140;
-            panelUI.scoreText.color = scoreColor;
-            panelUI.scoreText.alignment = TextAlignmentOptions.Center;
-            panelUI.scoreText.fontStyle = FontStyles.Bold;
-            panelUI.scoreText.text = "0 - 0";
-            
-            // Small status text below
-            panelUI.statusText = CreateText("StatusText", canvasRect,
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0, -60), new Vector2(500, 50));
-            panelUI.statusText.fontSize = 36;
-            panelUI.statusText.color = textColor;
-            panelUI.statusText.alignment = TextAlignmentOptions.Center;
-            panelUI.statusText.text = "";
+            panelRoot.transform.position = new Vector3(wallDistance, wallHeight, 0);
+            panelRoot.transform.rotation = Quaternion.Euler(0, -90f, 0); // Face left
         }
         
-        return panelUI;
+        // Create background panel (slightly behind text)
+        background = CreateBackground("Background", new Vector3(0, 0, 0.01f));
+        
+        // Create score text
+        scoreText = CreateTextMesh("ScoreText", Vector3.zero);
+        scoreText.fontSize = fontSize;
+        scoreText.color = scoreColor;
+        scoreText.fontStyle = FontStyles.Bold;
+        scoreText.alignment = TextAlignmentOptions.Center;
+        scoreText.text = "0 - 0";
+        
+        // Create status text below score
+        statusText = CreateTextMesh("StatusText", new Vector3(0, -0.12f, 0));
+        statusText.fontSize = fontSize * 0.5f;
+        statusText.color = statusColor;
+        statusText.alignment = TextAlignmentOptions.Center;
+        statusText.text = "GRIP to Start";
+        
+        Debug.Log($"[GameUIPanel] Wall panel created at {panelRoot.transform.position}, facing table at {tableObject?.position}");
     }
     
-    private TextMeshProUGUI CreateText(string name, Transform parent,
-        Vector2 anchorMin, Vector2 anchorMax, Vector2 position, Vector2 size)
+    private TextMeshPro CreateTextMesh(string name, Vector3 localOffset)
     {
         GameObject textObj = new GameObject(name);
-        textObj.transform.SetParent(parent);
+        textObj.transform.SetParent(panelRoot.transform);
+        textObj.transform.localPosition = localOffset;
+        textObj.transform.localRotation = Quaternion.identity;
+        textObj.transform.localScale = Vector3.one;
         
-        TextMeshProUGUI tmp = textObj.AddComponent<TextMeshProUGUI>();
-        
-        RectTransform rect = textObj.GetComponent<RectTransform>();
-        rect.anchorMin = anchorMin;
-        rect.anchorMax = anchorMax;
-        rect.anchoredPosition = position;
-        rect.sizeDelta = size;
-        rect.localScale = Vector3.one;
-        rect.localRotation = Quaternion.identity;
+        TextMeshPro tmp = textObj.AddComponent<TextMeshPro>();
+        tmp.rectTransform.sizeDelta = new Vector2(0.8f, 0.25f);
         
         return tmp;
     }
     
-    private string GetInstructionsText()
+    private GameObject CreateBackground(string name, Vector3 localOffset)
     {
-        return @"<b>CONTROLS</b>
-<color=yellow>B</color> / <color=yellow>Y</color>  -  Show Racket
-<color=yellow>A</color>  -  Table Adjust Mode
-   + <color=cyan>L-Stick</color>  -  Move (X/Z)
-   + <color=cyan>R-Stick X</color>  -  Rotate
-   + <color=cyan>R-Stick Y</color>  -  Up/Down
-<color=yellow>GRIP</color>  -  Start Game
-
-<b>RULES</b>
-• First to 11 (win by 2)
-• Serve bounces on your side first
-• Double bounce = point";
+        GameObject bgObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        bgObj.name = name;
+        bgObj.transform.SetParent(panelRoot.transform);
+        bgObj.transform.localPosition = localOffset;
+        bgObj.transform.localRotation = Quaternion.identity;
+        bgObj.transform.localScale = new Vector3(backgroundSize.x, backgroundSize.y, 1f);
+        
+        // Remove collider (not needed for UI)
+        var collider = bgObj.GetComponent<Collider>();
+        if (collider != null) Destroy(collider);
+        
+        // Create opaque material for wall panel
+        var renderer = bgObj.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            Material mat = new Material(Shader.Find("Unlit/Color"));
+            if (mat.shader == null || mat.shader.name == "Hidden/InternalErrorShader")
+            {
+                mat = new Material(Shader.Find("Standard"));
+            }
+            mat.color = backgroundColor;
+            renderer.material = mat;
+        }
+        
+        return bgObj;
     }
     
     private void Update()
     {
-        if (gameManager == null)
+        // Keep trying to find table
+        if (tableObject == null)
         {
-            gameManager = FindObjectOfType<TableTennisGameManager>();
-            return;
+            FindTable();
         }
         
-        // Update all panels
-        foreach (var panel in allPanels)
+        // Update score text
+        if (gameManager != null)
         {
-            if (panel.scoreText != null)
-            {
-                panel.scoreText.text = $"{gameManager.Player1Score} - {gameManager.Player2Score}";
-            }
+            string score = $"{gameManager.Player1Score} - {gameManager.Player2Score}";
+            if (scoreText != null) scoreText.text = score;
             
-            if (panel.statusText != null)
-            {
-                switch (gameManager.CurrentGameState)
-                {
-                    case TableTennisGameManager.GameState.WaitingToStart:
-                        panel.statusText.text = panel.isTablePanel ? "" : "Press GRIP to Start";
-                        break;
-                    case TableTennisGameManager.GameState.Serving:
-                        panel.statusText.text = $"P{gameManager.CurrentServer} Serve";
-                        break;
-                    case TableTennisGameManager.GameState.Playing:
-                        panel.statusText.text = panel.isTablePanel ? "" : "Playing";
-                        break;
-                    case TableTennisGameManager.GameState.PointScored:
-                        panel.statusText.text = "Point!";
-                        break;
-                    case TableTennisGameManager.GameState.GameOver:
-                        int winner = gameManager.Player1Score > gameManager.Player2Score ? 1 : 2;
-                        panel.statusText.text = $"P{winner} Wins!";
-                        break;
-                }
-            }
+            string status = GetStatusText();
+            if (statusText != null) statusText.text = status;
+        }
+        else
+        {
+            gameManager = FindObjectOfType<TableTennisGameManager>();
+        }
+    }
+    
+    private string GetStatusText()
+    {
+        if (gameManager == null) return "GRIP to Start";
+        
+        switch (gameManager.CurrentGameState)
+        {
+            case TableTennisGameManager.GameState.GameOver:
+                return gameManager.Player1Score > gameManager.Player2Score ? "P1 Wins!" : "P2 Wins!";
+                
+            case TableTennisGameManager.GameState.WaitingToStart:
+                return "GRIP to Start";
+                
+            case TableTennisGameManager.GameState.Serving:
+            case TableTennisGameManager.GameState.Playing:
+            case TableTennisGameManager.GameState.PointScored:
+                return gameManager.CurrentServer == 1 ? "P1 Serve" : "P2 Serve";
+                
+            default:
+                return "GRIP to Start";
         }
     }
 }
