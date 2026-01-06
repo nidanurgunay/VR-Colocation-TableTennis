@@ -20,7 +20,7 @@ public class TableTennisManager : NetworkBehaviour
     [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset in degrees
     
     [Header("Feature Toggles")]
-    [SerializeField] private bool enableTableAdjustment = false; // Enable/disable table position/rotation adjustment with controllers
+    [SerializeField] private bool enableTableAdjustment = true; // Enable/disable table position/rotation adjustment with controllers
     
     [Header("Runtime Adjustment Controls")]
     [SerializeField] private float moveSpeed = 2.0f; // Meters per second
@@ -989,12 +989,13 @@ public class TableTennisManager : NetworkBehaviour
             renderer.material = mat;
         }
         
-        // Add rigidbody - start kinematic for positioning mode
+        // Add rigidbody - non-kinematic for collision detection
         var rb = ball.AddComponent<Rigidbody>();
         rb.mass = 0.0027f;
         rb.drag = 0.1f;
-        rb.isKinematic = true; // Start kinematic - no gravity until hit
+        rb.isKinematic = false; // Non-kinematic for collision detection
         rb.useGravity = false;
+        rb.constraints = RigidbodyConstraints.FreezeAll; // Freeze until hit
         rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
         
         // Add local ball handler for collision detection

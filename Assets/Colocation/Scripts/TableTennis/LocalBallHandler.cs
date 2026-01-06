@@ -24,6 +24,13 @@ public class LocalBallHandler : MonoBehaviour
     {
         rb = rigidbody;
         isInPositioningMode = true;
+        
+        // Make ball non-kinematic but freeze position for positioning mode
+        // This allows collision detection with kinematic rackets
+        rb.isKinematic = false;
+        rb.useGravity = false;
+        rb.constraints = RigidbodyConstraints.FreezeAll; // Freeze until hit
+        
         Debug.Log("[LocalBallHandler] Initialized in positioning mode - use thumbsticks to move, hit with racket to start");
     }
     
@@ -32,7 +39,57 @@ public class LocalBallHandler : MonoBehaviour
         if (isInPositioningMode)
         {
             HandlePositioningMode();
+            CheckProximityHit(); // Fallback hit detection
         }
+    }
+    
+    /// <summary>
+    /// Proximity-based hit detection as fallback for collision issues
+    /// </summary>
+    private void CheckProximityHit()
+    {
+        // Find all rackets and check distance
+        GameObject[] rackets = GameObject.FindGameObjectsWithTag("Racket");
+        foreach (var racket in rackets)
+        {
+            if (racket == null || !racket.activeInHierarchy) continue;
+            
+            float distance = Vector3.Distance(transform.position, racket.transform.position);
+            if (distance < 0.15f) // 15cm proximity
+            {
+                // Get racket velocity
+                Rigidbody racketRb = racket.GetComponent<Rigidbody>();
+                if (racketRb != null && racketRb.velocity.magnitude > 0.5f)
+                {
+                    Debug.Log($"[LocalBallHandler] PROXIMITY HIT! Distance: {distance}, Velocity: {racketRb.velocity.magnitude}");
+                    HandleProximityHit(racket, racketRb.velocity);
+                    return;
+                }
+            }
+        }
+    }
+    
+    private void HandleProximityHit(GameObject racket, Vector3 racketVelocity)
+    {
+        // Exit positioning mode
+        isInPositioningMode = false;
+        rb.constraints = RigidbodyConstraints.None; // Unfreeze
+        rb.useGravity = false; // We handle gravity manually
+        
+        // Calculate hit velocity
+        Vector3 hitVelocity = racketVelocity * 1.5f;
+        hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+        
+        if (hitVelocity.magnitude < 2f)
+        {
+            hitVelocity = hitVelocity.normalized * 2f;
+        }
+        
+        velocity = hitVelocity;
+        rb.velocity = hitVelocity;
+        isInPlay = true;
+        
+        Debug.Log($"[LocalBallHandler] Ball hit via proximity! Velocity: {hitVelocity}");
     }
     
     private void FixedUpdate()
@@ -130,7 +187,7 @@ public class LocalBallHandler : MonoBehaviour
         if (isInPositioningMode)
         {
             isInPositioningMode = false;
-            rb.isKinematic = false;
+            rb.constraints = RigidbodyConstraints.None; // Unfreeze
             rb.useGravity = false; // We handle gravity manually
             Debug.Log("[LocalBallHandler] Exited positioning mode - game started!");
         }
@@ -162,7 +219,7 @@ public class LocalBallHandler : MonoBehaviour
         if (isInPositioningMode)
         {
             isInPositioningMode = false;
-            rb.isKinematic = false;
+            rb.constraints = RigidbodyConstraints.None; // Unfreeze
             rb.useGravity = false;
             Debug.Log("[LocalBallHandler] Exited positioning mode - game started!");
         }
@@ -197,7 +254,7 @@ public class LocalBallHandler : MonoBehaviour
         }
         
         rb.velocity = Vector3.zero;
-        rb.isKinematic = true;
+        rb.constraints = RigidbodyConstraints.FreezeAll; // Freeze for positioning
         velocity = Vector3.zero;
         isInPositioningMode = true;
         isInPlay = false;
