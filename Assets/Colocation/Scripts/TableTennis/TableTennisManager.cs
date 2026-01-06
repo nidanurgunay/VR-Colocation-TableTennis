@@ -898,22 +898,68 @@ public class TableTennisManager : NetworkBehaviour
         
         Debug.Log($"[TableTennisManager] Spawning ball at position: {spawnPosition}");
         
-        var ballObj = Runner.Spawn(
-            ballPrefab,
-            spawnPosition,
-            Quaternion.identity,
-            Object.InputAuthority
-        );
-        
-        if (ballObj != null)
+        // Try to spawn networked ball
+        if (ballPrefab != default)
         {
-            spawnedBall = ballObj.GetComponent<NetworkedBall>();
-            Debug.Log($"[TableTennisManager] Successfully spawned networked ball at {spawnPosition}, NetworkObject: {ballObj.Id}");
+            var ballObj = Runner.Spawn(
+                ballPrefab,
+                spawnPosition,
+                Quaternion.identity,
+                Object.InputAuthority
+            );
+            
+            if (ballObj != null)
+            {
+                spawnedBall = ballObj.GetComponent<NetworkedBall>();
+                Debug.Log($"[TableTennisManager] Successfully spawned networked ball at {spawnPosition}, NetworkObject: {ballObj.Id}");
+                return;
+            }
+            else
+            {
+                Debug.LogError("[TableTennisManager] Failed to spawn ball! Runner.Spawn returned null.");
+            }
         }
         else
         {
-            Debug.LogError("[TableTennisManager] Failed to spawn ball! Runner.Spawn returned null.");
+            Debug.LogWarning("[TableTennisManager] Ball prefab not assigned, creating local ball instead.");
         }
+        
+        // Fallback: Create a simple local ball (visible but not networked)
+        CreateLocalBall(spawnPosition);
+    }
+    
+    /// <summary>
+    /// Create a simple visible ball for testing when networked spawn fails
+    /// </summary>
+    private void CreateLocalBall(Vector3 position)
+    {
+        Debug.Log($"[TableTennisManager] Creating local ball at {position}");
+        
+        // Create sphere primitive
+        GameObject ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        ball.name = "LocalPingPongBall";
+        ball.transform.position = position;
+        ball.transform.localScale = Vector3.one * 0.04f; // 4cm diameter
+        
+        // Set material to white/orange for visibility
+        var renderer = ball.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            Material mat = new Material(Shader.Find("Standard"));
+            mat.color = new Color(1f, 0.5f, 0f); // Orange color for visibility
+            renderer.material = mat;
+        }
+        
+        // Add rigidbody for physics
+        var rb = ball.AddComponent<Rigidbody>();
+        rb.mass = 0.0027f;
+        rb.drag = 0.1f;
+        rb.useGravity = true;
+        
+        // Add NetworkedBall component if available
+        var networkedBall = ball.AddComponent<NetworkedBall>();
+        
+        Debug.Log($"[TableTennisManager] Created local ball at {position} - THIS IS A FALLBACK, networked prefab not working");
     }
     
     /// <summary>

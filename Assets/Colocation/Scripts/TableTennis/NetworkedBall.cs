@@ -51,8 +51,8 @@ public class NetworkedBall : NetworkBehaviour
     private float interpolationTime;
     
     [Header("Visual Settings")]
-    [SerializeField] private float ballRadius = 0.02f; // 40mm diameter standard ping pong ball
-    [SerializeField] private Color ballColor = Color.white;
+    [SerializeField] private float ballRadius = 0.04f; // 8cm diameter for better visibility (real is 4cm)
+    [SerializeField] private Color ballColor = new Color(1f, 0.5f, 0f); // Orange for visibility
     
     public override void Spawned()
     {
