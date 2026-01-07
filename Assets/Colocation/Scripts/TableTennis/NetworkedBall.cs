@@ -34,14 +34,19 @@ public class NetworkedBall : NetworkBehaviour
     [SerializeField] private float positionMoveSpeed = 1.5f; // Speed of thumbstick movement
     [SerializeField] private float positionHeightSpeed = 0.8f; // Speed of vertical movement
     
-    // Networked state - anchor relative
-    [Networked] private Vector3 AnchorRelativePosition { get; set; }
-    [Networked] private Vector3 AnchorRelativeVelocity { get; set; }
+    // Networked state - table relative (table is aligned to same world position on both devices)
+    [Networked] private Vector3 TableRelativePosition { get; set; }
+    [Networked] private Vector3 TableRelativeVelocity { get; set; }
     [Networked] private NetworkBool IsInPlay { get; set; }
     [Networked] private NetworkBool IsInPositioningMode { get; set; } // Ball can be moved with thumbsticks
     
+    // Legacy - kept for compatibility but unused
+    [Networked] private Vector3 AnchorRelativePosition { get; set; }
+    [Networked] private Vector3 AnchorRelativeVelocity { get; set; }
+    
     // Local state
-    private Transform sharedAnchor;
+    private Transform tableTransform; // Use table as reference frame - it's aligned on both devices
+    private Transform sharedAnchor; // Kept for fallback
     private Rigidbody rb;
     private float lastSyncTime;
     private float lastHitTime;
@@ -171,31 +176,30 @@ public class NetworkedBall : NetworkBehaviour
     private IEnumerator TryFindAnchorAndInitialize()
     {
         int attempts = 0;
-        while (sharedAnchor == null && attempts < 50)
+        
+        // First, try to find the table - this is our main reference frame
+        while (tableTransform == null && attempts < 50)
         {
-            // Try to find the shared anchor
-            var anchors = FindObjectsOfType<OVRSpatialAnchor>();
-            foreach (var anchor in anchors)
+            var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+            if (table != null)
             {
-                if (anchor.gameObject.name.Contains("Shared") || 
-                    anchor.gameObject.name.Contains("Anchor"))
-                {
-                    sharedAnchor = anchor.transform;
-                    Debug.Log($"[NetworkedBall] Found anchor: {anchor.gameObject.name}");
-                    break;
-                }
+                tableTransform = table.transform;
+                Debug.Log($"[NetworkedBall] Found table: {table.name} at position {tableTransform.position}");
             }
             
+            // Also try to find anchor as fallback
             if (sharedAnchor == null)
             {
-                // Also try finding by tag or AlignmentManager reference
-                var alignmentManager = FindObjectOfType<AlignmentManager>();
-                if (alignmentManager != null)
+                var anchors = FindObjectsOfType<OVRSpatialAnchor>();
+                foreach (var anchor in anchors)
                 {
-                    var anchorObj = GameObject.FindGameObjectWithTag("SharedAnchor");
-                    if (anchorObj != null)
+                    if (anchor.gameObject.name.Contains("Shared") || 
+                        anchor.gameObject.name.Contains("Anchor"))
                     {
-                        sharedAnchor = anchorObj.transform;
+                        sharedAnchor = anchor.transform;
+                        Debug.Log($"[NetworkedBall] Found anchor: {anchor.gameObject.name} at position {anchor.transform.position}");
+                        break;
                     }
                 }
             }
@@ -204,9 +208,10 @@ public class NetworkedBall : NetworkBehaviour
             yield return new WaitForSeconds(0.2f);
         }
         
-        if (sharedAnchor != null)
+        if (tableTransform != null)
         {
             isInitialized = true;
+            Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}");
             
             // Find game manager
             gameManager = FindObjectOfType<TableTennisGameManager>();
@@ -217,13 +222,30 @@ public class NetworkedBall : NetworkBehaviour
             }
             else
             {
+                // Client: Initial position update
+                Debug.Log($"[NetworkedBall] Client: TableRelativePosition={TableRelativePosition}");
                 UpdateLocalPositionFromNetwork();
+                Debug.Log($"[NetworkedBall] Client: Ball positioned at {transform.position}");
             }
         }
         else
         {
-            Debug.LogWarning("[NetworkedBall] Could not find shared anchor after 50 attempts");
-            sharedAnchor = new GameObject("FallbackAnchor").transform;
+            Debug.LogWarning("[NetworkedBall] Could not find table after 50 attempts, using fallback");
+            
+            // Fallback: Use static anchor position from AnchorGUIManager if available
+            Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
+            if (firstAnchor.sqrMagnitude > 0.01f)
+            {
+                Debug.Log($"[NetworkedBall] Using static anchor position as fallback: {firstAnchor}");
+                GameObject fallbackObj = new GameObject("FallbackTable_FromStatic");
+                fallbackObj.transform.position = firstAnchor;
+                tableTransform = fallbackObj.transform;
+            }
+            else
+            {
+                // Last resort: create at origin
+                tableTransform = new GameObject("FallbackTable_Origin").transform;
+            }
             isInitialized = true;
         }
     }
@@ -312,10 +334,10 @@ public class NetworkedBall : NetworkBehaviour
             
             transform.position = newPos;
             
-            // Update anchor-relative position for sync
-            if (sharedAnchor != null)
+            // Update table-relative position for sync
+            if (tableTransform != null)
             {
-                AnchorRelativePosition = sharedAnchor.InverseTransformPoint(newPos);
+                TableRelativePosition = tableTransform.InverseTransformPoint(newPos);
             }
         }
     }
@@ -411,21 +433,37 @@ public class NetworkedBall : NetworkBehaviour
         if (Time.time - lastSyncTime < 1f / syncRate) return;
         lastSyncTime = Time.time;
         
-        AnchorRelativePosition = sharedAnchor.InverseTransformPoint(transform.position);
-        AnchorRelativeVelocity = sharedAnchor.InverseTransformDirection(rb.velocity);
+        // Use table as reference frame - table is aligned to same world position on both devices
+        if (tableTransform != null)
+        {
+            TableRelativePosition = tableTransform.InverseTransformPoint(transform.position);
+            TableRelativeVelocity = tableTransform.InverseTransformDirection(rb.velocity);
+        }
     }
     
     private void UpdateLocalPositionFromNetwork()
     {
-        if (sharedAnchor == null) return;
+        if (tableTransform == null)
+        {
+            Debug.LogWarning("[NetworkedBall] Client: tableTransform is null, cannot update position");
+            return;
+        }
         
         previousPosition = targetPosition;
-        targetPosition = sharedAnchor.TransformPoint(AnchorRelativePosition);
+        targetPosition = tableTransform.TransformPoint(TableRelativePosition);
         interpolationTime = 0f;
+        
+        // Debug log periodically to help diagnose issues
+        if (Time.frameCount % 60 == 0) // Every ~1 second
+        {
+            Debug.Log($"[NetworkedBall] Client update: TableRelPos={TableRelativePosition}, WorldPos={targetPosition}, Table at {tableTransform.position}");
+        }
     }
     
     private void InterpolatePosition()
     {
+        if (tableTransform == null) return;
+        
         interpolationTime += Time.deltaTime * syncRate;
         
         if (interpolationTime <= 1f)
@@ -434,7 +472,7 @@ public class NetworkedBall : NetworkBehaviour
         }
         else
         {
-            Vector3 worldVelocity = sharedAnchor.TransformDirection(AnchorRelativeVelocity);
+            Vector3 worldVelocity = tableTransform.TransformDirection(TableRelativeVelocity);
             transform.position = targetPosition + worldVelocity * (interpolationTime - 1f) / syncRate;
         }
     }
@@ -484,6 +522,12 @@ public class NetworkedBall : NetworkBehaviour
             FindTableObject();
         }
         
+        // Also ensure tableTransform is set (for network sync)
+        if (tableTransform == null && tableObject != null)
+        {
+            tableTransform = tableObject;
+        }
+        
         Vector3 worldServePos;
         
         if (tableObject != null)
@@ -494,12 +538,12 @@ public class NetworkedBall : NetworkBehaviour
             Vector3 localServePos = new Vector3(0, serveHeight, zOffset);
             worldServePos = tableObject.TransformPoint(localServePos);
         }
-        else if (sharedAnchor != null)
+        else if (tableTransform != null)
         {
-            // Fallback to anchor-relative
+            // Fallback to tableTransform
             float zOffset = serverPlayerNumber == 1 ? -serveDistanceFromCenter : serveDistanceFromCenter;
             Vector3 servePosition = new Vector3(0, tableHeight + serveHeight, zOffset);
-            worldServePos = sharedAnchor.TransformPoint(servePosition);
+            worldServePos = tableTransform.TransformPoint(servePosition);
         }
         else
         {
@@ -516,12 +560,12 @@ public class NetworkedBall : NetworkBehaviour
         
         lastHitTime = Time.time;
         
-        // Update anchor-relative position for sync
-        if (sharedAnchor != null)
+        // Update table-relative position for sync
+        if (tableTransform != null)
         {
-            AnchorRelativePosition = sharedAnchor.InverseTransformPoint(worldServePos);
+            TableRelativePosition = tableTransform.InverseTransformPoint(worldServePos);
         }
-        AnchorRelativeVelocity = Vector3.zero;
+        TableRelativeVelocity = Vector3.zero;
         
         Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos} - IN POSITIONING MODE");
     }
