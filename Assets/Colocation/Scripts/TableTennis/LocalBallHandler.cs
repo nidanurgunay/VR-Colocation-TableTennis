@@ -12,24 +12,46 @@ public class LocalBallHandler : MonoBehaviour
     
     [Header("Physics Settings")]
     [SerializeField] private float gravity = 9.81f;
-    [SerializeField] private float bounciness = 0.85f;
-    [SerializeField] private float tableHeight = 0.76f;
+    [SerializeField] private float bounciness = 0.92f; // Bounciness for table/floor (higher = bouncier)
+    [SerializeField] private float drag = 0.5f; // Air resistance
     
     private Rigidbody rb;
     private bool isInPositioningMode = true;
     private bool isInPlay = false;
     private Vector3 velocity;
+    private float lastHitTime = 0f; // Prevent double-hits
+    private TableTennisManager tableTennisManager;
     
     public void Initialize(Rigidbody rigidbody)
     {
         rb = rigidbody;
         isInPositioningMode = true;
+        tableTennisManager = FindObjectOfType<TableTennisManager>();
+        lastHitTime = Time.time; // Prevent immediate hit detection after spawn
         
-        // Make ball non-kinematic but freeze position for positioning mode
-        // This allows collision detection with kinematic rackets
+        // Setup rigidbody for proper physics
         rb.isKinematic = false;
-        rb.useGravity = false;
+        rb.useGravity = false; // We'll apply gravity manually for more control
+        rb.drag = drag;
+        rb.angularDrag = 0.5f;
         rb.constraints = RigidbodyConstraints.FreezeAll; // Freeze until hit
+        rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
+        
+        // Create and apply a bouncy physics material
+        PhysicMaterial bouncyMat = new PhysicMaterial("BallMaterial");
+        bouncyMat.bounciness = bounciness;
+        bouncyMat.bounceCombine = PhysicMaterialCombine.Maximum;
+        bouncyMat.frictionCombine = PhysicMaterialCombine.Minimum;
+        bouncyMat.dynamicFriction = 0.2f;
+        bouncyMat.staticFriction = 0.2f;
+        
+        // Apply to all colliders on the ball
+        var colliders = GetComponentsInChildren<Collider>();
+        foreach (var col in colliders)
+        {
+            col.material = bouncyMat;
+        }
         
         Debug.Log("[LocalBallHandler] Initialized in positioning mode - use thumbsticks to move, hit with racket to start");
     }
@@ -48,6 +70,9 @@ public class LocalBallHandler : MonoBehaviour
     /// </summary>
     private void CheckProximityHit()
     {
+        // Don't check if we just spawned or just hit
+        if (Time.time - lastHitTime < 0.5f) return;
+        
         // Find all rackets and check distance
         GameObject[] rackets = GameObject.FindGameObjectsWithTag("Racket");
         foreach (var racket in rackets)
@@ -55,11 +80,11 @@ public class LocalBallHandler : MonoBehaviour
             if (racket == null || !racket.activeInHierarchy) continue;
             
             float distance = Vector3.Distance(transform.position, racket.transform.position);
-            if (distance < 0.15f) // 15cm proximity
+            if (distance < 0.12f) // 12cm proximity (tighter)
             {
-                // Get racket velocity
+                // Get racket velocity - needs to be moving fast enough (actual swing)
                 Rigidbody racketRb = racket.GetComponent<Rigidbody>();
-                if (racketRb != null && racketRb.velocity.magnitude > 0.5f)
+                if (racketRb != null && racketRb.velocity.magnitude > 1.0f) // Higher threshold
                 {
                     Debug.Log($"[LocalBallHandler] PROXIMITY HIT! Distance: {distance}, Velocity: {racketRb.velocity.magnitude}");
                     HandleProximityHit(racket, racketRb.velocity);
@@ -76,42 +101,50 @@ public class LocalBallHandler : MonoBehaviour
         rb.constraints = RigidbodyConstraints.None; // Unfreeze
         rb.useGravity = false; // We handle gravity manually
         
-        // Calculate hit velocity
-        Vector3 hitVelocity = racketVelocity * 1.5f;
-        hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+        // Calculate hit direction: combination of racket velocity and direction from racket to ball
+        Vector3 racketToBall = (transform.position - racket.transform.position).normalized;
         
-        if (hitVelocity.magnitude < 2f)
+        // Blend racket velocity direction with racket-to-ball direction
+        // This makes the ball go where you swing it, but also away from the racket
+        Vector3 swingDir = racketVelocity.normalized;
+        Vector3 hitDir = (swingDir * 0.7f + racketToBall * 0.3f).normalized;
+        
+        // Use racket speed to determine ball speed
+        float hitSpeed = Mathf.Clamp(racketVelocity.magnitude * 2.5f, 2f, 12f);
+        Vector3 hitVelocity = hitDir * hitSpeed;
+        
+        // Add slight upward arc for better gameplay (like real table tennis)
+        if (hitVelocity.y < 0.5f && hitVelocity.y > -3f)
         {
-            hitVelocity = hitVelocity.normalized * 2f;
+            hitVelocity.y += 1f;
         }
         
         velocity = hitVelocity;
         rb.velocity = hitVelocity;
         isInPlay = true;
+        lastHitTime = Time.time;
         
-        Debug.Log($"[LocalBallHandler] Ball hit via proximity! Velocity: {hitVelocity}");
+        // Notify manager that ball was hit (transitions to Playing phase)
+        if (tableTennisManager != null)
+        {
+            tableTennisManager.OnBallHit();
+        }
+        
+        Debug.Log($"[LocalBallHandler] Ball hit! RacketVel={racketVelocity}, BallVel={hitVelocity}");
     }
     
     private void FixedUpdate()
     {
         if (!isInPositioningMode && isInPlay)
         {
-            // Apply gravity
-            velocity.y -= gravity * Time.fixedDeltaTime;
-            rb.velocity = velocity;
+            // Apply gravity manually (gives us more control than Unity's gravity)
+            rb.AddForce(Vector3.down * gravity, ForceMode.Acceleration);
             
-            // Simple floor/table bounce
-            if (transform.position.y < tableHeight + 0.02f && velocity.y < 0)
-            {
-                velocity.y = -velocity.y * bounciness;
-                rb.velocity = velocity;
-                Vector3 pos = transform.position;
-                pos.y = tableHeight + 0.02f;
-                transform.position = pos;
-            }
+            // Track velocity for hit detection
+            velocity = rb.velocity;
             
-            // Reset if ball falls too low
-            if (transform.position.y < -1f)
+            // Reset if ball falls too low or goes too far
+            if (transform.position.y < -2f || transform.position.magnitude > 20f)
             {
                 ResetBall();
             }
@@ -161,7 +194,20 @@ public class LocalBallHandler : MonoBehaviour
     
     private void OnCollisionEnter(Collision collision)
     {
-        // Check if hit by racket
+        // Check if hit floor - respawn ball
+        if (collision.gameObject.CompareTag("Floor") || 
+            collision.gameObject.name.ToLower().Contains("floor") ||
+            collision.gameObject.name.ToLower().Contains("ground") ||
+            collision.gameObject.layer == LayerMask.NameToLayer("Floor"))
+        {
+            Debug.Log("[LocalBallHandler] Ball hit floor - respawning!");
+            ResetBall();
+            return;
+        }
+        
+        // Check if hit by racket (with cooldown to prevent double hits)
+        if (Time.time - lastHitTime < 0.3f) return;
+        
         if (collision.gameObject.CompareTag("Racket") || 
             collision.gameObject.name.ToLower().Contains("racket"))
         {
@@ -171,7 +217,19 @@ public class LocalBallHandler : MonoBehaviour
     
     private void OnTriggerEnter(Collider other)
     {
-        // Also check triggers for racket detection
+        // Check if hit floor trigger
+        if (other.CompareTag("Floor") || 
+            other.gameObject.name.ToLower().Contains("floor") ||
+            other.gameObject.name.ToLower().Contains("ground"))
+        {
+            Debug.Log("[LocalBallHandler] Ball entered floor trigger - respawning!");
+            ResetBall();
+            return;
+        }
+        
+        // Also check triggers for racket detection (with cooldown)
+        if (Time.time - lastHitTime < 0.3f) return;
+        
         if (other.CompareTag("Racket") || 
             other.gameObject.name.ToLower().Contains("racket"))
         {
@@ -192,25 +250,41 @@ public class LocalBallHandler : MonoBehaviour
             Debug.Log("[LocalBallHandler] Exited positioning mode - game started!");
         }
         
-        // Calculate hit velocity from collision
-        Vector3 hitVelocity = collision.relativeVelocity * 0.8f;
+        // Get racket velocity for direction
+        Rigidbody racketRb = collision.gameObject.GetComponent<Rigidbody>();
+        Vector3 racketVelocity = racketRb != null ? racketRb.velocity : collision.relativeVelocity;
         
-        // Ensure some upward velocity
-        hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+        // Calculate hit direction
+        Vector3 racketToBall = (transform.position - collision.gameObject.transform.position).normalized;
+        Vector3 swingDir = racketVelocity.magnitude > 0.1f ? racketVelocity.normalized : racketToBall;
         
-        // Ensure minimum forward velocity
-        if (hitVelocity.magnitude < 2f)
+        // Blend swing direction with away-from-racket direction
+        Vector3 hitDir = (swingDir * 0.7f + racketToBall * 0.3f).normalized;
+        
+        // Calculate speed based on impact
+        float hitSpeed = Mathf.Clamp(racketVelocity.magnitude * 2.5f, 2f, 12f);
+        Vector3 hitVelocity = hitDir * hitSpeed;
+        
+        // Add slight upward arc for better gameplay
+        if (hitVelocity.y < 0.5f && hitVelocity.y > -3f)
         {
-            hitVelocity = hitVelocity.normalized * 2f;
+            hitVelocity.y += 1f;
         }
         
         velocity = hitVelocity;
         rb.velocity = hitVelocity;
         isInPlay = true;
+        lastHitTime = Time.time;
+        
+        // Notify manager that ball was hit
+        if (tableTennisManager != null)
+        {
+            tableTennisManager.OnBallHit();
+        }
         
         Debug.Log($"[LocalBallHandler] Ball velocity: {hitVelocity}");
     }
-    
+
     private void HandleRacketHitTrigger(Collider other)
     {
         Debug.Log($"[LocalBallHandler] TRIGGER HIT BY RACKET: {other.gameObject.name}");
@@ -224,15 +298,55 @@ public class LocalBallHandler : MonoBehaviour
             Debug.Log("[LocalBallHandler] Exited positioning mode - game started!");
         }
         
-        // For trigger, use a default velocity in the direction away from racket
-        Vector3 hitDir = (transform.position - other.transform.position).normalized;
-        hitDir.y = Mathf.Max(hitDir.y, 0.3f);
+        // Get racket velocity
+        Vector3 racketVel = Vector3.zero;
+        ControllerRacket racketController = other.GetComponent<ControllerRacket>();
+        if (racketController == null)
+        {
+            racketController = other.GetComponentInParent<ControllerRacket>();
+        }
         
-        Vector3 hitVelocity = hitDir * 3f;
+        if (racketController != null)
+        {
+            racketVel = racketController.GetRacketVelocity(other.gameObject);
+        }
+        else
+        {
+            // Try to get velocity directly from rigidbody
+            var otherRb = other.GetComponent<Rigidbody>();
+            if (otherRb != null)
+            {
+                racketVel = otherRb.velocity;
+            }
+        }
+        
+        // Calculate hit direction
+        Vector3 racketToBall = (transform.position - other.transform.position).normalized;
+        Vector3 swingDir = racketVel.magnitude > 0.1f ? racketVel.normalized : racketToBall;
+        
+        // Blend swing direction with away-from-racket direction
+        Vector3 hitDir = (swingDir * 0.7f + racketToBall * 0.3f).normalized;
+        
+        // Calculate speed
+        float hitSpeed = Mathf.Clamp(racketVel.magnitude * 2.5f, 2f, 12f);
+        Vector3 hitVelocity = hitDir * hitSpeed;
+        
+        // Add slight upward arc for better gameplay
+        if (hitVelocity.y < 0.5f && hitVelocity.y > -3f)
+        {
+            hitVelocity.y += 1f;
+        }
         
         velocity = hitVelocity;
         rb.velocity = hitVelocity;
         isInPlay = true;
+        lastHitTime = Time.time;
+        
+        // Notify manager that ball was hit
+        if (tableTennisManager != null)
+        {
+            tableTennisManager.OnBallHit();
+        }
         
         Debug.Log($"[LocalBallHandler] Ball velocity: {hitVelocity}");
     }

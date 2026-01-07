@@ -22,6 +22,11 @@ public class TableTennisManager : NetworkBehaviour
     [Header("Feature Toggles")]
     [SerializeField] private bool enableTableAdjustment = true; // Enable/disable table position/rotation adjustment with controllers
     
+    // Game phase tracking
+    public enum GamePhase { TableSetup, BallPositioning, Playing }
+    [Networked] public NetworkBool GameStarted { get; set; }
+    public GamePhase CurrentPhase { get; private set; } = GamePhase.TableSetup;
+    
     [Header("Runtime Adjustment Controls")]
     [SerializeField] private float moveSpeed = 2.0f; // Meters per second
     [SerializeField] private float rotateSpeed = 90f; // Degrees per second
@@ -30,6 +35,7 @@ public class TableTennisManager : NetworkBehaviour
     // Networked table position/rotation for syncing across players
     [Networked] private Vector3 NetworkedTablePosition { get; set; }
     [Networked] private float NetworkedTableYRotation { get; set; }
+    [Networked] private float NetworkedTableXRotation { get; set; } // X rotation for upside-down correction
     [Networked] private float NetworkedFloorOffset { get; set; } // Shared floor level adjustment
     
     // Networked room alignment - syncs room offset between host and client
@@ -79,10 +85,60 @@ public class TableTennisManager : NetworkBehaviour
     
     private void Update()
     {
-        HandleTableAdjustment();
+        // Only allow table adjustment during setup phase
+        if (CurrentPhase == GamePhase.TableSetup)
+        {
+            HandleTableAdjustment();
+        }
         
         // Check if client needs to apply room alignment from host
         ApplyNetworkedRoomAlignment();
+        
+        // Check for grip to start game (transition from TableSetup to BallPositioning)
+        HandleGameStartInput();
+    }
+    
+    /// <summary>
+    /// Handle grip input to transition game phases
+    /// </summary>
+    private void HandleGameStartInput()
+    {
+        // Check for grip on either controller
+        bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
+                          OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
+        
+        if (gripPressed && CurrentPhase == GamePhase.TableSetup)
+        {
+            // Transition to ball positioning
+            CurrentPhase = GamePhase.BallPositioning;
+            isInAdjustMode = false; // Disable table adjust mode
+            Debug.Log("[TableTennisManager] Grip pressed! Spawning ball...");
+            
+            // Spawn ball (host spawns for networked, anyone can spawn for local)
+            if (Object.HasStateAuthority || !Object.IsValid)
+            {
+                GameStarted = true;
+                SpawnBall();
+            }
+        }
+    }
+    
+    private IEnumerator SpawnBallDelayed()
+    {
+        yield return new WaitForSeconds(0.5f);
+        SpawnBall();
+    }
+    
+    /// <summary>
+    /// Called when ball is hit for the first time - transitions from BallPositioning to Playing
+    /// </summary>
+    public void OnBallHit()
+    {
+        if (CurrentPhase == GamePhase.BallPositioning)
+        {
+            CurrentPhase = GamePhase.Playing;
+            Debug.Log("[TableTennisManager] Ball hit! Game is now in Playing phase.");
+        }
     }
     
     // Fusion calls this every network tick - apply networked table state
@@ -94,6 +150,8 @@ public class TableTennisManager : NetworkBehaviour
     
     /// <summary>
     /// Apply room alignment from network (for clients)
+    /// Client needs to apply the same room position/rotation that the host calculated,
+    /// because both players need to see the room in the same position relative to the anchors.
     /// </summary>
     private void ApplyNetworkedRoomAlignment()
     {
@@ -105,55 +163,48 @@ public class TableTennisManager : NetworkBehaviour
         // Check if host has applied room alignment
         if (!RoomAlignmentApplied) return;
         
-        // Find room parent if not cached
+        // Find room parent (Environment)
         if (roomParentTransform == null)
         {
-            GameObject envObj = GameObject.Find("Environment");
-            if (envObj != null)
-            {
-                roomParentTransform = envObj.transform;
-            }
-            else if (tableRoot != null)
+            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+            if (tableRoot != null)
             {
                 roomParentTransform = FindRoomParent(tableRoot.transform);
             }
         }
         
-        if (roomParentTransform == null) 
+        if (roomParentTransform == null)
         {
-            Debug.Log("[TableTennisManager] Client: Room parent not found yet");
+            Debug.LogWarning("[TableTennisManager] Client: Cannot find room parent to apply alignment!");
             return;
         }
         
-        // Find table if not cached
-        if (tableRoot == null)
+        // Apply the same room position that the host calculated
+        Debug.Log($"[TableTennisManager] Client: Applying room alignment from host. Position: {NetworkedRoomPositionOffset}, Rotation: {NetworkedRoomRotationOffset}");
+        
+        // Store original position for logging
+        Vector3 roomPosBefore = roomParentTransform.position;
+        
+        // First apply rotation around current table position if needed
+        if (tableRoot != null && Mathf.Abs(NetworkedRoomRotationOffset) > 0.1f)
         {
-            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
-                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
+            Vector3 tablePos = tableRoot.transform.position;
+            roomParentTransform.RotateAround(tablePos, Vector3.up, NetworkedRoomRotationOffset);
+            Debug.Log($"[TableTennisManager] Client: Rotated room by {NetworkedRoomRotationOffset}° around table");
         }
         
-        if (tableRoot == null)
-        {
-            Debug.Log("[TableTennisManager] Client: Table not found yet");
-            return;
-        }
-        
-        Debug.Log($"[TableTennisManager] Client applying room alignment from host...");
-        Debug.Log($"[TableTennisManager] Host sent: roomPos={NetworkedRoomPositionOffset}, rotOffset={NetworkedRoomRotationOffset}");
-        Debug.Log($"[TableTennisManager] Current: roomPos={roomParentTransform.position}, tablePos={tableRoot.transform.position}");
-        
-        // The host sent the final room position and rotation offset
-        // We need to:
-        // 1. Set the room to the same final position as the host
-        // 2. Apply the same rotation
-        
-        // First, move the room to match host's final position
+        // Move room to match host's position
         roomParentTransform.position = NetworkedRoomPositionOffset;
         
-        // Also set table local position to zero (same as host did)
-        tableRoot.transform.localPosition = Vector3.zero;
+        // If table is child of room, adjust its local position to keep it at world origin
+        if (tableRoot != null && tableRoot.transform.IsChildOf(roomParentTransform))
+        {
+            tableRoot.transform.localPosition = Vector3.zero;
+        }
         
-        Debug.Log($"[TableTennisManager] Client room aligned. Room at: {roomParentTransform.position}, Table at: {tableRoot.transform.position}");
+        Debug.Log($"[TableTennisManager] Client: Room moved from {roomPosBefore} to {roomParentTransform.position}");
+        Debug.Log($"[TableTennisManager] Client: Table now at {(tableRoot != null ? tableRoot.transform.position.ToString() : "NULL")}");
         
         localRoomAligned = true;
     }
@@ -179,8 +230,9 @@ public class TableTennisManager : NetworkBehaviour
             NetworkedTablePosition.z
         );
         
-        // Apply networked rotation (Y from network + X offset for upside-down correction)
-        tableRoot.transform.rotation = Quaternion.Euler(tableXRotationOffset, NetworkedTableYRotation, 0);
+        // Apply networked rotation (use networked X rotation for upside-down correction)
+        float xRot = NetworkedTableXRotation != 0 ? NetworkedTableXRotation : tableXRotationOffset;
+        tableRoot.transform.rotation = Quaternion.Euler(xRot, NetworkedTableYRotation, 0);
         
         // Apply floor offset to camera rig so player sees correct floor level
         if (cameraRig != null && NetworkedFloorOffset != 0)
@@ -340,12 +392,8 @@ public class TableTennisManager : NetworkBehaviour
         // Setup controller-based rackets (replaces old grab system)
         SetupControllerRackets();
         
-        // Host spawns the ball
-        if (Object.HasStateAuthority)
-        {
-            yield return new WaitForSeconds(0.5f);
-            SpawnBall();
-        }
+        // Ball will be spawned when player presses GRIP to start the game
+        // (handled in HandleGameStartInput)
     }
     
     /// <summary>
@@ -522,6 +570,7 @@ public class TableTennisManager : NetworkBehaviour
             {
                 NetworkedTablePosition = tableRoot.transform.position;
                 NetworkedTableYRotation = tableRoot.transform.eulerAngles.y;
+                NetworkedTableXRotation = tableXRotationOffset; // Sync X rotation for upside-down fix
                 NetworkedFloorOffset = 0f;
             }
             
@@ -547,6 +596,7 @@ public class TableTennisManager : NetworkBehaviour
             {
                 NetworkedTablePosition = alignedPos;
                 NetworkedTableYRotation = alignedRot.eulerAngles.y;
+                NetworkedTableXRotation = alignedRot.eulerAngles.x; // Sync X rotation
                 NetworkedFloorOffset = 0f;
             }
             
@@ -567,6 +617,7 @@ public class TableTennisManager : NetworkBehaviour
             {
                 NetworkedTablePosition = currentTablePos;
                 NetworkedTableYRotation = tableRoot.transform.eulerAngles.y;
+                NetworkedTableXRotation = tableRoot.transform.eulerAngles.x; // Sync X rotation
                 NetworkedFloorOffset = 0f;
             }
             
@@ -594,6 +645,7 @@ public class TableTennisManager : NetworkBehaviour
         {
             NetworkedTablePosition = tablePos;
             NetworkedTableYRotation = tableYRotationOffset;
+            NetworkedTableXRotation = tableXRotationOffset; // Sync X rotation
             NetworkedFloorOffset = 0f;
         }
         
@@ -777,8 +829,10 @@ public class TableTennisManager : NetworkBehaviour
             
             if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
             {
-                alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
-                Debug.Log("[TableTennisManager] Applied 2-point alignment");
+                // Both host and client use the same alignment
+                // The anchors define the shared coordinate system
+                alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor, 0f);
+                Debug.Log($"[TableTennisManager] Applied 2-point alignment");
             }
             else if (primaryOVRAnchor != null)
             {

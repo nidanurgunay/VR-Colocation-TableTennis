@@ -75,8 +75,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private Transform secondAnchorTransform; // Reference to second anchor
     private Vector3 firstAnchorPosition; // Stored position of first anchor (more reliable than transform)
     private Vector3 secondAnchorPosition; // Stored position of second anchor
-    private GameObject distanceDisplayObj; // Floating text showing distance
+    private GameObject distanceDisplayObj; // Floating text showing distance (right controller)
     private TextMeshPro distanceText; // 3D text component
+    private GameObject distanceDisplayObjLeft; // Floating text for left controller
+    private TextMeshPro distanceTextLeft; // 3D text component for left controller
     
     [Header("Table Alignment")]
     [SerializeField] private Transform tableObject; // The table to align between anchors
@@ -303,7 +305,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 break;
                 
             case AlignmentStep.Done:
-                Log("Already aligned!");
+                // Re-share anchors for clients who missed it
+                Log("Re-sharing anchors for late clients...");
+                ShareAnchors();
                 break;
         }
 #else
@@ -336,8 +340,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 btnText.text = "Share & Align";
                 break;
             case AlignmentStep.Done:
-                btnText.text = "Aligned (Done)";
-                autoAlignButton.interactable = false;
+                btnText.text = "Re-Share Anchors";
+                autoAlignButton.interactable = true; // Keep interactable to allow re-sharing
                 break;
         }
     }
@@ -454,7 +458,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 Log($"Client localizing anchors: {localizedAnchors[0].Uuid}, {localizedAnchors[1].Uuid}");
                 
                 _localizedAnchor = localizedAnchors[0]; // Set primary as main
-                alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1]);
+                
+                // Client aligns to anchors the same way as host
+                // Both see the same anchor positions in world space
+                // No additional rotation needed - anchors define the shared coordinate system
+                alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1], 0f);
                 
                 // CLIENT: Store anchor positions for scene transition
                 // Wait a frame for anchor positions to be updated after localization
@@ -1218,97 +1226,162 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
     
     /// <summary>
-    /// Create floating 3D text to show distance from first anchor
+    /// Create floating 3D text to show distance from first anchor - on BOTH controllers
     /// </summary>
     private void CreateDistanceDisplay()
     {
-        if (distanceDisplayObj != null) return;
-        
-        distanceDisplayObj = new GameObject("DistanceDisplay");
-        
-        // Add TextMeshPro 3D text
-        distanceText = distanceDisplayObj.AddComponent<TextMeshPro>();
-        distanceText.text = "0.00m";
-        distanceText.fontSize = 0.5f;
-        distanceText.alignment = TextAlignmentOptions.Center;
-        distanceText.color = Color.yellow;
-        
-        // Add background for better visibility
-        var rectTransform = distanceDisplayObj.GetComponent<RectTransform>();
-        if (rectTransform != null)
+        // Create right controller display
+        if (distanceDisplayObj == null)
         {
-            rectTransform.sizeDelta = new Vector2(0.3f, 0.1f);
+            distanceDisplayObj = new GameObject("DistanceDisplayRight");
+            distanceText = distanceDisplayObj.AddComponent<TextMeshPro>();
+            distanceText.text = "0.00m";
+            distanceText.fontSize = 0.3f;
+            distanceText.alignment = TextAlignmentOptions.Center;
+            distanceText.color = Color.yellow;
+            Debug.Log("[AnchorGUI] Right controller distance display created");
         }
         
-        Debug.Log("[AnchorGUI] Distance display created");
+        // Create left controller display
+        if (distanceDisplayObjLeft == null)
+        {
+            distanceDisplayObjLeft = new GameObject("DistanceDisplayLeft");
+            distanceTextLeft = distanceDisplayObjLeft.AddComponent<TextMeshPro>();
+            distanceTextLeft.text = "0.00m";
+            distanceTextLeft.fontSize = 0.3f;
+            distanceTextLeft.alignment = TextAlignmentOptions.Center;
+            distanceTextLeft.color = Color.yellow;
+            Debug.Log("[AnchorGUI] Left controller distance display created");
+        }
     }
     
     /// <summary>
-    /// Update distance display position and value
+    /// Update distance display position and value - shows above BOTH controllers
     /// </summary>
     private void UpdateDistanceDisplay()
     {
         if (currentStep != AlignmentStep.PlaceAnchor2 || firstAnchorTransform == null)
         {
             if (distanceDisplayObj != null) distanceDisplayObj.SetActive(false);
+            if (distanceDisplayObjLeft != null) distanceDisplayObjLeft.SetActive(false);
             return;
         }
         
-        if (distanceDisplayObj == null) CreateDistanceDisplay();
-        distanceDisplayObj.SetActive(true);
+        if (distanceDisplayObj == null || distanceDisplayObjLeft == null) CreateDistanceDisplay();
         
-        // Get active controller position
         var cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig == null) return;
         
-        // Check which controller is active (prefer right, fallback to left)
-        Transform activeController = null;
-        if (OVRInput.IsControllerConnected(OVRInput.Controller.RTouch))
+        // Update RIGHT controller display
+        if (cameraRig.rightControllerAnchor != null)
         {
-            activeController = cameraRig.rightControllerAnchor;
-        }
-        else if (OVRInput.IsControllerConnected(OVRInput.Controller.LTouch))
-        {
-            activeController = cameraRig.leftControllerAnchor;
-        }
-        
-        if (activeController == null) return;
-        
-        Vector3 controllerPos = activeController.position;
-        
-        // Calculate distance from first anchor
-        float distance = Vector3.Distance(firstAnchorTransform.position, controllerPos);
-        float heightDiff = controllerPos.y - firstAnchorTransform.position.y;
-        
-        // Position text above controller
-        distanceDisplayObj.transform.position = controllerPos + Vector3.up * 0.15f;
-        
-        // Face the camera
-        if (cameraTransform != null)
-        {
-            distanceDisplayObj.transform.LookAt(cameraTransform);
-            distanceDisplayObj.transform.Rotate(0, 180, 0); // Flip to face user
-        }
-        
-        // Update text with distance and height
-        if (distanceText != null)
-        {
-            string heightStr = heightDiff >= 0 ? $"+{heightDiff:F2}m" : $"{heightDiff:F2}m";
-            distanceText.text = $"<size=120%>{distance:F2}m</size>\n<size=80%>Height: {heightStr}</size>";
+            distanceDisplayObj.SetActive(true);
+            Transform rightController = cameraRig.rightControllerAnchor;
+            Vector3 rightPos = rightController.position;
             
-            // Color based on typical table tennis table length (2.74m)
-            if (distance >= 2.5f && distance <= 3.0f)
+            // Position above right controller
+            distanceDisplayObj.transform.position = rightPos + Vector3.up * 0.15f;
+            
+            // Face the camera
+            if (cameraTransform != null)
             {
-                distanceText.color = Color.green; // Good table length
+                distanceDisplayObj.transform.LookAt(cameraTransform);
+                distanceDisplayObj.transform.Rotate(0, 180, 0);
             }
-            else if (distance >= 2.0f && distance <= 3.5f)
+            
+            // Update text
+            float distance = Vector3.Distance(firstAnchorTransform.position, rightPos);
+            UpdateDistanceText(distanceText, distance, rightPos.y - firstAnchorTransform.position.y);
+        }
+        else
+        {
+            distanceDisplayObj.SetActive(false);
+        }
+        
+        // Update LEFT controller display
+        if (cameraRig.leftControllerAnchor != null)
+        {
+            distanceDisplayObjLeft.SetActive(true);
+            Transform leftController = cameraRig.leftControllerAnchor;
+            Vector3 leftPos = leftController.position;
+            
+            // Position above left controller
+            distanceDisplayObjLeft.transform.position = leftPos + Vector3.up * 0.15f;
+            
+            // Face the camera
+            if (cameraTransform != null)
             {
-                distanceText.color = Color.yellow; // Acceptable
+                distanceDisplayObjLeft.transform.LookAt(cameraTransform);
+                distanceDisplayObjLeft.transform.Rotate(0, 180, 0);
+            }
+            
+            // Update text
+            float distance = Vector3.Distance(firstAnchorTransform.position, leftPos);
+            UpdateDistanceText(distanceTextLeft, distance, leftPos.y - firstAnchorTransform.position.y);
+        }
+        else
+        {
+            distanceDisplayObjLeft.SetActive(false);
+        }
+    }
+    
+    /// <summary>
+    /// Update the text content and color of a distance display
+    /// </summary>
+    private void UpdateDistanceText(TextMeshPro textComponent, float distance, float heightDiff)
+    {
+        if (textComponent == null) return;
+        
+        string heightStr = heightDiff >= 0 ? $"+{heightDiff:F2}m" : $"{heightDiff:F2}m";
+        string optimumInfo = "";
+        
+        // Add guidance about optimum distance (table tennis table = 2.74m)
+        if (distance < 2.0f)
+        {
+            optimumInfo = "\n<size=60%>Too close! 2.74m</size>";
+        }
+        else if (distance >= 2.0f && distance < 2.6f)
+        {
+            optimumInfo = "\n<size=60%>Closer... 2.74m</size>";
+        }
+        else if (distance >= 2.6f && distance <= 2.9f)
+        {
+            if (distance >= 2.70f && distance <= 2.78f)
+            {
+                optimumInfo = "\n<size=60%>★ PERFECT! ★</size>";
             }
             else
             {
-                distanceText.color = Color.red; // Too short or too long
+                optimumInfo = "\n<size=60%>Good! 2.74m</size>";
             }
+        }
+        else if (distance > 2.9f && distance <= 3.5f)
+        {
+            optimumInfo = "\n<size=60%>Too far 2.74m</size>";
+        }
+        else
+        {
+            optimumInfo = "\n<size=60%>WAY too far!</size>";
+        }
+        
+        textComponent.text = $"<size=120%>{distance:F2}m</size>\n<size=70%>H:{heightStr}</size>{optimumInfo}";
+        
+        // Color based on table tennis table length (2.74m)
+        if (distance >= 2.70f && distance <= 2.78f)
+        {
+            textComponent.color = Color.green;
+        }
+        else if (distance >= 2.5f && distance <= 3.0f)
+        {
+            textComponent.color = new Color(0.5f, 1f, 0.5f);
+        }
+        else if (distance >= 2.0f && distance <= 3.5f)
+        {
+            textComponent.color = Color.yellow;
+        }
+        else
+        {
+            textComponent.color = Color.red;
         }
     }
 

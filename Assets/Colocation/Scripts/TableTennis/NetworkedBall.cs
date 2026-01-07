@@ -10,7 +10,7 @@ public class NetworkedBall : NetworkBehaviour
 {
     [Header("Physics Settings")]
     [SerializeField] private float gravity = 9.81f;
-    [SerializeField] private float bounciness = 0.85f;
+    [SerializeField] private float bounciness = 0.92f;
     [SerializeField] private float airResistance = 0.02f;
     [SerializeField] private float tableHeight = 0.76f; // Standard table tennis height
     

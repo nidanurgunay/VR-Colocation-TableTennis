@@ -18,6 +18,7 @@ public class AlignmentManager : MonoBehaviour
     private OVRSpatialAnchor _secondaryAnchor; // Secondary (for 2-point alignment)
     private Coroutine _periodicAlignmentCoroutine;
     private bool _isAligned = false;
+    private float _additionalYRotation = 0f; // Additional Y rotation for client alignment (180° for opposite side)
 
     private void Awake()
     {
@@ -49,7 +50,7 @@ public class AlignmentManager : MonoBehaviour
         StartCoroutine(AlignmentCoroutine(anchor, enablePeriodic));
     }
 
-    public void AlignUserToTwoAnchors(OVRSpatialAnchor primaryAnchor, OVRSpatialAnchor secondaryAnchor)
+    public void AlignUserToTwoAnchors(OVRSpatialAnchor primaryAnchor, OVRSpatialAnchor secondaryAnchor, float additionalYRotation = 0f)
     {
         if (!primaryAnchor || !primaryAnchor.Localized || !secondaryAnchor || !secondaryAnchor.Localized)
         {
@@ -57,11 +58,12 @@ public class AlignmentManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"Colocation: Starting 2-point alignment. Primary: {primaryAnchor.Uuid}, Secondary: {secondaryAnchor.Uuid}");
+        Debug.Log($"Colocation: Starting 2-point alignment. Primary: {primaryAnchor.Uuid}, Secondary: {secondaryAnchor.Uuid}, AdditionalRotation: {additionalYRotation}");
         
         _currentAnchor = primaryAnchor; 
         _secondaryAnchor = secondaryAnchor;
-        StartCoroutine(TwoPointAlignmentCoroutine(primaryAnchor, secondaryAnchor));
+        _additionalYRotation = additionalYRotation; // Store for periodic re-alignment
+        StartCoroutine(TwoPointAlignmentCoroutine(primaryAnchor, secondaryAnchor, additionalYRotation));
     }
     
     /// <summary>
@@ -121,7 +123,7 @@ public class AlignmentManager : MonoBehaviour
         }
     }
 
-    private IEnumerator TwoPointAlignmentCoroutine(OVRSpatialAnchor primary, OVRSpatialAnchor secondary)
+    private IEnumerator TwoPointAlignmentCoroutine(OVRSpatialAnchor primary, OVRSpatialAnchor secondary, float additionalYRotation = 0f)
     {
         var primaryTransform = primary.transform;
         var secondaryTransform = secondary.transform;
@@ -151,7 +153,8 @@ public class AlignmentManager : MonoBehaviour
             {
                 // We want Real Vector to align with Virtual Forward (+Z)
                 float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
-                Vector3 targetRot = new Vector3(0, -realHeading, 0);
+                // Add additional rotation (e.g., 180° for client to face opposite direction)
+                Vector3 targetRot = new Vector3(0, -realHeading + additionalYRotation, 0);
 
                 // Apply Rotation
                 _cameraRigTransform.eulerAngles = targetRot;
@@ -167,7 +170,7 @@ public class AlignmentManager : MonoBehaviour
             yield return new WaitForEndOfFrame();
         }
 
-        Debug.Log("Colocation: 2-Point alignment complete.");
+        Debug.Log($"Colocation: 2-Point alignment complete. Additional rotation: {additionalYRotation}");
         _isAligned = true;
         // Periodic alignment not fully implemented for 2-points yet in this snippet
     }
@@ -197,7 +200,8 @@ public class AlignmentManager : MonoBehaviour
                 realVector.y = 0; 
                 
                 float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
-                targetRotation = new Vector3(0, -realHeading, 0);
+                // Apply the stored additional rotation (e.g., 180° for client)
+                targetRotation = new Vector3(0, -realHeading + _additionalYRotation, 0);
                 
                 // For position, we effectively want to apply the translation that brings _currentAnchor to 0,0,0
                 // BUT we must account for the pivot of rotation.

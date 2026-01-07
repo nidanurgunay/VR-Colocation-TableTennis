@@ -15,7 +15,7 @@ public class ControllerRacket : NetworkBehaviour
     [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller
     [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller
     [SerializeField] private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f); // Position offset from controller
-    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 184f, 81f); // Default rotation for natural grip
+    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 189.0f, 77.4f); // Default rotation for natural grip
     [SerializeField] private float racketScale = 10f; // 10x scale for visibility
     
     [Header("Adjustment Settings")]
@@ -57,6 +57,20 @@ public class ControllerRacket : NetworkBehaviour
     private Vector3 lastLeftPos;
     private Vector3 lastRightPos;
     
+    // Public getter for racket velocity (used for ball hit detection)
+    public Vector3 GetRacketVelocity(GameObject racketObject)
+    {
+        if (racketObject == leftRacket && leftRacketRb != null)
+            return leftRacketRb.velocity;
+        if (racketObject == rightRacket && rightRacketRb != null)
+            return rightRacketRb.velocity;
+        // Fallback: try to find rigidbody on the object
+        var rb = racketObject.GetComponent<Rigidbody>();
+        if (rb != null)
+            return rb.velocity;
+        return Vector3.zero;
+    }
+    
     // Remote player racket representations
     private GameObject remoteLeftRacket;
     private GameObject remoteRightRacket;
@@ -81,10 +95,18 @@ public class ControllerRacket : NetworkBehaviour
         base.Spawned();
         isNetworked = true;
         isLocalPlayer = Object.HasInputAuthority;
-        Debug.Log($"[ControllerRacket] Spawned via Fusion - IsLocalPlayer: {isLocalPlayer}");
+        Debug.Log($"[ControllerRacket] Spawned via Fusion - IsLocalPlayer: {isLocalPlayer}, HasStateAuthority: {Object.HasStateAuthority}");
         
         if (isLocalPlayer)
         {
+            // Request State Authority so we can modify networked properties
+            // Each player needs state authority over their own racket to sync position/visibility
+            if (!Object.HasStateAuthority)
+            {
+                Object.RequestStateAuthority();
+                Debug.Log("[ControllerRacket] Requested State Authority for local player's racket");
+            }
+            
             // Local player - setup controller tracking
             InitializeLocalPlayer();
         }
@@ -420,7 +442,23 @@ public class ControllerRacket : NetworkBehaviour
         if (leftController == null || rightController == null)
         {
             FindControllers();
+            // If we just found controllers and have racketPrefab but no rackets, create them
+            if (leftController != null && rightController != null && racketPrefab != null)
+            {
+                if (leftRacket == null || rightRacket == null)
+                {
+                    Debug.Log("[ControllerRacket] Controllers found - creating rackets now");
+                    CreateRacketOnController();
+                }
+            }
             return;
+        }
+        
+        // Ensure rackets are created (they might not exist if controllers were found late)
+        if ((leftRacket == null || rightRacket == null) && racketPrefab != null)
+        {
+            Debug.Log("[ControllerRacket] Rackets missing but have prefab - creating now");
+            CreateRacketOnController();
         }
         
         // Toggle adjust mode with A button (Button.One on right controller)
@@ -440,40 +478,113 @@ public class ControllerRacket : NetworkBehaviour
             HandleRacketAdjustment();
         }
         
-        // Check for toggle on left controller (Y button)
+        // Y button (left controller) = toggle LEFT racket (deactivates right)
+        // B button (right controller) = toggle RIGHT racket (deactivates left)
+        // Only ONE racket can be active at a time
         bool leftPressed = OVRInput.Get(leftActivateButton, OVRInput.Controller.LTouch);
+        bool rightPressed = OVRInput.Get(rightActivateButton, OVRInput.Controller.RTouch);
+        
+        // Toggle LEFT racket with Y button (and deactivate right)
         if (leftPressed && !leftWasPressed)
         {
+            Debug.Log($"[RACKET_DEBUG] Y button pressed! leftRacket={leftRacket}, leftController={leftController}");
+            
             leftActive = !leftActive;
+            
+            // If activating left, deactivate right
+            if (leftActive)
+            {
+                rightActive = false;
+                if (rightRacket != null)
+                {
+                    rightRacket.SetActive(false);
+                    if (!showControllersAlways)
+                    {
+                        SetControllerVisualActive(rightControllerVisual, true, rightController);
+                    }
+                }
+            }
+            
             if (leftRacket != null)
             {
                 leftRacket.SetActive(leftActive);
-                // Keep controller visible if showControllersAlways is true
                 if (!showControllersAlways)
                 {
-                    SetControllerVisualActive(leftControllerVisual, !leftActive);
+                    SetControllerVisualActive(leftControllerVisual, !leftActive, leftController);
                 }
-                Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}");
+                Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}, position={leftRacket.transform.position}");
+            }
+            else
+            {
+                Debug.LogError($"[RACKET_DEBUG] leftRacket is NULL! Trying to create now...");
+                // Try to create rackets if they weren't created before
+                if (racketPrefab != null && leftController != null)
+                {
+                    CreateRacketOnController();
+                    if (leftRacket != null)
+                    {
+                        leftRacket.SetActive(leftActive);
+                        Debug.Log($"[RACKET_DEBUG] Left racket created on demand and set to: {leftActive}");
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"[RACKET_DEBUG] Cannot create: racketPrefab={racketPrefab}, leftController={leftController}");
+                }
             }
         }
-        leftWasPressed = leftPressed;
         
-        // Check for toggle on right controller (B button)
-        bool rightPressed = OVRInput.Get(rightActivateButton, OVRInput.Controller.RTouch);
+        // Toggle RIGHT racket with B button (and deactivate left)
         if (rightPressed && !rightWasPressed)
         {
+            Debug.Log($"[RACKET_DEBUG] B button pressed! rightRacket={rightRacket}, rightController={rightController}");
+            
             rightActive = !rightActive;
+            
+            // If activating right, deactivate left
+            if (rightActive)
+            {
+                leftActive = false;
+                if (leftRacket != null)
+                {
+                    leftRacket.SetActive(false);
+                    if (!showControllersAlways)
+                    {
+                        SetControllerVisualActive(leftControllerVisual, true, leftController);
+                    }
+                }
+            }
+            
             if (rightRacket != null)
             {
                 rightRacket.SetActive(rightActive);
-                // Keep controller visible if showControllersAlways is true
                 if (!showControllersAlways)
                 {
-                    SetControllerVisualActive(rightControllerVisual, !rightActive);
+                    SetControllerVisualActive(rightControllerVisual, !rightActive, rightController);
                 }
-                Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}");
+                Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}, position={rightRacket.transform.position}");
+            }
+            else
+            {
+                Debug.LogError($"[RACKET_DEBUG] rightRacket is NULL! Trying to create now...");
+                // Try to create rackets if they weren't created before
+                if (racketPrefab != null && rightController != null)
+                {
+                    CreateRacketOnController();
+                    if (rightRacket != null)
+                    {
+                        rightRacket.SetActive(rightActive);
+                        Debug.Log($"[RACKET_DEBUG] Right racket created on demand and set to: {rightActive}");
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"[RACKET_DEBUG] Cannot create: racketPrefab={racketPrefab}, rightController={rightController}");
+                }
             }
         }
+        
+        leftWasPressed = leftPressed;
         rightWasPressed = rightPressed;
     }
     
@@ -523,7 +634,7 @@ public class ControllerRacket : NetworkBehaviour
         }
     }
     
-    private void SetControllerVisualActive(GameObject controllerVisual, bool active)
+    private void SetControllerVisualActive(GameObject controllerVisual, bool active, Transform controllerAnchor = null)
     {
         if (controllerVisual != null)
         {
@@ -544,48 +655,46 @@ public class ControllerRacket : NetworkBehaviour
             Debug.Log($"[RACKET_DEBUG] Controller visual {(active ? "SHOWN" : "HIDDEN")} - disabled {renderers.Length} renderers");
         }
         
-        // Disable ray/pointer visuals
-        DisableRayVisuals(!active);
+        // Disable ray/pointer visuals for this specific controller
+        if (controllerAnchor != null)
+        {
+            SetRayVisuals(controllerAnchor, active);
+        }
     }
     
-    private void DisableRayVisuals(bool hide)
+    private void SetRayVisuals(Transform controllerAnchor, bool show)
     {
-        // Find and disable common ray/pointer components
-        var cameraRig = FindObjectOfType<OVRCameraRig>(true);
-        if (cameraRig == null) return;
+        if (controllerAnchor == null) return;
         
-        // Try to find OVRRayHelper components
-        var rayHelpers = cameraRig.GetComponentsInChildren<OVRRayHelper>(true);
+        // Disable ray/pointer components on this specific controller
+        var rayHelpers = controllerAnchor.GetComponentsInChildren<OVRRayHelper>(true);
         foreach (var rayHelper in rayHelpers)
         {
-            rayHelper.enabled = !hide;
+            rayHelper.enabled = show;
+            Debug.Log($"[RACKET_DEBUG] OVRRayHelper on {controllerAnchor.name}: {(show ? "enabled" : "disabled")}");
         }
         
-        // Try to find LineRenderer components (commonly used for rays)
-        var lineRenderers = cameraRig.GetComponentsInChildren<LineRenderer>(true);
+        // Disable LineRenderer components (commonly used for rays)
+        var lineRenderers = controllerAnchor.GetComponentsInChildren<LineRenderer>(true);
         foreach (var lr in lineRenderers)
         {
-            lr.enabled = !hide;
+            lr.enabled = show;
+            Debug.Log($"[RACKET_DEBUG] LineRenderer on {controllerAnchor.name}: {(show ? "enabled" : "disabled")}");
         }
         
-        // Try to find UIRaycastr or similar pointer components by name
-        foreach (Transform child in cameraRig.GetComponentsInChildren<Transform>(true))
+        // Find ray/pointer objects by name and disable their renderers
+        foreach (Transform child in controllerAnchor.GetComponentsInChildren<Transform>(true))
         {
             string nameLower = child.name.ToLower();
-            if (nameLower.Contains("ray") || nameLower.Contains("pointer") || nameLower.Contains("laser"))
+            if (nameLower.Contains("ray") || nameLower.Contains("pointer") || nameLower.Contains("laser") || nameLower.Contains("beam"))
             {
-                var childRenderers = child.GetComponentsInChildren<Renderer>(true);
-                foreach (var r in childRenderers)
-                {
-                    r.enabled = !hide;
-                }
+                // Disable the gameobject itself
+                child.gameObject.SetActive(show);
+                Debug.Log($"[RACKET_DEBUG] Ray object '{child.name}': {(show ? "enabled" : "disabled")}");
             }
         }
         
-        if (hide)
-        {
-            Debug.Log("[RACKET_DEBUG] Disabled ray/pointer visuals");
-        }
+        Debug.Log($"[RACKET_DEBUG] Ray visuals for {controllerAnchor.name}: {(show ? "SHOWN" : "HIDDEN")}");
     }
     
     /// <summary>
@@ -642,6 +751,14 @@ public class ControllerRacket : NetworkBehaviour
     public override void FixedUpdateNetwork()
     {
         if (!isLocalPlayer) return;
+        
+        // Need State Authority to modify networked properties
+        if (!Object.HasStateAuthority)
+        {
+            // Keep requesting until we get it
+            Object.RequestStateAuthority();
+            return;
+        }
         
         // Sync right racket
         if (rightRacket != null && rightActive)
