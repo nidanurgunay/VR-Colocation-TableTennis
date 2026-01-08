@@ -75,6 +75,12 @@ public class ControllerRacket : NetworkBehaviour
     private GameObject remoteLeftRacket;
     private GameObject remoteRightRacket;
     
+    // Rigidbodies for remote rackets (for velocity tracking)
+    private Rigidbody remoteLeftRacketRb;
+    private Rigidbody remoteRightRacketRb;
+    private Vector3 lastRemoteLeftPos;
+    private Vector3 lastRemoteRightPos;
+    
     // Toggle states
     private bool leftActive = false;
     private bool rightActive = false;
@@ -281,28 +287,25 @@ public class ControllerRacket : NetworkBehaviour
             return;
         }
         
-        // Hide the original racket(s) on the table
+        // Hide the original racket template only
         racketPrefab.SetActive(false);
         
-        // Also hide any other rackets in the scene
-        var allRackets = GameObject.FindGameObjectsWithTag("Racket");
-        foreach (var r in allRackets)
-        {
-            r.SetActive(false);
-        }
-        
-        // Find and hide rackets by name too
-        var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
+        // Find and hide ONLY the original scene template rackets (under pingpong parent)
+        // Do NOT hide any rackets that were dynamically instantiated (controller/remote)
+        var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("PingPongTable");
         if (pingPongParent != null)
         {
             foreach (Transform child in pingPongParent.GetComponentsInChildren<Transform>(true))
             {
-                if (child.name.ToLower().Contains("racket") || child.name.ToLower().Contains("paddle"))
+                string nameLower = child.name.ToLower();
+                if (nameLower.Contains("racket") || nameLower.Contains("paddle"))
                 {
-                    if (child.gameObject != leftRacket && child.gameObject != rightRacket)
+                    // Only hide if it's a scene object (not instantiated by us)
+                    // Our instantiated rackets have specific names
+                    if (!nameLower.Contains("controller") && !nameLower.Contains("remote") &&
+                        child.gameObject != leftRacket && child.gameObject != rightRacket)
                     {
                         child.gameObject.SetActive(false);
-                        Debug.Log($"[ControllerRacket] Hiding scene racket: {child.name}");
                     }
                 }
             }
@@ -365,15 +368,19 @@ public class ControllerRacket : NetworkBehaviour
     
     private void CleanupRacketComponents(GameObject racket)
     {
-        // Remove existing rigidbody - we'll add a kinematic one for velocity tracking
+        // Remove existing rigidbody - we'll add one for velocity tracking
         var rb = racket.GetComponent<Rigidbody>();
         if (rb != null) Destroy(rb);
         
-        // Add a kinematic rigidbody for velocity tracking
+        // Add a rigidbody for velocity tracking and collision detection
         rb = racket.AddComponent<Rigidbody>();
-        rb.isKinematic = true;
+        // For local rackets: kinematic (we control position)
+        // For remote rackets: non-kinematic (needs to collide with ball)
+        // We'll set this based on racket name after creation
+        rb.isKinematic = true; // Default, will be changed for remote rackets
         rb.useGravity = false;
-        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic; // Better collision detection
+        rb.interpolation = RigidbodyInterpolation.Interpolate; // Smooth movement
         
         // Set tag for collision detection
         racket.tag = "Racket";
@@ -735,14 +742,28 @@ public class ControllerRacket : NetworkBehaviour
         remoteRightRacket.transform.localScale = Vector3.one * racketScale;
         remoteRightRacket.SetActive(false);
         CleanupRacketComponents(remoteRightRacket);
+        remoteRightRacketRb = remoteRightRacket.GetComponent<Rigidbody>();
+        // Make non-kinematic so it can collide with ball (ball physics runs on host)
+        if (remoteRightRacketRb != null)
+        {
+            remoteRightRacketRb.isKinematic = false;
+            Debug.Log("[ControllerRacket] Remote right racket rigidbody set to non-kinematic for collisions");
+        }
         
         remoteLeftRacket = Instantiate(racketPrefab);
         remoteLeftRacket.name = "RemoteLeftRacket";
         remoteLeftRacket.transform.localScale = Vector3.one * racketScale;
         remoteLeftRacket.SetActive(false);
         CleanupRacketComponents(remoteLeftRacket);
+        remoteLeftRacketRb = remoteLeftRacket.GetComponent<Rigidbody>();
+        // Make non-kinematic so it can collide with ball (ball physics runs on host)
+        if (remoteLeftRacketRb != null)
+        {
+            remoteLeftRacketRb.isKinematic = false;
+            Debug.Log("[ControllerRacket] Remote left racket rigidbody set to non-kinematic for collisions");
+        }
         
-        Debug.Log("[ControllerRacket] Created remote player racket visuals");
+        Debug.Log("[ControllerRacket] Created remote player racket visuals with non-kinematic rigidbodies");
     }
     
     /// <summary>
@@ -798,14 +819,37 @@ public class ControllerRacket : NetworkBehaviour
             remoteRightRacket.SetActive(NetworkedRightRacketVisible);
             if (NetworkedRightRacketVisible)
             {
-                remoteRightRacket.transform.position = Vector3.Lerp(
-                    remoteRightRacket.transform.position, 
-                    NetworkedRightRacketPos, 
-                    Time.deltaTime * 20f);
-                remoteRightRacket.transform.rotation = Quaternion.Slerp(
-                    remoteRightRacket.transform.rotation, 
-                    NetworkedRightRacketRot, 
-                    Time.deltaTime * 20f);
+                Vector3 targetPos = NetworkedRightRacketPos;
+                Quaternion targetRot = NetworkedRightRacketRot;
+                
+                // Use Rigidbody.MovePosition for physics-based movement (allows collisions)
+                if (remoteRightRacketRb != null)
+                {
+                    remoteRightRacketRb.MovePosition(Vector3.Lerp(
+                        remoteRightRacket.transform.position, 
+                        targetPos, 
+                        Time.deltaTime * 20f));
+                    remoteRightRacketRb.MoveRotation(Quaternion.Slerp(
+                        remoteRightRacket.transform.rotation, 
+                        targetRot, 
+                        Time.deltaTime * 20f));
+                    
+                    // Manually calculate velocity for collision detection
+                    remoteRightRacketRb.velocity = (targetPos - lastRemoteRightPos) / Time.deltaTime;
+                    lastRemoteRightPos = remoteRightRacket.transform.position;
+                }
+                else
+                {
+                    // Fallback if no rigidbody
+                    remoteRightRacket.transform.position = Vector3.Lerp(
+                        remoteRightRacket.transform.position, 
+                        targetPos, 
+                        Time.deltaTime * 20f);
+                    remoteRightRacket.transform.rotation = Quaternion.Slerp(
+                        remoteRightRacket.transform.rotation, 
+                        targetRot, 
+                        Time.deltaTime * 20f);
+                }
             }
         }
         
@@ -815,14 +859,37 @@ public class ControllerRacket : NetworkBehaviour
             remoteLeftRacket.SetActive(NetworkedLeftRacketVisible);
             if (NetworkedLeftRacketVisible)
             {
-                remoteLeftRacket.transform.position = Vector3.Lerp(
-                    remoteLeftRacket.transform.position, 
-                    NetworkedLeftRacketPos, 
-                    Time.deltaTime * 20f);
-                remoteLeftRacket.transform.rotation = Quaternion.Slerp(
-                    remoteLeftRacket.transform.rotation, 
-                    NetworkedLeftRacketRot, 
-                    Time.deltaTime * 20f);
+                Vector3 targetPos = NetworkedLeftRacketPos;
+                Quaternion targetRot = NetworkedLeftRacketRot;
+                
+                // Use Rigidbody.MovePosition for physics-based movement (allows collisions)
+                if (remoteLeftRacketRb != null)
+                {
+                    remoteLeftRacketRb.MovePosition(Vector3.Lerp(
+                        remoteLeftRacket.transform.position, 
+                        targetPos, 
+                        Time.deltaTime * 20f));
+                    remoteLeftRacketRb.MoveRotation(Quaternion.Slerp(
+                        remoteLeftRacket.transform.rotation, 
+                        targetRot, 
+                        Time.deltaTime * 20f));
+                    
+                    // Manually calculate velocity for collision detection
+                    remoteLeftRacketRb.velocity = (targetPos - lastRemoteLeftPos) / Time.deltaTime;
+                    lastRemoteLeftPos = remoteLeftRacket.transform.position;
+                }
+                else
+                {
+                    // Fallback if no rigidbody
+                    remoteLeftRacket.transform.position = Vector3.Lerp(
+                        remoteLeftRacket.transform.position, 
+                        targetPos, 
+                        Time.deltaTime * 20f);
+                    remoteLeftRacket.transform.rotation = Quaternion.Slerp(
+                        remoteLeftRacket.transform.rotation, 
+                        targetRot, 
+                        Time.deltaTime * 20f);
+                }
             }
         }
     }

@@ -44,6 +44,7 @@ public class GameUIPanel_Simple : MonoBehaviour
     
     // References
     private TableTennisGameManager gameManager;
+    private TableTennisManager tableTennisManager;
     private NetworkRunner runner;
     private bool initialized = false;
     private bool isHost = false;
@@ -57,10 +58,9 @@ public class GameUIPanel_Simple : MonoBehaviour
         SetAllScore("0 - 0");
         SetAllInfo("Waiting...");
         SetAllStatus("Initializing...");
-        SetAllControls("Y = Left | B = Right");
+        SetAllControls("A = Table Adjust Mode\nGRIP = Spawn Ball\nY/B = Activate Rackets");
         
         initialized = true;
-        Debug.Log("[GameUIPanel_Simple] Initialized");
     }
     
     private void ApplyColors()
@@ -94,10 +94,32 @@ public class GameUIPanel_Simple : MonoBehaviour
     {
         if (!initialized) return;
         
-        // Find references if not set
+        // Find TableTennisManager for phase tracking
+        if (tableTennisManager == null)
+        {
+            tableTennisManager = FindObjectOfType<TableTennisManager>();
+        }
+        
+        // Find game manager every frame until found (it might be spawned later)
         if (gameManager == null)
         {
-            gameManager = FindObjectOfType<TableTennisGameManager>();
+            var managers = FindObjectsOfType<TableTennisGameManager>();
+            
+            // Prefer the one with a valid NetworkObject
+            foreach (var mgr in managers)
+            {
+                if (mgr.Object != null && mgr.Object.IsValid)
+                {
+                    gameManager = mgr;
+                    break;
+                }
+            }
+            
+            // Fallback to any if no valid network object
+            if (gameManager == null && managers.Length > 0)
+            {
+                gameManager = managers[0];
+            }
         }
         
         // Only determine host status once
@@ -108,7 +130,6 @@ public class GameUIPanel_Simple : MonoBehaviour
             {
                 isHost = runner.IsServer || runner.IsSharedModeMasterClient;
                 hostDetermined = true;
-                Debug.Log($"[GameUIPanel_Simple] Host determined: {isHost}");
             }
         }
         
@@ -119,10 +140,13 @@ public class GameUIPanel_Simple : MonoBehaviour
     {
         // Get scores
         int p1Score = 0, p2Score = 0;
+        TableTennisGameManager.GameState state = TableTennisGameManager.GameState.WaitingToStart;
+        
         if (gameManager != null)
         {
             p1Score = gameManager.Player1Score;
             p2Score = gameManager.Player2Score;
+            state = gameManager.CurrentGameState;
         }
         
         // Update all walls
@@ -132,11 +156,45 @@ public class GameUIPanel_Simple : MonoBehaviour
         string playerStr = isHost ? "You are P1 (Host)" : "You are P2 (Client)";
         SetAllInfo($"First to {winScore} | {playerStr}");
         
-        // Status
-        SetAllStatus(GetStatusText(p1Score, p2Score, isHost));
+        // Status - pass the cached state
+        SetAllStatus(GetStatusText(p1Score, p2Score, isHost, state));
+        
+        // Controls - update based on current phase
+        SetAllControls(GetControlsText());
     }
     
-    private string GetStatusText(int p1Score, int p2Score, bool isHost)
+    private string GetControlsText()
+    {
+        // Get current phase from TableTennisManager
+        if (tableTennisManager == null)
+        {
+            return "A = Table Adjust Mode\nGRIP = Start Game\nY/B = Activate Rackets";
+        }
+        
+        switch (tableTennisManager.CurrentPhase)
+        {
+            case TableTennisManager.GamePhase.TableSetup:
+                return "A = Toggle Table Adjust\n" +
+                       "L-Stick Y = Height | R-Stick X = Rotate\n" +
+                       "Y = Left Racket | B = Right Racket\n" +
+                       "GRIP = Spawn Ball";
+                       
+            case TableTennisManager.GamePhase.BallPositioning:
+                return "A = Toggle Ball Adjust\n" +
+                       "L-Stick = Move Ball | R-Stick Y = Height\n" +
+                       "Y = Left Racket | B = Right Racket\n" +
+                       "HIT BALL = Start Play";
+                       
+            case TableTennisManager.GamePhase.Playing:
+                return "Y = Left Racket | B = Right Racket\n" +
+                       "A = Adjust Racket Position";
+                       
+            default:
+                return "Y = Left Racket | B = Right Racket";
+        }
+    }
+    
+    private string GetStatusText(int p1Score, int p2Score, bool isHost, TableTennisGameManager.GameState state)
     {
         // Check for winner
         if (p1Score >= winScore || p2Score >= winScore)
@@ -148,12 +206,10 @@ public class GameUIPanel_Simple : MonoBehaviour
         
         if (gameManager == null) return "Waiting for game...";
         
-        var state = gameManager.CurrentGameState;
-        
         switch (state)
         {
             case TableTennisGameManager.GameState.WaitingToStart:
-                return "Waiting to start...";
+                return "Grip to Start";
             case TableTennisGameManager.GameState.Serving:
                 return "-- SERVE --";
             case TableTennisGameManager.GameState.Playing:

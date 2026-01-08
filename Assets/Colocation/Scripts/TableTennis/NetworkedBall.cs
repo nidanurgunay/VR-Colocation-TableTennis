@@ -55,6 +55,7 @@ public class NetworkedBall : NetworkBehaviour
     private TableTennisGameManager gameManager;
     private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
     private bool localPositioningMode = true; // Local flag for positioning
+    private bool ballAdjustModeActive = false; // Toggle with A button to enable ball movement
     
     // For interpolation on clients
     private Vector3 targetPosition;
@@ -257,11 +258,12 @@ public class NetworkedBall : NetworkBehaviour
         if (Object.HasStateAuthority)
         {
             // Skip physics simulation if in positioning mode
-            if (!IsInPositioningMode)
+            if (!IsInPositioningMode && !localPositioningMode)
             {
                 SimulatePhysics();
                 CheckForReset();
             }
+            // Always sync position to network (including during positioning)
             SyncToNetwork();
         }
     }
@@ -270,16 +272,23 @@ public class NetworkedBall : NetworkBehaviour
     {
         if (!isInitialized || sharedAnchor == null) return;
         
-        // Handle positioning mode with thumbsticks
-        if (IsInPositioningMode || localPositioningMode)
+        // Toggle ball adjust mode with A button (only in positioning mode)
+        if ((IsInPositioningMode || localPositioningMode) && 
+            (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch) ||
+             OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch) ||
+             OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch)))
+        {
+            ballAdjustModeActive = !ballAdjustModeActive;
+            Debug.Log($"[NetworkedBall] Ball adjust mode: {(ballAdjustModeActive ? "ON - Use thumbsticks to move ball" : "OFF")}");
+        }
+        
+        // Handle positioning mode with thumbsticks (only if adjust mode is active)
+        if ((IsInPositioningMode || localPositioningMode) && ballAdjustModeActive)
         {
             HandlePositioningMode();
         }
         
-        if (!Object.HasStateAuthority)
-        {
-            InterpolatePosition();
-        }
+        // Note: Client interpolation is handled in Render() for smoother updates
     }
     
     /// <summary>
@@ -348,6 +357,7 @@ public class NetworkedBall : NetworkBehaviour
     public void EnterPositioningMode()
     {
         localPositioningMode = true;
+        ballAdjustModeActive = true; // Auto-activate ball adjustment when entering positioning mode
         
         // Only access networked properties if spawned
         if (Object != null && Object.IsValid)
@@ -363,7 +373,7 @@ public class NetworkedBall : NetworkBehaviour
             rb.angularVelocity = Vector3.zero;
         }
         
-        Debug.Log("[NetworkedBall] Entered positioning mode - use thumbsticks to adjust, hit ball to start");
+        Debug.Log("[NetworkedBall] Entered positioning mode - ball adjust ON, use thumbsticks to move");
     }
     
     /// <summary>
@@ -481,6 +491,8 @@ public class NetworkedBall : NetworkBehaviour
     {
         if (!Object.HasStateAuthority && isInitialized)
         {
+            // Client always follows the networked position
+            // During positioning mode, the host updates TableRelativePosition as they move the ball
             UpdateLocalPositionFromNetwork();
         }
     }

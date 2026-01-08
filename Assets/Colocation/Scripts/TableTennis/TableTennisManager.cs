@@ -32,7 +32,13 @@ public class TableTennisManager : NetworkBehaviour
     [SerializeField] private float rotateSpeed = 90f; // Degrees per second
     [SerializeField] private bool showAdjustmentInstructions = true;
     
-    // Networked table position/rotation for syncing across players
+    // Networked table ADJUSTMENTS (relative to anchor-aligned position, not absolute world position)
+    // These are offsets that both host and client apply to their own aligned table position
+    [Networked] private float NetworkedHeightAdjustment { get; set; } // Y offset from aligned position
+    [Networked] private float NetworkedYRotationAdjustment { get; set; } // Y rotation offset from aligned rotation
+    [Networked] private float NetworkedXRotation { get; set; } // X rotation for upside-down correction
+    
+    // Legacy - kept for backward compatibility but using new approach
     [Networked] private Vector3 NetworkedTablePosition { get; set; }
     [Networked] private float NetworkedTableYRotation { get; set; }
     [Networked] private float NetworkedTableXRotation { get; set; } // X rotation for upside-down correction
@@ -49,7 +55,12 @@ public class TableTennisManager : NetworkBehaviour
     private bool isInAdjustMode = false;
     private bool tableInitialized = false; // True after PlaceTableAtAnchor completes
     private bool localRoomAligned = false; // Track if this client has aligned the room
+    private bool clientAlignmentComplete = false; // Track if client finished alignment (prevents overwriting)
     private OVRCameraRig cameraRig;
+    
+    // Store the initial aligned position/rotation (before any adjustments)
+    private Vector3 baseAlignedPosition;
+    private float baseAlignedYRotation;
     
     [Header("Table Setup")]
     [SerializeField] private Transform tableTransform;
@@ -240,40 +251,39 @@ public class TableTennisManager : NetworkBehaviour
         Debug.Log($"[TableTennisManager] CLIENT: Room moved to {roomParentTransform.position}, table local={tableRoot.transform.localPosition}");
         
         localRoomAligned = true;
-        Debug.Log($"[TableTennisManager] CLIENT: Alignment complete! Table at {tableRoot.transform.position}");
+        clientAlignmentComplete = true;
+        
+        // Store the base aligned position for relative adjustments
+        baseAlignedPosition = tableRoot.transform.position;
+        baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
+        tableInitialized = true;
+        
+        Debug.Log($"[TableTennisManager] CLIENT: Alignment complete! Table at {tableRoot.transform.position}, base stored for adjustments");
     }
     
     /// <summary>
-    /// Apply the networked table position/rotation to the local table object
+    /// Apply the networked table adjustments to the local table object
+    /// Uses RELATIVE adjustments so both host and client apply the same offsets to their own aligned position
     /// </summary>
     private void ApplyNetworkedTableState()
     {
         if (tableRoot == null) return;
         
-        // Don't apply until table is properly initialized
-        // This prevents overwriting the position set by AnchorGUIManager
+        // Don't apply until table is properly initialized and aligned
         if (!tableInitialized) return;
         
-        // Don't apply if networked position hasn't been set yet (still at origin)
-        if (NetworkedTablePosition.sqrMagnitude < 0.01f) return;
+        // Both host and client apply the SAME relative adjustments to their own aligned position
+        // This works because both devices aligned the table to the same physical location via anchors
         
-        // Apply networked position (Y includes floor offset)
-        tableRoot.transform.position = new Vector3(
-            NetworkedTablePosition.x,
-            NetworkedTablePosition.y + NetworkedFloorOffset,
-            NetworkedTablePosition.z
-        );
+        // Apply height adjustment (relative to base aligned position)
+        Vector3 adjustedPosition = baseAlignedPosition;
+        adjustedPosition.y += NetworkedHeightAdjustment;
+        tableRoot.transform.position = adjustedPosition;
         
-        // Apply networked rotation (use networked X rotation for upside-down correction)
-        float xRot = NetworkedTableXRotation != 0 ? NetworkedTableXRotation : tableXRotationOffset;
-        tableRoot.transform.rotation = Quaternion.Euler(xRot, NetworkedTableYRotation, 0);
-        
-        // Apply floor offset to camera rig so player sees correct floor level
-        if (cameraRig != null && NetworkedFloorOffset != 0)
-        {
-            // Store the original floor offset from when we joined
-            // This is a simplified approach - both players adjust together
-        }
+        // Apply rotation adjustment (relative to base aligned rotation)
+        float xRot = NetworkedXRotation != 0 ? NetworkedXRotation : tableXRotationOffset;
+        float yRot = baseAlignedYRotation + NetworkedYRotationAdjustment;
+        tableRoot.transform.rotation = Quaternion.Euler(xRot, yRot, 0);
     }
     
     /// <summary>
@@ -332,20 +342,18 @@ public class TableTennisManager : NetworkBehaviour
         Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch);
         
-        // Left stick Y: Adjust table height (up/down)
+        // Left stick Y: Adjust table height (relative adjustment)
         if (Mathf.Abs(leftStick.y) > 0.1f)
         {
             float verticalMove = leftStick.y * moveSpeed * Time.deltaTime;
-            Vector3 pos = NetworkedTablePosition;
-            pos.y += verticalMove;
-            NetworkedTablePosition = pos;
+            NetworkedHeightAdjustment += verticalMove;
         }
         
-        // Right stick X: Rotate table (Y axis only, no Y position change)
+        // Right stick X: Rotate table (relative adjustment)
         if (Mathf.Abs(rightStick.x) > 0.1f)
         {
             float rotation = rightStick.x * rotateSpeed * Time.deltaTime;
-            NetworkedTableYRotation += rotation;
+            NetworkedYRotationAdjustment += rotation;
         }
         // Right stick Y: Not used (rotation only from right stick X)
     }
@@ -362,37 +370,51 @@ public class TableTennisManager : NetworkBehaviour
         // Left stick Y: Request height adjustment
         if (Mathf.Abs(leftStick.y) > 0.1f)
         {
-            Vector3 movement = new Vector3(0, leftStick.y * moveSpeed * Time.deltaTime, 0);
-            RPC_RequestTableMove(movement);
+            float verticalMove = leftStick.y * moveSpeed * Time.deltaTime;
+            // Send to host to sync (adjustment will be applied via ApplyNetworkedTableState)
+            RPC_RequestHeightAdjust(verticalMove);
         }
         
         // Right stick X: Request rotation
         if (Mathf.Abs(rightStick.x) > 0.1f)
         {
             float rotation = rightStick.x * rotateSpeed * Time.deltaTime;
-            RPC_RequestTableRotate(rotation);
+            // Send to host to sync (adjustment will be applied via ApplyNetworkedTableState)
+            RPC_RequestRotationAdjust(rotation);
         }
         
         // Right stick Y: Not used (rotation only from right stick X)
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestHeightAdjust(float heightDelta)
+    {
+        NetworkedHeightAdjustment += heightDelta;
+    }
+    
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestRotationAdjust(float rotationDelta)
+    {
+        NetworkedYRotationAdjustment += rotationDelta;
+    }
+    
+    // Legacy RPCs - kept for compatibility
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestTableMove(Vector3 movement)
     {
-        movement = Quaternion.Euler(0, NetworkedTableYRotation, 0) * movement;
-        NetworkedTablePosition += movement;
+        NetworkedHeightAdjustment += movement.y;
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestTableRotate(float rotation)
     {
-        NetworkedTableYRotation += rotation;
+        NetworkedYRotationAdjustment += rotation;
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestFloorAdjust(float verticalMove)
     {
-        NetworkedFloorOffset += verticalMove;
+        NetworkedHeightAdjustment += verticalMove;
     }
     
     private IEnumerator InitializeGame()
@@ -606,10 +628,19 @@ public class TableTennisManager : NetworkBehaviour
                 NetworkedTableYRotation = tableRoot.transform.eulerAngles.y;
                 NetworkedTableXRotation = tableXRotationOffset; // Sync X rotation for upside-down fix
                 NetworkedFloorOffset = 0f;
+                
+                // Initialize relative adjustment values to zero
+                NetworkedHeightAdjustment = 0f;
+                NetworkedYRotationAdjustment = 0f;
+                NetworkedXRotation = tableXRotationOffset;
             }
             
+            // Store the base aligned position for relative adjustments
+            baseAlignedPosition = tableRoot.transform.position;
+            baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
+            
             tableInitialized = true;
-            Debug.Log($"[TableTennisManager] Table positioned at: {tableRoot.transform.position}");
+            Debug.Log($"[TableTennisManager] Table positioned at: {tableRoot.transform.position}, base stored for adjustments");
             return;
         }
         
@@ -625,6 +656,10 @@ public class TableTennisManager : NetworkBehaviour
             tableRoot.transform.position = alignedPos;
             tableRoot.transform.rotation = alignedRot;
             
+            // Store the base aligned position for relative adjustments
+            baseAlignedPosition = alignedPos;
+            baseAlignedYRotation = alignedRot.eulerAngles.y;
+            
             // Host syncs to network
             if (Object.HasStateAuthority)
             {
@@ -632,6 +667,11 @@ public class TableTennisManager : NetworkBehaviour
                 NetworkedTableYRotation = alignedRot.eulerAngles.y;
                 NetworkedTableXRotation = alignedRot.eulerAngles.x; // Sync X rotation
                 NetworkedFloorOffset = 0f;
+                
+                // Initialize relative adjustment values to zero
+                NetworkedHeightAdjustment = 0f;
+                NetworkedYRotationAdjustment = 0f;
+                NetworkedXRotation = alignedRot.eulerAngles.x;
             }
             
             tableInitialized = true;
@@ -646,6 +686,10 @@ public class TableTennisManager : NetworkBehaviour
         {
             Debug.Log($"[TableTennisManager] Table already placed at {currentTablePos}, using existing position");
             
+            // Store the base aligned position for relative adjustments
+            baseAlignedPosition = currentTablePos;
+            baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
+            
             // Host syncs the current position to network
             if (Object.HasStateAuthority)
             {
@@ -653,6 +697,11 @@ public class TableTennisManager : NetworkBehaviour
                 NetworkedTableYRotation = tableRoot.transform.eulerAngles.y;
                 NetworkedTableXRotation = tableRoot.transform.eulerAngles.x; // Sync X rotation
                 NetworkedFloorOffset = 0f;
+                
+                // Initialize relative adjustment values to zero
+                NetworkedHeightAdjustment = 0f;
+                NetworkedYRotationAdjustment = 0f;
+                NetworkedXRotation = tableRoot.transform.eulerAngles.x;
             }
             
             tableInitialized = true;
@@ -674,6 +723,14 @@ public class TableTennisManager : NetworkBehaviour
         // This is safer if anchor was placed in the air (held in hand)
         Vector3 tablePos = new Vector3(anchorPos.x, defaultTableHeight, anchorPos.z);
         
+        // Apply initial position
+        tableRoot.transform.position = tablePos;
+        tableRoot.transform.rotation = Quaternion.Euler(0, tableYRotationOffset, 0); // Keep table upright
+        
+        // Store the base aligned position for relative adjustments
+        baseAlignedPosition = tablePos;
+        baseAlignedYRotation = tableYRotationOffset;
+        
         // Host initializes networked values
         if (Object.HasStateAuthority)
         {
@@ -681,14 +738,15 @@ public class TableTennisManager : NetworkBehaviour
             NetworkedTableYRotation = tableYRotationOffset;
             NetworkedTableXRotation = tableXRotationOffset; // Sync X rotation
             NetworkedFloorOffset = 0f;
+            
+            // Initialize relative adjustment values to zero
+            NetworkedHeightAdjustment = 0f;
+            NetworkedYRotationAdjustment = 0f;
+            NetworkedXRotation = tableXRotationOffset;
         }
         
-        // Apply initial position
-        tableRoot.transform.position = tablePos;
-        tableRoot.transform.rotation = Quaternion.Euler(0, tableYRotationOffset, 0); // Keep table upright
-        
         tableInitialized = true;
-        Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}");
+        Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}, base stored for adjustments");
     }
     
     /// <summary>
