@@ -143,6 +143,12 @@ public class AlignmentManager : MonoBehaviour
             Vector3 realVector = secondaryTransform.position - primaryTransform.position;
             realVector.y = 0; 
             
+            // Calculate the CENTER point between the two anchors
+            // This will become the world origin (0,0,0) after alignment
+            Vector3 anchorCenter = (primaryTransform.position + secondaryTransform.position) / 2f;
+            
+            Debug.Log($"[ALIGN_DEBUG] TwoPoint: primary={primaryTransform.position}, secondary={secondaryTransform.position}, center={anchorCenter}");
+            
             if (realVector.sqrMagnitude < 0.001f)
             {
                 Debug.LogWarning("Colocation: Anchors too close! Fallback.");
@@ -159,11 +165,15 @@ public class AlignmentManager : MonoBehaviour
                 // Apply Rotation
                 _cameraRigTransform.eulerAngles = targetRot;
                 
-                 // 3. Calculate Correction Position (After Rotation)
-                 // Keep Y at 0 to trust Guardian floor calibration
-                 Vector3 targetPos = -primaryTransform.position;
-                 targetPos.y = 0; // Trust Guardian floor
-                 _cameraRigTransform.position = targetPos;
+                // 3. Calculate Correction Position (After Rotation)
+                // Use ANCHOR CENTER as the origin point instead of primary anchor
+                // This means both host and client will have the anchor center at world (0,0,0)
+                // Keep Y at 0 to trust Guardian floor calibration
+                Vector3 targetPos = -anchorCenter;
+                targetPos.y = 0; // Trust Guardian floor
+                _cameraRigTransform.position = targetPos;
+                
+                Debug.Log($"[ALIGN_DEBUG] TwoPoint: Applied rotation={targetRot}, position={targetPos}");
             }
             
             Debug.Log($"Colocation: 2-Point Iteration {alignmentIterations - alignmentCount + 1}");
@@ -171,6 +181,8 @@ public class AlignmentManager : MonoBehaviour
         }
 
         Debug.Log($"Colocation: 2-Point alignment complete. Additional rotation: {additionalYRotation}");
+        Debug.Log($"[ALIGN_DEBUG] TwoPoint FINAL: CameraRig pos={_cameraRigTransform.position}, rot={_cameraRigTransform.eulerAngles}");
+        Debug.Log($"[ALIGN_DEBUG] TwoPoint FINAL: Primary anchor now at={primaryTransform.position}, Secondary at={secondaryTransform.position}");
         _isAligned = true;
         // Periodic alignment not fully implemented for 2-points yet in this snippet
     }
@@ -195,32 +207,25 @@ public class AlignmentManager : MonoBehaviour
             
             if (_secondaryAnchor != null && _secondaryAnchor.Localized)
             {
-               // 2-POINT LOGIC
+               // 2-POINT LOGIC - Use anchor CENTER as origin
                 Vector3 realVector = _secondaryAnchor.transform.position - _currentAnchor.transform.position;
                 realVector.y = 0; 
+                
+                // Calculate anchor center
+                Vector3 anchorCenter = (_currentAnchor.transform.position + _secondaryAnchor.transform.position) / 2f;
                 
                 float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
                 // Apply the stored additional rotation (e.g., 180° for client)
                 targetRotation = new Vector3(0, -realHeading + _additionalYRotation, 0);
                 
-                // For position, we effectively want to apply the translation that brings _currentAnchor to 0,0,0
-                // BUT we must account for the pivot of rotation.
-                // Since this is SmoothRealign, we are calculating the DESTINATION Rig Pose.
-                // If Rig was at TargetRotation...
-                // Anchor would be at `RotatedPos`.
-                // We want to translate by `-RotatedPos`.
-                // RotatedPos = RefRig.TransformPoint(AnchorLocal).
-                // RefRig is (0,0,0) with rotation TargetRotation.
-                // AnchorLocal = Rig_Current.InverseTransformPoint(Anchor_Current).
-                // So:
-                // 1. Get Anchor Local Pos relative to current rig:
-                Vector3 anchorLocal = _cameraRigTransform.InverseTransformPoint(_currentAnchor.transform.position);
-                // 2. Rotate this local pos by Target Rotation:
-                Vector3 anchorRotatedVector = Quaternion.Euler(targetRotation) * anchorLocal;
-                // 3. Target Position is negative of that:
-                targetPosition = -anchorRotatedVector;
-                
-                // Note: This assumes Rig Origin is the pivot.
+                // For position, we want the ANCHOR CENTER to be at world origin (0,0,0)
+                // Get anchor center in local rig space
+                Vector3 centerLocal = _cameraRigTransform.InverseTransformPoint(anchorCenter);
+                // Rotate this local pos by Target Rotation
+                Vector3 centerRotatedVector = Quaternion.Euler(targetRotation) * centerLocal;
+                // Target Position is negative of that (to put center at origin)
+                targetPosition = -centerRotatedVector;
+                targetPosition.y = 0; // Trust Guardian floor
             }
             else
             {
