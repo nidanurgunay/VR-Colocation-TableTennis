@@ -60,6 +60,7 @@ public class TableTennisManager : NetworkBehaviour
     
     // Store the initial aligned position/rotation (before any adjustments)
     private Vector3 baseAlignedPosition;
+    private float baseAlignedXRotation; // Base X rotation (for upside-down detection)
     private float baseAlignedYRotation;
     
     [Header("Table Setup")]
@@ -77,6 +78,68 @@ public class TableTennisManager : NetworkBehaviour
     private Transform secondaryAnchor; // For 2-point alignment after scene transition
     private AlignmentManager alignmentManager;
     private GameObject[] localRackets = new GameObject[2];
+    
+    /// <summary>
+    /// Log detailed anchor and table positions for debugging alignment issues.
+    /// Search for [ALIGN_DEBUG] in logs to find these entries.
+    /// </summary>
+    private void LogAlignmentDebug(string context)
+    {
+        string role = (Object != null && Object.HasStateAuthority) ? "HOST" : "CLIENT";
+        Debug.Log($"[ALIGN_DEBUG] === {context} ({role}) ===");
+        
+        // Log camera rig position
+        var cameraRigObj = FindObjectOfType<OVRCameraRig>();
+        if (cameraRigObj != null)
+        {
+            Debug.Log($"[ALIGN_DEBUG] CameraRig: world={cameraRigObj.transform.position}, rot={cameraRigObj.transform.eulerAngles}");
+        }
+        
+        // Log anchor positions
+        if (sharedAnchor != null)
+        {
+            Debug.Log($"[ALIGN_DEBUG] PrimaryAnchor: world={sharedAnchor.position}, local={sharedAnchor.localPosition}, rot={sharedAnchor.eulerAngles}");
+        }
+        else
+        {
+            Debug.Log("[ALIGN_DEBUG] PrimaryAnchor: NULL");
+        }
+        
+        if (secondaryAnchor != null)
+        {
+            Debug.Log($"[ALIGN_DEBUG] SecondaryAnchor: world={secondaryAnchor.position}, local={secondaryAnchor.localPosition}, rot={secondaryAnchor.eulerAngles}");
+        }
+        else
+        {
+            Debug.Log("[ALIGN_DEBUG] SecondaryAnchor: NULL");
+        }
+        
+        // Log table position
+        if (tableRoot != null)
+        {
+            Debug.Log($"[ALIGN_DEBUG] Table: world={tableRoot.transform.position}, local={tableRoot.transform.localPosition}, rot={tableRoot.transform.eulerAngles}");
+            if (tableRoot.transform.parent != null)
+            {
+                Debug.Log($"[ALIGN_DEBUG] Table parent: {tableRoot.transform.parent.name}, parentWorld={tableRoot.transform.parent.position}");
+            }
+        }
+        else
+        {
+            Debug.Log("[ALIGN_DEBUG] Table: NULL");
+        }
+        
+        // Log room parent
+        if (roomParentTransform != null)
+        {
+            Debug.Log($"[ALIGN_DEBUG] RoomParent: world={roomParentTransform.position}, rot={roomParentTransform.eulerAngles}");
+        }
+        
+        // Log base aligned values
+        Debug.Log($"[ALIGN_DEBUG] BaseAligned: pos={baseAlignedPosition}, xRot={baseAlignedXRotation}, yRot={baseAlignedYRotation}");
+        Debug.Log($"[ALIGN_DEBUG] NetworkedAdj: height={NetworkedHeightAdjustment}, yRot={NetworkedYRotationAdjustment}, xRot={NetworkedXRotation}");
+        Debug.Log($"[ALIGN_DEBUG] Flags: tableInit={tableInitialized}, localRoomAligned={localRoomAligned}, clientAlignComplete={clientAlignmentComplete}");
+        Debug.Log($"[ALIGN_DEBUG] === END {context} ===");
+    }
     
     public override void Spawned()
     {
@@ -160,105 +223,52 @@ public class TableTennisManager : NetworkBehaviour
     }
     
     /// <summary>
-    /// Apply room alignment from network (for clients)
-    /// Client needs to recalculate the alignment using its own localized anchor positions.
-    /// The anchors appear at different world positions for host vs client (different tracking origins),
-    /// but the spatial relationship between anchors is preserved, so we apply the same math.
+    /// Initialize client's table state after camera rig alignment.
+    /// IMPORTANT: The AlignmentManager already aligned the camera rig to the shared anchor coordinate system.
+    /// Both host and client are now in the same coordinate system, so the table should appear
+    /// at the correct position WITHOUT any additional room/environment manipulation.
+    /// This method just initializes state for networked adjustments.
     /// </summary>
     private void ApplyNetworkedRoomAlignment()
     {
-        // Skip if already aligned locally or if we're the host
+        // Skip if already initialized or if we're the host
         if (localRoomAligned) return;
         if (Object == null || !Object.IsValid) return;
-        if (Object.HasStateAuthority) return; // Host doesn't need to apply - it already aligned
+        if (Object.HasStateAuthority) return; // Host doesn't need this - it handles its own alignment
         
         // Check if host has applied room alignment (signal that alignment is ready)
         if (!RoomAlignmentApplied) return;
         
-        // CLIENT: Use our own localized anchor positions to calculate alignment
-        Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
-        Vector3 secondAnchor = AnchorGUIManager_AutoAlignment.SecondAnchorPosition;
-        
-        Debug.Log($"[TableTennisManager] CLIENT: Checking anchor positions for alignment");
-        Debug.Log($"[TableTennisManager] CLIENT: firstAnchor={firstAnchor}, secondAnchor={secondAnchor}");
-        
-        // Wait until client has localized its anchors (stored by AnchorGUIManager_AutoAlignment.LoadAndAlignToAnchor)
-        if (firstAnchor.sqrMagnitude < 0.01f || secondAnchor.sqrMagnitude < 0.01f)
-        {
-            Debug.Log("[TableTennisManager] CLIENT: Waiting for anchor localization...");
-            return;
-        }
-        
-        // Find room parent (Environment)
-        if (roomParentTransform == null)
+        // Find table if not yet found
+        if (tableRoot == null)
         {
             tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
                         ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
-            if (tableRoot != null)
-            {
-                roomParentTransform = FindRoomParent(tableRoot.transform);
-            }
         }
         
-        if (roomParentTransform == null || tableRoot == null)
+        if (tableRoot == null)
         {
-            Debug.LogWarning("[TableTennisManager] CLIENT: Cannot find room/table to apply alignment!");
+            Debug.LogWarning("[TableTennisManager] CLIENT: Cannot find table!");
             return;
         }
         
-        // Calculate target center from CLIENT's localized anchor positions (same math as host)
-        Vector3 targetCenter = (firstAnchor + secondAnchor) / 2f;
-        float heightOffset = AnchorGUIManager_AutoAlignment.TableHeightOffsetStatic;
-        targetCenter.y = (firstAnchor.y + secondAnchor.y) / 2f + heightOffset;
+        // Wait for alignment manager to complete camera rig alignment
+        // The camera rig was already aligned by WaitForAnchor -> AlignUserToTwoAnchors
+        // After that, the table should appear at the correct position relative to the physical space
         
-        // Calculate target rotation
-        Vector3 direction = (secondAnchor - firstAnchor).normalized;
-        direction.y = 0;
-        Quaternion targetRotation = Quaternion.identity;
-        if (direction.sqrMagnitude > 0.001f)
-        {
-            targetRotation = Quaternion.LookRotation(direction, Vector3.up) * Quaternion.Euler(0, 90f, 0);
-        }
+        Debug.Log($"[TableTennisManager] CLIENT: Initializing table state. Table at position: {tableRoot.transform.position}, rotation: {tableRoot.transform.eulerAngles}");
         
-        Debug.Log($"[TableTennisManager] CLIENT: Calculated target center={targetCenter}, rotation={targetRotation.eulerAngles}");
-        
-        // Calculate offsets
-        Vector3 currentTablePosition = tableRoot.transform.position;
-        Vector3 positionOffset = targetCenter - currentTablePosition;
-        
-        float currentYRot = tableRoot.transform.eulerAngles.y;
-        float targetYRotation = targetRotation.eulerAngles.y;
-        float rotationOffset = targetYRotation - currentYRot;
-        
-        Debug.Log($"[TableTennisManager] CLIENT: Table at {currentTablePosition}, offset={positionOffset}, rotOffset={rotationOffset}°");
-        
-        // Apply rotation around table position
-        if (Mathf.Abs(rotationOffset) > 0.1f)
-        {
-            roomParentTransform.RotateAround(currentTablePosition, Vector3.up, rotationOffset);
-            Debug.Log($"[TableTennisManager] CLIENT: Rotated room by {rotationOffset}°");
-        }
-        
-        // Move room so table ends up at target center
-        Vector3 roomPosBefore = roomParentTransform.position;
-        roomParentTransform.position += positionOffset;
-        
-        // Center Environment's origin at the table position
-        Vector3 tableWorldPos = tableRoot.transform.position;
-        roomParentTransform.position = tableWorldPos;
-        tableRoot.transform.localPosition = Vector3.zero;
-        
-        Debug.Log($"[TableTennisManager] CLIENT: Room moved to {roomParentTransform.position}, table local={tableRoot.transform.localPosition}");
+        // Store current table position/rotation as the base for networked adjustments
+        // DO NOT move the room or table - just record where it is after camera rig alignment
+        baseAlignedPosition = tableRoot.transform.position;
+        baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
+        baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
         
         localRoomAligned = true;
         clientAlignmentComplete = true;
-        
-        // Store the base aligned position for relative adjustments
-        baseAlignedPosition = tableRoot.transform.position;
-        baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
         tableInitialized = true;
         
-        Debug.Log($"[TableTennisManager] CLIENT: Alignment complete! Table at {tableRoot.transform.position}, base stored for adjustments");
+        Debug.Log($"[TableTennisManager] CLIENT: Initialization complete! Base position={baseAlignedPosition}, baseXRot={baseAlignedXRotation}, baseYRot={baseAlignedYRotation}");
     }
     
     /// <summary>
@@ -280,8 +290,10 @@ public class TableTennisManager : NetworkBehaviour
         adjustedPosition.y += NetworkedHeightAdjustment;
         tableRoot.transform.position = adjustedPosition;
         
-        // Apply rotation adjustment (relative to base aligned rotation)
-        float xRot = NetworkedXRotation != 0 ? NetworkedXRotation : tableXRotationOffset;
+        // Apply rotation adjustment
+        // X rotation: Use the networked value directly (0 means upright, 180 means upside down correction)
+        // Y rotation: Apply relative offset to base aligned rotation
+        float xRot = NetworkedXRotation; // Direct from network - host sets this to correct upside-down table
         float yRot = baseAlignedYRotation + NetworkedYRotationAdjustment;
         tableRoot.transform.rotation = Quaternion.Euler(xRot, yRot, 0);
     }
@@ -419,7 +431,7 @@ public class TableTennisManager : NetworkBehaviour
     
     private IEnumerator InitializeGame()
     {
-        // Wait for anchor to be available
+        // Wait for anchor to be available (this also aligns the camera rig via AlignmentManager)
         yield return StartCoroutine(WaitForAnchor());
         
         // Only HOST should place/align the table and room
@@ -431,8 +443,11 @@ public class TableTennisManager : NetworkBehaviour
         }
         else
         {
-            // Client: Wait for room alignment from host
-            Debug.Log("[TableTennisManager] Client waiting for room alignment from host...");
+            // Client: After WaitForAnchor completes, camera rig is already aligned to anchors
+            // The table should appear at the correct position relative to the anchors
+            Debug.Log("[TableTennisManager] Client: Camera rig aligned to anchors");
+            
+            // Wait a bit for alignment to fully settle
             yield return new WaitForSeconds(0.5f);
             
             // Find table reference for client
@@ -441,7 +456,26 @@ public class TableTennisManager : NetworkBehaviour
             
             if (tableRoot != null)
             {
-                Debug.Log($"[TableTennisManager] Client found table: {tableRoot.name}");
+                Debug.Log($"[TableTennisManager] Client found table: {tableRoot.name} at position {tableRoot.transform.position}, rotation {tableRoot.transform.eulerAngles}");
+                
+                // Log detailed anchor and table positions for debugging
+                LogAlignmentDebug("CLIENT_INIT");
+                
+                // Store the table's current position as base for networked adjustments
+                // This is where the table appears after camera rig alignment
+                baseAlignedPosition = tableRoot.transform.position;
+                baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
+                baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
+                
+                localRoomAligned = true;
+                clientAlignmentComplete = true;
+                tableInitialized = true;
+                
+                Debug.Log($"[TableTennisManager] Client: Table initialized at base position={baseAlignedPosition}, baseXRot={baseAlignedXRotation}, baseYRot={baseAlignedYRotation}");
+            }
+            else
+            {
+                Debug.LogWarning("[TableTennisManager] Client: Could not find table!");
             }
         }
         
@@ -637,10 +671,14 @@ public class TableTennisManager : NetworkBehaviour
             
             // Store the base aligned position for relative adjustments
             baseAlignedPosition = tableRoot.transform.position;
+            baseAlignedXRotation = 0f; // Table should be upright after placement
             baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
             
             tableInitialized = true;
             Debug.Log($"[TableTennisManager] Table positioned at: {tableRoot.transform.position}, base stored for adjustments");
+            
+            // Log detailed alignment debug info
+            LogAlignmentDebug("HOST_PLACE_TABLE_ANCHOR");
             return;
         }
         
@@ -658,6 +696,7 @@ public class TableTennisManager : NetworkBehaviour
             
             // Store the base aligned position for relative adjustments
             baseAlignedPosition = alignedPos;
+            baseAlignedXRotation = alignedRot.eulerAngles.x;
             baseAlignedYRotation = alignedRot.eulerAngles.y;
             
             // Host syncs to network
@@ -675,6 +714,7 @@ public class TableTennisManager : NetworkBehaviour
             }
             
             tableInitialized = true;
+            LogAlignmentDebug("HOST_PLACE_TABLE_GUI_ALIGNED");
             return;
         }
         
@@ -688,6 +728,7 @@ public class TableTennisManager : NetworkBehaviour
             
             // Store the base aligned position for relative adjustments
             baseAlignedPosition = currentTablePos;
+            baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
             baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
             
             // Host syncs the current position to network
@@ -705,6 +746,7 @@ public class TableTennisManager : NetworkBehaviour
             }
             
             tableInitialized = true;
+            LogAlignmentDebug("HOST_PLACE_TABLE_EXISTING");
             return;
         }
         
@@ -729,6 +771,7 @@ public class TableTennisManager : NetworkBehaviour
         
         // Store the base aligned position for relative adjustments
         baseAlignedPosition = tablePos;
+        baseAlignedXRotation = 0f; // Table placed upright
         baseAlignedYRotation = tableYRotationOffset;
         
         // Host initializes networked values
@@ -747,6 +790,7 @@ public class TableTennisManager : NetworkBehaviour
         
         tableInitialized = true;
         Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}, base stored for adjustments");
+        LogAlignmentDebug("HOST_PLACE_TABLE_FALLBACK");
     }
     
     /// <summary>
@@ -921,6 +965,10 @@ public class TableTennisManager : NetworkBehaviour
             
             if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
             {
+                // Log anchor positions BEFORE alignment
+                Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Primary anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
+                Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Secondary anchor world={secondaryOVRAnchor.transform.position}, local={secondaryOVRAnchor.transform.localPosition}, rot={secondaryOVRAnchor.transform.eulerAngles}");
+                
                 // Both host and client use the same alignment
                 // The anchors define the shared coordinate system
                 alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor, 0f);
@@ -928,12 +976,23 @@ public class TableTennisManager : NetworkBehaviour
             }
             else if (primaryOVRAnchor != null)
             {
+                Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Single anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
                 alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
                 Debug.Log("[TableTennisManager] Applied single-point alignment");
             }
             
             // Wait for alignment to complete before placing table
             yield return new WaitForSeconds(1.0f);
+            
+            // Log anchor positions AFTER alignment
+            if (primaryOVRAnchor != null)
+            {
+                Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Primary anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
+            }
+            if (secondaryOVRAnchor != null)
+            {
+                Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Secondary anchor world={secondaryOVRAnchor.transform.position}, local={secondaryOVRAnchor.transform.localPosition}, rot={secondaryOVRAnchor.transform.eulerAngles}");
+            }
         }
     }
     
