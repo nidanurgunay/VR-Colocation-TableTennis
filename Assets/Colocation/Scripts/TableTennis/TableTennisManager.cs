@@ -39,6 +39,8 @@ public class TableTennisManager : NetworkBehaviour
     // Runtime state
     private GameObject tableRoot;
     private bool isInAdjustMode = false;
+    private bool tableInitialized = false;
+    private Quaternion baseAnchorRotation = Quaternion.identity; // Store anchor rotation at placement time
     private OVRCameraRig cameraRig;
     
     [Header("Table Setup")]
@@ -89,11 +91,12 @@ public class TableTennisManager : NetworkBehaviour
     }
     
     /// <summary>
-    /// SIMPLIFIED: Apply networked table state - position + floor offset, fixed X rotation
+    /// SIMPLIFIED: Apply networked table state - position + floor offset, anchor-relative rotation
     /// </summary>
     private void ApplyNetworkedTableState()
     {
         if (tableRoot == null) return;
+        if (!tableInitialized) return; // Don't apply until PlaceTableAtAnchor has run
         
         // Apply networked position (Y includes floor offset)
         tableRoot.transform.position = new Vector3(
@@ -102,8 +105,9 @@ public class TableTennisManager : NetworkBehaviour
             NetworkedTablePosition.z
         );
         
-        // Apply rotation - X is fixed offset, Y is networked
-        tableRoot.transform.rotation = Quaternion.Euler(tableXRotationOffset, NetworkedTableYRotation, 0);
+        // Apply rotation - anchor-relative, with X offset and networked Y adjustment
+        // baseAnchorRotation is captured at PlaceTableAtAnchor time
+        tableRoot.transform.rotation = baseAnchorRotation * Quaternion.Euler(tableXRotationOffset, NetworkedTableYRotation, 0);
     }
     
     /// <summary>
@@ -312,22 +316,32 @@ public class TableTennisManager : NetworkBehaviour
         }
         else
         {
-            // CRITICAL: Re-align camera rig to preserved anchors
-            Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors...");
+            // Check if AnchorGUIManager already completed alignment
+            bool alreadyAligned = AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic;
             
-            if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
+            if (alreadyAligned)
             {
-                alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
-                Debug.Log("[TableTennisManager] Applied 2-point alignment");
+                Debug.Log("[TableTennisManager] Alignment already completed by AnchorGUIManager, skipping re-alignment");
             }
-            else if (primaryOVRAnchor != null)
+            else
             {
-                alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
-                Debug.Log("[TableTennisManager] Applied single-point alignment");
+                // CRITICAL: Re-align camera rig to preserved anchors
+                Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors...");
+                
+                if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
+                {
+                    alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
+                    Debug.Log("[TableTennisManager] Applied 2-point alignment");
+                }
+                else if (primaryOVRAnchor != null)
+                {
+                    alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
+                    Debug.Log("[TableTennisManager] Applied single-point alignment");
+                }
+                
+                // Wait for alignment to complete (stabilization + iterations)
+                yield return new WaitForSeconds(2.0f);
             }
-            
-            // Wait for alignment to complete
-            yield return new WaitForSeconds(1.0f);
         }
     }
     
@@ -359,10 +373,10 @@ public class TableTennisManager : NetworkBehaviour
             Vector3 tablePos = sharedAnchor.position + localOffset;
             tablePos.y = sharedAnchor.position.y + defaultTableHeight;
 
-            // CRITICAL: Rotation is relative to anchor rotation
-            // This ensures table faces same direction relative to anchor for both players
-            Quaternion anchorRotation = sharedAnchor.rotation;
-            Quaternion tableRotation = anchorRotation * Quaternion.Euler(tableXRotationOffset, tableYRotationOffset, 0);
+            // CRITICAL: Store anchor rotation for use in ApplyNetworkedTableState
+            // This ensures table rotation is always relative to anchor on this device
+            baseAnchorRotation = sharedAnchor.rotation;
+            Quaternion tableRotation = baseAnchorRotation * Quaternion.Euler(tableXRotationOffset, tableYRotationOffset, 0);
 
             // Host initializes networked values
             if (Object.HasStateAuthority)
@@ -375,9 +389,12 @@ public class TableTennisManager : NetworkBehaviour
             // Apply position and anchor-relative rotation
             tableRoot.transform.position = tablePos;
             tableRoot.transform.rotation = tableRotation;
+            
+            // Mark as initialized so ApplyNetworkedTableState can run
+            tableInitialized = true;
 
             Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}, " +
-                      $"rotation: {tableRotation.eulerAngles} (anchor rot: {anchorRotation.eulerAngles})");
+                      $"rotation: {tableRotation.eulerAngles} (anchor rot: {baseAnchorRotation.eulerAngles})");
         }
         else
         {
