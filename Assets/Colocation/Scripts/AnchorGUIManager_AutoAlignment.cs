@@ -4,6 +4,7 @@ using UnityEngine.SceneManagement;
 using TMPro;
 using System;
 using System.Text;
+using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -98,6 +99,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     // Static anchor UUIDs - to correctly identify anchors after scene transition
     public static System.Guid FirstAnchorUuid { get; private set; }
     public static System.Guid SecondAnchorUuid { get; private set; }
+    
+    // Track if alignment has been successfully completed to prevent repeated alignments
+    private bool _alignmentCompleted = false;
+    private bool _alignmentInProgress = false;
+    
+    // Static flag accessible from TableTennisManager to check if alignment is done
+    public static bool AlignmentCompletedStatic { get; private set; } = false;
     
     // Static room offset - for syncing room position across network
     public static Vector3 RoomPositionOffset { get; private set; }
@@ -394,8 +402,33 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
     protected override async void LoadAndAlignToAnchor(Guid groupUuid)
     {
+        // CRITICAL: Prevent repeated alignments - they reset the camera rig!
+        if (_alignmentCompleted)
+        {
+            Debug.Log($"[ALIGN][INFO][CLIENT] Alignment already completed, skipping repeated call");
+            return;
+        }
+        
+        if (_alignmentInProgress)
+        {
+            Debug.Log($"[ALIGN][INFO][CLIENT] Alignment already in progress, skipping repeated call");
+            return;
+        }
+        
+        _alignmentInProgress = true;
+        
         try
         {
+            Debug.Log($"[ALIGN][STEP][CLIENT] ========== LoadAndAlignToAnchor START ==========");
+            Debug.Log($"[ALIGN][INPUT][CLIENT] Group UUID: {groupUuid}");
+            
+            // Log camera rig state BEFORE alignment
+            var rig = FindObjectOfType<OVRCameraRig>();
+            if (rig != null)
+            {
+                Debug.Log($"[ALIGN][BEFORE][CLIENT] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
+            }
+            
             Log($"Loading anchors for Group UUID: {groupUuid}...");
 
             var unboundAnchors = new List<OVRSpatialAnchor.UnboundAnchor>();
@@ -403,10 +436,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             if (!loadResult.Success || unboundAnchors.Count == 0)
             {
+                Debug.Log($"[ALIGN][ERROR][CLIENT] Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}");
                 Log($"Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}", true);
+                _alignmentInProgress = false; // Allow retry on failure
                 return;
             }
 
+            Debug.Log($"[ALIGN][INFO][CLIENT] Found {unboundAnchors.Count} shared anchors. Localizing...");
             Log($"Found {unboundAnchors.Count} shared anchors. Localizing...");
 
             // Localize ALL found anchors
@@ -414,6 +450,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             foreach (var unboundAnchor in unboundAnchors)
             {
+                Debug.Log($"[ALIGN][INFO][CLIENT] Attempting to localize anchor: {unboundAnchor.Uuid}");
+                
                 if (await unboundAnchor.LocalizeAsync())
                 {
                     Log($"Anchor localized: {unboundAnchor.Uuid}");
@@ -421,6 +459,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
                     unboundAnchor.BindTo(spatialAnchor);
+                    
+                    // Log anchor position immediately after binding
+                    Debug.Log($"[ALIGN][DATA][CLIENT] Anchor {unboundAnchor.Uuid} bound at: pos={anchorGameObject.transform.position}, rot={anchorGameObject.transform.eulerAngles}");
 
                     // Add visual
                     if (anchorMarkerPrefab != null)
@@ -444,41 +485,81 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 }
                 else
                 {
+                    Debug.Log($"[ALIGN][ERROR][CLIENT] Failed to localize anchor: {unboundAnchor.Uuid}");
                     Log($"Failed to localize anchor: {unboundAnchor.Uuid}", true);
                 }
+            }
+            
+            // Log all localized anchor positions
+            Debug.Log($"[ALIGN][INFO][CLIENT] Total localized anchors: {localizedAnchors.Count}");
+            for (int i = 0; i < localizedAnchors.Count; i++)
+            {
+                var a = localizedAnchors[i];
+                Debug.Log($"[ALIGN][DATA][CLIENT] Anchor[{i}] {a.Uuid}: pos={a.transform.position}, rot={a.transform.eulerAngles}");
             }
             
             // Now Align based on what we found
             if (localizedAnchors.Count >= 2)
             {
+                Debug.Log($"[ALIGN][STEP][CLIENT] Aligning to TWO anchors...");
                 Log("Aligning to TWO anchors...");
                 
-                // Note: Order doesn't matter for table placement (center = midpoint)
-                // Just use whatever order they were localized in
-                Log($"Client localizing anchors: {localizedAnchors[0].Uuid}, {localizedAnchors[1].Uuid}");
+                // CRITICAL: Sort anchors by UUID to ensure consistent ordering between host and client!
+                // Without this, anchors can be in different order causing 180° rotation difference
+                var sortedAnchors = localizedAnchors.OrderBy(a => a.Uuid.ToString()).ToList();
+                Debug.Log($"[ALIGN][INFO][CLIENT] Sorted anchors by UUID: [0]={sortedAnchors[0].Uuid}, [1]={sortedAnchors[1].Uuid}");
                 
-                _localizedAnchor = localizedAnchors[0]; // Set primary as main
+                // Calculate anchor vector for logging
+                Vector3 anchorVector = sortedAnchors[1].transform.position - sortedAnchors[0].transform.position;
+                float anchorDistance = anchorVector.magnitude;
+                float anchorHeading = Quaternion.LookRotation(anchorVector).eulerAngles.y;
+                Debug.Log($"[ALIGN][DATA][CLIENT] Anchor vector: {anchorVector}, distance={anchorDistance:F3}m, heading={anchorHeading:F1}°");
+                
+                _localizedAnchor = sortedAnchors[0]; // Set primary as main
                 
                 // Client aligns to anchors the same way as host
                 // Both see the same anchor positions in world space
                 // No additional rotation needed - anchors define the shared coordinate system
-                alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1], 0f);
+                Debug.Log($"[ALIGN][STEP][CLIENT] Calling AlignUserToTwoAnchors with additional rotation = 0°");
+                alignmentManager.AlignUserToTwoAnchors(sortedAnchors[0], sortedAnchors[1], 0f);
                 
                 // CLIENT: Store anchor positions for scene transition
                 // Wait a frame for anchor positions to be updated after localization
+                Debug.Log($"[ALIGN][INFO][CLIENT] Waiting 100ms for positions to stabilize...");
                 await Task.Delay(100);
                 
-                FirstAnchorPosition = localizedAnchors[0].transform.position;
-                SecondAnchorPosition = localizedAnchors[1].transform.position;
-                FirstAnchorUuid = localizedAnchors[0].Uuid;
-                SecondAnchorUuid = localizedAnchors[1].Uuid;
+                FirstAnchorPosition = sortedAnchors[0].transform.position;
+                SecondAnchorPosition = sortedAnchors[1].transform.position;
+                FirstAnchorUuid = sortedAnchors[0].Uuid;
+                SecondAnchorUuid = sortedAnchors[1].Uuid;
                 TableHeightOffsetStatic = tableHeightOffset;
                 
-                Debug.Log($"[AnchorGUI] CLIENT: Stored anchor positions: first={FirstAnchorPosition}, second={SecondAnchorPosition}");
-                Debug.Log($"[AnchorGUI] CLIENT: Anchor UUIDs: first={FirstAnchorUuid}, second={SecondAnchorUuid}");
+                Debug.Log($"[ALIGN][DATA][CLIENT] AFTER alignment - Anchor[0]: pos={FirstAnchorPosition}");
+                Debug.Log($"[ALIGN][DATA][CLIENT] AFTER alignment - Anchor[1]: pos={SecondAnchorPosition}");
+                
+                // Log camera rig state AFTER alignment
+                if (rig != null)
+                {
+                    Debug.Log($"[ALIGN][AFTER][CLIENT] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
+                }
+                
+                // Log table state if found
+                var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
+                if (table != null)
+                {
+                    Debug.Log($"[ALIGN][DATA][CLIENT] Table after alignment: pos={table.transform.position}, rot={table.transform.eulerAngles}");
+                    
+                    // Check if table appears upside down
+                    float xRot = table.transform.eulerAngles.x;
+                    if (Mathf.Abs(Mathf.DeltaAngle(xRot, 180)) < 30)
+                    {
+                        Debug.Log($"[ALIGN][WARN][CLIENT] ⚠️ TABLE MAY BE UPSIDE DOWN! X rotation = {xRot:F1}°");
+                    }
+                }
             }
             else if (localizedAnchors.Count == 1)
             {
+                Debug.Log($"[ALIGN][STEP][CLIENT] Only 1 anchor localized. Using single point alignment.");
                 Log("Only 1 anchor localized. Using single point alignment.");
                 _localizedAnchor = localizedAnchors[0];
                 alignmentManager.AlignUserToAnchor(localizedAnchors[0]);
@@ -487,17 +568,32 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 await Task.Delay(100);
                 FirstAnchorPosition = localizedAnchors[0].transform.position;
                 FirstAnchorUuid = localizedAnchors[0].Uuid;
-                Debug.Log($"[AnchorGUI] CLIENT: Stored single anchor position: {FirstAnchorPosition}");
+                Debug.Log($"[ALIGN][DATA][CLIENT] Stored single anchor position: {FirstAnchorPosition}");
             }
             else
             {
+                Debug.Log($"[ALIGN][ERROR][CLIENT] No anchors localized!");
                 Log("No anchors localized!", true);
+                _alignmentInProgress = false; // Allow retry
+                return;
             }
             
+            // Mark alignment as successfully completed - prevent future re-alignments
+            _alignmentCompleted = true;
+            _alignmentInProgress = false;
+            AlignmentCompletedStatic = true; // Set static flag for TableTennisManager to check
+            
+            // Wait for alignment coroutine to actually complete (it has stabilization delay + iterations)
+            Debug.Log($"[ALIGN][INFO][CLIENT] Waiting 1.5s for alignment coroutine to fully complete...");
+            await Task.Delay(1500);
+            
+            Debug.Log($"[ALIGN][OK][CLIENT] ✓ Alignment completed successfully! Future alignment calls will be skipped.");
+            Debug.Log($"[ALIGN][STEP][CLIENT] ========== LoadAndAlignToAnchor END ==========");
             UpdateAllUI();
         }
         catch (Exception e)
         {
+            _alignmentInProgress = false; // Allow retry on error
             Log($"Error during anchor loading and alignment: {e.Message}", true);
         }
     }
@@ -507,8 +603,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     {
         try
         {
+            Debug.Log($"[ALIGN][STEP][HOST] ========== ShareAnchors START ==========");
+            
             if (currentAnchors.Count == 0)
             {
+                Debug.Log($"[ALIGN][ERROR][HOST] No anchors to share!");
                 Log("No anchors to share! Did you create anchors first?", true);
                 return;
             }
@@ -516,13 +615,22 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             // Check if we have a valid group UUID
             if (_sharedAnchorGroupId == Guid.Empty)
             {
+                Debug.Log($"[ALIGN][ERROR][HOST] Group UUID is empty!");
                 Log("ERROR: Group UUID is empty! Advertisement may not have completed.", true);
                 Log("Attempting to start advertisement first...");
                 AdvertiseColocationSession();
                 return; // Will retry via callback chain
             }
             
+            Debug.Log($"[ALIGN][INFO][HOST] Saving {currentAnchors.Count} anchors to Group: {_sharedAnchorGroupId}");
             Log($"Saving and sharing {currentAnchors.Count} anchors to Group: {_sharedAnchorGroupId}...");
+            
+            // Log camera rig state BEFORE host alignment
+            var rig = FindObjectOfType<OVRCameraRig>();
+            if (rig != null)
+            {
+                Debug.Log($"[ALIGN][BEFORE][HOST] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
+            }
             
             // Save all anchors
             var anchorsToShare = new List<OVRSpatialAnchor>();
@@ -530,10 +638,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             {
                  if (anchor != null && anchor.Localized)
                  {
+                     Debug.Log($"[ALIGN][INFO][HOST] Saving anchor {anchor.Uuid} at pos={anchor.transform.position}");
                      Log($"Saving anchor {anchor.Uuid}...");
                      var saveResult = await anchor.SaveAnchorAsync();
                      if (!saveResult.Success)
                      {
+                         Debug.Log($"[ALIGN][ERROR][HOST] Failed to save anchor {anchor.Uuid}: Status={saveResult.Status}");
                          Log($"Failed to save anchor {anchor.Uuid}: Status={saveResult.Status}", true);
                      }
                      else
@@ -550,30 +660,59 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             
             if (anchorsToShare.Count == 0)
             {
+                Debug.Log($"[ALIGN][ERROR][HOST] No valid anchors to share after save attempt.");
                 Log("No valid anchors to share after save attempt.", true);
                 return;
             }
 
+            Debug.Log($"[ALIGN][INFO][HOST] Sharing {anchorsToShare.Count} anchors to group {_sharedAnchorGroupId}...");
             Log($"Sharing {anchorsToShare.Count} anchors to group {_sharedAnchorGroupId}...");
             var shareResult = await OVRSpatialAnchor.ShareAsync(anchorsToShare, _sharedAnchorGroupId);
 
             if (shareResult.Success)
             {
+                Debug.Log($"[ALIGN][OK][HOST] Successfully shared {anchorsToShare.Count} anchors!");
                 Log($"Success! Shared {anchorsToShare.Count} anchors. Group UUID: {_sharedAnchorGroupId}");
                 currentStep = AlignmentStep.Done;
                 
                 // HOST ALIGNMENT
                 if (anchorsToShare.Count >= 2)
                 {
+                    // Log anchor positions
+                    Debug.Log($"[ALIGN][DATA][HOST] Anchor[0]: pos={anchorsToShare[0].transform.position}, rot={anchorsToShare[0].transform.eulerAngles}");
+                    Debug.Log($"[ALIGN][DATA][HOST] Anchor[1]: pos={anchorsToShare[1].transform.position}, rot={anchorsToShare[1].transform.eulerAngles}");
+                    
+                    // Calculate anchor vector
+                    Vector3 anchorVector = anchorsToShare[1].transform.position - anchorsToShare[0].transform.position;
+                    float anchorDistance = anchorVector.magnitude;
+                    float anchorHeading = Quaternion.LookRotation(anchorVector).eulerAngles.y;
+                    Debug.Log($"[ALIGN][DATA][HOST] Anchor vector: {anchorVector}, distance={anchorDistance:F3}m, heading={anchorHeading:F1}°");
+                    
                     // Note: Host already aligned via AlignTableToAnchors() when placing anchors
                     // Static FirstAnchorPosition/SecondAnchorPosition already set there
                     // Just do the camera rig alignment
                     Log("Host: Aligning camera rig to 2 anchors...");
                     _localizedAnchor = anchorsToShare[0];
+                    Debug.Log($"[ALIGN][STEP][HOST] Calling AlignUserToTwoAnchors...");
                     alignmentManager.AlignUserToTwoAnchors(anchorsToShare[0], anchorsToShare[1]);
                     
-                    Debug.Log($"[AnchorGUI] HOST: Using existing anchor positions: first={FirstAnchorPosition}, second={SecondAnchorPosition}");
-                    Debug.Log($"[AnchorGUI] HOST: Anchor UUIDs: {anchorsToShare[0].Uuid}, {anchorsToShare[1].Uuid}");
+                    // Wait for alignment to complete
+                    await Task.Delay(500);
+                    
+                    // Log state AFTER alignment
+                    if (rig != null)
+                    {
+                        Debug.Log($"[ALIGN][AFTER][HOST] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
+                    }
+                    Debug.Log($"[ALIGN][AFTER][HOST] Anchor[0]: pos={anchorsToShare[0].transform.position}");
+                    Debug.Log($"[ALIGN][AFTER][HOST] Anchor[1]: pos={anchorsToShare[1].transform.position}");
+                    
+                    // Log table state
+                    var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
+                    if (table != null)
+                    {
+                        Debug.Log($"[ALIGN][DATA][HOST] Table after alignment: pos={table.transform.position}, rot={table.transform.eulerAngles}");
+                    }
                 }
                 else
                 {
@@ -582,16 +721,19 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     alignmentManager.AlignUserToAnchor(anchorsToShare[0]);
                 }
                 
+                Debug.Log($"[ALIGN][STEP][HOST] ========== ShareAnchors END ==========");
                 UpdateUIWizard();
             }
             else
             {
+                Debug.Log($"[ALIGN][ERROR][HOST] Failed to share anchors. Status: {shareResult.Status}");
                 Log($"Failed to share anchors. Status: {shareResult.Status}", true);
                 Log("Make sure both devices have sharing permissions enabled in Meta settings.", true);
             }
         }
         catch (Exception e)
         {
+            Debug.Log($"[ALIGN][ERROR][HOST] Exception in ShareAnchors: {e.Message}");
             Log($"Error in ShareAnchors: {e.Message}", true);
         }
     }

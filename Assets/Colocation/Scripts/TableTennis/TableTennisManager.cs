@@ -79,67 +79,206 @@ public class TableTennisManager : NetworkBehaviour
     private AlignmentManager alignmentManager;
     private GameObject[] localRackets = new GameObject[2];
     
+    #region Alignment Debug Logging
+    
+    // Enable/disable comprehensive alignment logging (set to false for production builds)
+    private static readonly bool ALIGNMENT_DEBUG_ENABLED = true;
+    
     /// <summary>
-    /// Log detailed anchor and table positions for debugging alignment issues.
-    /// Search for [ALIGN_DEBUG] in logs to find these entries.
+    /// Comprehensive alignment debugging system.
+    /// All logs use [ALIGN] prefix for easy filtering in console.
+    /// 
+    /// Log format: [ALIGN][CATEGORY][ROLE] message
+    /// Categories:
+    ///   - STEP: Major alignment step being performed
+    ///   - DATA: Position/rotation data dump
+    ///   - WARN: Potential issues detected
+    ///   - ERROR: Critical alignment failures
     /// </summary>
-    private void LogAlignmentDebug(string context)
+    private void LogAlignmentDebug(string context, string extraInfo = "")
     {
+        if (!ALIGNMENT_DEBUG_ENABLED) return;
+        
         string role = (Object != null && Object.HasStateAuthority) ? "HOST" : "CLIENT";
-        Debug.Log($"[ALIGN_DEBUG] === {context} ({role}) ===");
         
-        // Log camera rig position
-        var cameraRigObj = FindObjectOfType<OVRCameraRig>();
-        if (cameraRigObj != null)
-        {
-            Debug.Log($"[ALIGN_DEBUG] CameraRig: world={cameraRigObj.transform.position}, rot={cameraRigObj.transform.eulerAngles}");
-        }
+        Debug.Log($"[ALIGN][STEP][{role}] ========== {context} ==========");
         
-        // Log anchor positions
-        if (sharedAnchor != null)
-        {
-            Debug.Log($"[ALIGN_DEBUG] PrimaryAnchor: world={sharedAnchor.position}, local={sharedAnchor.localPosition}, rot={sharedAnchor.eulerAngles}");
-        }
-        else
-        {
-            Debug.Log("[ALIGN_DEBUG] PrimaryAnchor: NULL");
-        }
+        // 1. Camera Rig State (most critical for alignment)
+        LogCameraRigState(role);
         
-        if (secondaryAnchor != null)
+        // 2. Anchor Positions (what the alignment is based on)
+        LogAnchorState(role);
+        
+        // 3. Table State (what we're trying to align)
+        LogTableState(role);
+        
+        // 4. Room/Environment State
+        LogRoomState(role);
+        
+        // 5. Networked State (what's being synced)
+        LogNetworkedState(role);
+        
+        // 6. Alignment Flags
+        LogAlignmentFlags(role);
+        
+        if (!string.IsNullOrEmpty(extraInfo))
         {
-            Debug.Log($"[ALIGN_DEBUG] SecondaryAnchor: world={secondaryAnchor.position}, local={secondaryAnchor.localPosition}, rot={secondaryAnchor.eulerAngles}");
-        }
-        else
-        {
-            Debug.Log("[ALIGN_DEBUG] SecondaryAnchor: NULL");
+            Debug.Log($"[ALIGN][INFO][{role}] Extra: {extraInfo}");
         }
         
-        // Log table position
-        if (tableRoot != null)
+        Debug.Log($"[ALIGN][STEP][{role}] ========== END {context} ==========");
+    }
+    
+    private void LogCameraRigState(string role)
+    {
+        var rig = cameraRig ?? FindObjectOfType<OVRCameraRig>();
+        if (rig != null)
         {
-            Debug.Log($"[ALIGN_DEBUG] Table: world={tableRoot.transform.position}, local={tableRoot.transform.localPosition}, rot={tableRoot.transform.eulerAngles}");
-            if (tableRoot.transform.parent != null)
+            var rigT = rig.transform;
+            Debug.Log($"[ALIGN][DATA][{role}] CameraRig:");
+            Debug.Log($"[ALIGN][DATA][{role}]   Position: {FormatVector(rigT.position)}");
+            Debug.Log($"[ALIGN][DATA][{role}]   Rotation: {FormatVector(rigT.eulerAngles)}");
+            
+            // Also log where the center eye is (actual player head position)
+            if (rig.centerEyeAnchor != null)
             {
-                Debug.Log($"[ALIGN_DEBUG] Table parent: {tableRoot.transform.parent.name}, parentWorld={tableRoot.transform.parent.position}");
+                Debug.Log($"[ALIGN][DATA][{role}]   CenterEye(head): {FormatVector(rig.centerEyeAnchor.position)}");
             }
         }
         else
         {
-            Debug.Log("[ALIGN_DEBUG] Table: NULL");
+            Debug.Log($"[ALIGN][WARN][{role}] CameraRig: NOT FOUND");
+        }
+    }
+    
+    private void LogAnchorState(string role)
+    {
+        Debug.Log($"[ALIGN][DATA][{role}] Anchors:");
+        
+        if (sharedAnchor != null)
+        {
+            Debug.Log($"[ALIGN][DATA][{role}]   Primary: pos={FormatVector(sharedAnchor.position)}, rot={FormatVector(sharedAnchor.eulerAngles)}");
+        }
+        else
+        {
+            Debug.Log($"[ALIGN][WARN][{role}]   Primary: NULL");
         }
         
-        // Log room parent
+        if (secondaryAnchor != null)
+        {
+            Debug.Log($"[ALIGN][DATA][{role}]   Secondary: pos={FormatVector(secondaryAnchor.position)}, rot={FormatVector(secondaryAnchor.eulerAngles)}");
+            
+            // Calculate and log the vector between anchors (critical for 2-point alignment)
+            if (sharedAnchor != null)
+            {
+                Vector3 anchorVector = secondaryAnchor.position - sharedAnchor.position;
+                float distance = anchorVector.magnitude;
+                float heading = Quaternion.LookRotation(anchorVector).eulerAngles.y;
+                Debug.Log($"[ALIGN][DATA][{role}]   AnchorVector: {FormatVector(anchorVector)}, distance={distance:F3}m, heading={heading:F1}°");
+            }
+        }
+        else
+        {
+            Debug.Log($"[ALIGN][INFO][{role}]   Secondary: NULL (single-point mode)");
+        }
+    }
+    
+    private void LogTableState(string role)
+    {
+        if (tableRoot != null)
+        {
+            var t = tableRoot.transform;
+            Debug.Log($"[ALIGN][DATA][{role}] Table '{tableRoot.name}':");
+            Debug.Log($"[ALIGN][DATA][{role}]   WorldPos: {FormatVector(t.position)}");
+            Debug.Log($"[ALIGN][DATA][{role}]   WorldRot: {FormatVector(t.eulerAngles)}");
+            Debug.Log($"[ALIGN][DATA][{role}]   LocalPos: {FormatVector(t.localPosition)}");
+            Debug.Log($"[ALIGN][DATA][{role}]   LocalRot: {FormatVector(t.localEulerAngles)}");
+            Debug.Log($"[ALIGN][DATA][{role}]   Scale: {FormatVector(t.localScale)}");
+            
+            // Check for upside-down table (X or Z rotation close to 180)
+            float xRot = t.eulerAngles.x;
+            float zRot = t.eulerAngles.z;
+            if (Mathf.Abs(Mathf.DeltaAngle(xRot, 180)) < 30 || Mathf.Abs(Mathf.DeltaAngle(zRot, 180)) < 30)
+            {
+                Debug.Log($"[ALIGN][WARN][{role}]   ⚠️ TABLE MAY BE UPSIDE DOWN! X={xRot:F1}°, Z={zRot:F1}°");
+            }
+            
+            // Log parent hierarchy
+            if (t.parent != null)
+            {
+                Debug.Log($"[ALIGN][DATA][{role}]   Parent: '{t.parent.name}' at {FormatVector(t.parent.position)}");
+            }
+            else
+            {
+                Debug.Log($"[ALIGN][DATA][{role}]   Parent: ROOT (no parent)");
+            }
+        }
+        else
+        {
+            Debug.Log($"[ALIGN][WARN][{role}] Table: NOT FOUND");
+        }
+    }
+    
+    private void LogRoomState(string role)
+    {
         if (roomParentTransform != null)
         {
-            Debug.Log($"[ALIGN_DEBUG] RoomParent: world={roomParentTransform.position}, rot={roomParentTransform.eulerAngles}");
+            Debug.Log($"[ALIGN][DATA][{role}] Room/Environment '{roomParentTransform.name}':");
+            Debug.Log($"[ALIGN][DATA][{role}]   Position: {FormatVector(roomParentTransform.position)}");
+            Debug.Log($"[ALIGN][DATA][{role}]   Rotation: {FormatVector(roomParentTransform.eulerAngles)}");
         }
-        
-        // Log base aligned values
-        Debug.Log($"[ALIGN_DEBUG] BaseAligned: pos={baseAlignedPosition}, xRot={baseAlignedXRotation}, yRot={baseAlignedYRotation}");
-        Debug.Log($"[ALIGN_DEBUG] NetworkedAdj: height={NetworkedHeightAdjustment}, yRot={NetworkedYRotationAdjustment}, xRot={NetworkedXRotation}");
-        Debug.Log($"[ALIGN_DEBUG] Flags: tableInit={tableInitialized}, localRoomAligned={localRoomAligned}, clientAlignComplete={clientAlignmentComplete}");
-        Debug.Log($"[ALIGN_DEBUG] === END {context} ===");
+        else
+        {
+            // Try to find it
+            var room = FindRoomParent(tableRoot?.transform);
+            if (room != null)
+            {
+                Debug.Log($"[ALIGN][DATA][{role}] Room/Environment '{room.name}': pos={FormatVector(room.position)}, rot={FormatVector(room.eulerAngles)}");
+            }
+            else
+            {
+                Debug.Log($"[ALIGN][INFO][{role}] Room/Environment: NOT CACHED");
+            }
+        }
     }
+    
+    private void LogNetworkedState(string role)
+    {
+        Debug.Log($"[ALIGN][DATA][{role}] Networked State:");
+        Debug.Log($"[ALIGN][DATA][{role}]   RoomPosOffset: {FormatVector(NetworkedRoomPositionOffset)}");
+        Debug.Log($"[ALIGN][DATA][{role}]   RoomRotOffset: {NetworkedRoomRotationOffset:F1}°");
+        Debug.Log($"[ALIGN][DATA][{role}]   RoomAlignmentApplied: {RoomAlignmentApplied}");
+        Debug.Log($"[ALIGN][DATA][{role}]   HeightAdj: {NetworkedHeightAdjustment:F3}m, YRotAdj: {NetworkedYRotationAdjustment:F1}°, XRot: {NetworkedXRotation:F1}°");
+        Debug.Log($"[ALIGN][DATA][{role}]   (Legacy) TablePos: {FormatVector(NetworkedTablePosition)}, YRot: {NetworkedTableYRotation:F1}°");
+    }
+    
+    private void LogAlignmentFlags(string role)
+    {
+        Debug.Log($"[ALIGN][DATA][{role}] Flags:");
+        Debug.Log($"[ALIGN][DATA][{role}]   tableInitialized: {tableInitialized}");
+        Debug.Log($"[ALIGN][DATA][{role}]   localRoomAligned: {localRoomAligned}");
+        Debug.Log($"[ALIGN][DATA][{role}]   clientAlignmentComplete: {clientAlignmentComplete}");
+        Debug.Log($"[ALIGN][DATA][{role}]   BaseAlignedPos: {FormatVector(baseAlignedPosition)}");
+        Debug.Log($"[ALIGN][DATA][{role}]   BaseAlignedRot: X={baseAlignedXRotation:F1}°, Y={baseAlignedYRotation:F1}°");
+    }
+    
+    /// <summary>Format vector with 3 decimal places for cleaner logs</summary>
+    private string FormatVector(Vector3 v)
+    {
+        return $"({v.x:F3}, {v.y:F3}, {v.z:F3})";
+    }
+    
+    /// <summary>
+    /// Quick one-line log for tracking alignment steps (less verbose than full debug)
+    /// </summary>
+    private void LogAlignmentStep(string step)
+    {
+        if (!ALIGNMENT_DEBUG_ENABLED) return;
+        string role = (Object != null && Object.HasStateAuthority) ? "HOST" : "CLIENT";
+        Debug.Log($"[ALIGN][STEP][{role}] → {step}");
+    }
+    
+    #endregion
     
     public override void Spawned()
     {
@@ -237,7 +376,17 @@ public class TableTennisManager : NetworkBehaviour
         if (Object.HasStateAuthority) return; // Host doesn't need this - it handles its own alignment
         
         // Check if host has applied room alignment (signal that alignment is ready)
-        if (!RoomAlignmentApplied) return;
+        if (!RoomAlignmentApplied)
+        {
+            // Log once every few seconds to show we're waiting
+            if (Time.frameCount % 300 == 0)
+            {
+                LogAlignmentStep("CLIENT waiting for host RoomAlignmentApplied signal...");
+            }
+            return;
+        }
+        
+        LogAlignmentStep("CLIENT: RoomAlignmentApplied signal received from host!");
         
         // Find table if not yet found
         if (tableRoot == null)
@@ -248,15 +397,16 @@ public class TableTennisManager : NetworkBehaviour
         
         if (tableRoot == null)
         {
-            Debug.LogWarning("[TableTennisManager] CLIENT: Cannot find table!");
+            Debug.LogWarning("[ALIGN][WARN][CLIENT] Cannot find table object!");
             return;
         }
         
-        // Wait for alignment manager to complete camera rig alignment
-        // The camera rig was already aligned by WaitForAnchor -> AlignUserToTwoAnchors
-        // After that, the table should appear at the correct position relative to the physical space
+        // CRITICAL: Ensure table is NOT parented to an anchor!
+        // If it's under an anchor, unparent it first
+        EnsureTableNotParentedToAnchor();
         
-        Debug.Log($"[TableTennisManager] CLIENT: Initializing table state. Table at position: {tableRoot.transform.position}, rotation: {tableRoot.transform.eulerAngles}");
+        // Log comprehensive state BEFORE initialization
+        LogAlignmentDebug("CLIENT_BEFORE_INIT");
         
         // Store current table position/rotation as the base for networked adjustments
         // DO NOT move the room or table - just record where it is after camera rig alignment
@@ -264,11 +414,76 @@ public class TableTennisManager : NetworkBehaviour
         baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
         baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
         
+        // Check for Z rotation (another way table can be flipped)
+        float zRot = tableRoot.transform.eulerAngles.z;
+        if (Mathf.Abs(Mathf.DeltaAngle(zRot, 180)) < 30)
+        {
+            Debug.LogWarning($"[ALIGN][WARN][CLIENT] ⚠️ Table Z rotation is {zRot:F1}° - correcting to 0");
+            tableRoot.transform.rotation = Quaternion.Euler(baseAlignedXRotation, baseAlignedYRotation, 0);
+        }
+        
+        LogAlignmentStep($"CLIENT: Stored base position: {FormatVector(baseAlignedPosition)}");
+        LogAlignmentStep($"CLIENT: Stored base rotation: X={baseAlignedXRotation:F1}°, Y={baseAlignedYRotation:F1}°");
+        
+        // Check if table appears to be upside down
+        if (Mathf.Abs(Mathf.DeltaAngle(baseAlignedXRotation, 180)) < 30)
+        {
+            Debug.LogWarning($"[ALIGN][WARN][CLIENT] ⚠️ Table X rotation is {baseAlignedXRotation:F1}° - TABLE MAY BE UPSIDE DOWN!");
+        }
+        
         localRoomAligned = true;
         clientAlignmentComplete = true;
         tableInitialized = true;
         
-        Debug.Log($"[TableTennisManager] CLIENT: Initialization complete! Base position={baseAlignedPosition}, baseXRot={baseAlignedXRotation}, baseYRot={baseAlignedYRotation}");
+        // Log comprehensive state AFTER initialization
+        LogAlignmentDebug("CLIENT_AFTER_INIT");
+        
+        Debug.Log($"[ALIGN][OK][CLIENT] ✓ Client initialization complete!");
+    }
+    
+    /// <summary>
+    /// Ensure the table is not parented to an anchor GameObject.
+    /// Tables parented to anchors will appear at different positions on each device
+    /// because anchor GameObjects are created at different world positions.
+    /// </summary>
+    private void EnsureTableNotParentedToAnchor()
+    {
+        if (tableRoot == null) return;
+        
+        Transform parent = tableRoot.transform.parent;
+        if (parent == null) return;
+        
+        // Check if parent is an anchor (has OVRSpatialAnchor component or name starts with "Anchor_")
+        bool isParentAnAnchor = parent.GetComponent<OVRSpatialAnchor>() != null || 
+                                parent.name.StartsWith("Anchor_");
+        
+        if (isParentAnAnchor)
+        {
+            Debug.LogWarning($"[ALIGN][WARN][CLIENT] Table is parented to anchor '{parent.name}'! Unparenting...");
+            
+            // Store world position/rotation before unparenting
+            Vector3 worldPos = tableRoot.transform.position;
+            Quaternion worldRot = tableRoot.transform.rotation;
+            
+            // Find Environment to reparent to
+            Transform environment = FindRoomParent(tableRoot.transform);
+            if (environment != null)
+            {
+                tableRoot.transform.SetParent(environment);
+                Debug.Log($"[ALIGN][INFO][CLIENT] Reparented table to '{environment.name}'");
+            }
+            else
+            {
+                tableRoot.transform.SetParent(null);
+                Debug.Log($"[ALIGN][INFO][CLIENT] Unparented table to root");
+            }
+            
+            // Restore world position/rotation
+            tableRoot.transform.position = worldPos;
+            tableRoot.transform.rotation = worldRot;
+            
+            Debug.Log($"[ALIGN][OK][CLIENT] Table unparented. Now at pos={FormatVector(worldPos)}, rot={FormatVector(worldRot.eulerAngles)}");
+        }
     }
     
     /// <summary>
@@ -472,6 +687,9 @@ public class TableTennisManager : NetworkBehaviour
                 tableInitialized = true;
                 
                 Debug.Log($"[TableTennisManager] Client: Table initialized at base position={baseAlignedPosition}, baseXRot={baseAlignedXRotation}, baseYRot={baseAlignedYRotation}");
+                
+                // Refresh any existing ball's table reference after alignment
+                RefreshBallTableReferences();
             }
             else
             {
@@ -959,39 +1177,84 @@ public class TableTennisManager : NetworkBehaviour
         }
         else
         {
-            // CRITICAL: Re-align the camera rig to the preserved anchors!
-            // Without this, each headset's OVRCameraRig starts at default (0,0,0) and objects appear misaligned.
-            Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors after scene transition...");
-            
-            if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
+            // CRITICAL: Check if alignment was already done by AnchorGUIManager
+            if (AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic)
             {
-                // Log anchor positions BEFORE alignment
-                Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Primary anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
-                Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Secondary anchor world={secondaryOVRAnchor.transform.position}, local={secondaryOVRAnchor.transform.localPosition}, rot={secondaryOVRAnchor.transform.eulerAngles}");
+                Debug.Log("[TableTennisManager] Alignment already completed by AnchorGUIManager, skipping WaitForAnchor alignment");
+            }
+            else
+            {
+                // Check if camera rig is already aligned (not at origin)
+                var cameraRigObj = FindObjectOfType<OVRCameraRig>();
+                bool rigAlreadyAligned = false;
+                if (cameraRigObj != null)
+                {
+                    // If rig is not at origin, assume alignment was already done
+                    float rigDistFromOrigin = cameraRigObj.transform.position.magnitude;
+                    float rigRotFromIdentity = Mathf.Abs(cameraRigObj.transform.eulerAngles.y);
+                    rigAlreadyAligned = rigDistFromOrigin > 0.05f || rigRotFromIdentity > 1f;
+                    
+                    Debug.Log($"[TableTennisManager] Camera rig at pos={cameraRigObj.transform.position}, rot={cameraRigObj.transform.eulerAngles}. Already aligned: {rigAlreadyAligned}");
+                }
                 
-                // Both host and client use the same alignment
-                // The anchors define the shared coordinate system
-                alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor, 0f);
-                Debug.Log($"[TableTennisManager] Applied 2-point alignment");
-            }
-            else if (primaryOVRAnchor != null)
-            {
-                Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Single anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
-                alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
-                Debug.Log("[TableTennisManager] Applied single-point alignment");
-            }
-            
-            // Wait for alignment to complete before placing table
-            yield return new WaitForSeconds(1.0f);
-            
-            // Log anchor positions AFTER alignment
-            if (primaryOVRAnchor != null)
-            {
-                Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Primary anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
-            }
-            if (secondaryOVRAnchor != null)
-            {
-                Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Secondary anchor world={secondaryOVRAnchor.transform.position}, local={secondaryOVRAnchor.transform.localPosition}, rot={secondaryOVRAnchor.transform.eulerAngles}");
+                if (rigAlreadyAligned)
+                {
+                    Debug.Log("[TableTennisManager] Camera rig already aligned, skipping re-alignment to preserve existing state");
+                }
+                else
+                {
+                    Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors after scene transition...");
+                    
+                    // CRITICAL: Sort anchors by UUID to ensure consistent ordering!
+                    if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
+                    {
+                        // Sort by UUID string to ensure same order as AnchorGUIManager
+                        OVRSpatialAnchor first, second;
+                        if (string.Compare(primaryOVRAnchor.Uuid.ToString(), secondaryOVRAnchor.Uuid.ToString()) <= 0)
+                        {
+                            first = primaryOVRAnchor;
+                            second = secondaryOVRAnchor;
+                        }
+                        else
+                        {
+                            first = secondaryOVRAnchor;
+                            second = primaryOVRAnchor;
+                        }
+                        
+                        Debug.Log($"[TableTennisManager] Sorted anchors by UUID: first={first.Uuid}, second={second.Uuid}");
+                        
+                        // Log anchor positions BEFORE alignment
+                        Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Primary anchor world={first.transform.position}, local={first.transform.localPosition}, rot={first.transform.eulerAngles}");
+                        Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Secondary anchor world={second.transform.position}, local={second.transform.localPosition}, rot={second.transform.eulerAngles}");
+                        
+                        // Update our references to use sorted order
+                        sharedAnchor = first.transform;
+                        secondaryAnchor = second.transform;
+                        
+                        // Both host and client use the same alignment
+                        alignmentManager.AlignUserToTwoAnchors(first, second, 0f);
+                        Debug.Log($"[TableTennisManager] Applied 2-point alignment with sorted anchors");
+                    }
+                    else if (primaryOVRAnchor != null)
+                    {
+                        Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Single anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
+                        alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
+                        Debug.Log("[TableTennisManager] Applied single-point alignment");
+                    }
+                    
+                    // Wait for alignment to complete before placing table
+                    yield return new WaitForSeconds(1.0f);
+                    
+                    // Log anchor positions AFTER alignment
+                    if (primaryOVRAnchor != null)
+                    {
+                        Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Primary anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
+                    }
+                    if (secondaryOVRAnchor != null)
+                    {
+                        Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Secondary anchor world={secondaryOVRAnchor.transform.position}, local={secondaryOVRAnchor.transform.localPosition}, rot={secondaryOVRAnchor.transform.eulerAngles}");
+                    }
+                }
             }
         }
     }
@@ -1233,6 +1496,24 @@ public class TableTennisManager : NetworkBehaviour
         {
             spawnedBall.RequestServe(Vector3.forward);
         }
+    }
+    
+    /// <summary>
+    /// Refresh all balls' table references after alignment changes.
+    /// This ensures balls use the updated table position.
+    /// </summary>
+    private void RefreshBallTableReferences()
+    {
+        Debug.Log("[TableTennisManager] Refreshing ball table references after alignment...");
+        
+        // Find all NetworkedBall instances
+        var balls = FindObjectsOfType<NetworkedBall>();
+        foreach (var ball in balls)
+        {
+            ball.RefreshTableReference();
+        }
+        
+        Debug.Log($"[TableTennisManager] Refreshed {balls.Length} ball(s) table references");
     }
     
     /// <summary>

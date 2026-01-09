@@ -56,6 +56,8 @@ public class NetworkedBall : NetworkBehaviour
     private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
     private bool localPositioningMode = true; // Local flag for positioning
     private bool ballAdjustModeActive = false; // Toggle with A button to enable ball movement
+    private Vector3 initialTablePosition; // Track initial table position for debugging
+    private Quaternion initialTableRotation;
     
     // For interpolation on clients
     private Vector3 targetPosition;
@@ -176,6 +178,27 @@ public class NetworkedBall : NetworkBehaviour
     
     private IEnumerator TryFindAnchorAndInitialize()
     {
+        // On client, wait for alignment to complete before initializing
+        if (!Object.HasStateAuthority)
+        {
+            Debug.Log("[NetworkedBall][INIT] Client waiting for alignment to complete...");
+            float waitTime = 0f;
+            while (!AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic && waitTime < 15f)
+            {
+                yield return new WaitForSeconds(0.5f);
+                waitTime += 0.5f;
+            }
+            
+            if (AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic)
+            {
+                Debug.Log($"[NetworkedBall][INIT] Client alignment completed, proceeding with initialization after {waitTime}s");
+            }
+            else
+            {
+                Debug.LogWarning("[NetworkedBall][INIT] Client timed out waiting for alignment, proceeding anyway");
+            }
+        }
+        
         int attempts = 0;
         
         // First, try to find the table - this is our main reference frame
@@ -186,7 +209,7 @@ public class NetworkedBall : NetworkBehaviour
             if (table != null)
             {
                 tableTransform = table.transform;
-                Debug.Log($"[NetworkedBall] Found table: {table.name} at position {tableTransform.position}");
+                Debug.Log($"[NetworkedBall][FIND] Found table: {table.name} at position {tableTransform.position}, rotation={tableTransform.rotation.eulerAngles}, parent={tableTransform.parent?.name ?? "none"}");
             }
             
             // Also try to find anchor as fallback
@@ -212,7 +235,9 @@ public class NetworkedBall : NetworkBehaviour
         if (tableTransform != null)
         {
             isInitialized = true;
-            Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}");
+            initialTablePosition = tableTransform.position;
+            initialTableRotation = tableTransform.rotation;
+            Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}, rotation={tableTransform.rotation.eulerAngles}");
             
             // Find game manager
             gameManager = FindObjectOfType<TableTennisGameManager>();
@@ -224,9 +249,10 @@ public class NetworkedBall : NetworkBehaviour
             else
             {
                 // Client: Initial position update
-                Debug.Log($"[NetworkedBall] Client: TableRelativePosition={TableRelativePosition}");
+                Debug.Log($"[NetworkedBall][INIT] Client: TableRelativePosition={TableRelativePosition}");
+                Debug.Log($"[NetworkedBall][INIT] Client: Table at {tableTransform.position}, rot={tableTransform.rotation.eulerAngles}");
                 UpdateLocalPositionFromNetwork();
-                Debug.Log($"[NetworkedBall] Client: Ball positioned at {transform.position}");
+                Debug.Log($"[NetworkedBall][INIT] Client: Ball world position after update: {transform.position}");
             }
         }
         else
@@ -253,7 +279,7 @@ public class NetworkedBall : NetworkBehaviour
     
     public override void FixedUpdateNetwork()
     {
-        if (!isInitialized || sharedAnchor == null) return;
+        if (!isInitialized || tableTransform == null) return;
         
         if (Object.HasStateAuthority)
         {
@@ -270,7 +296,7 @@ public class NetworkedBall : NetworkBehaviour
     
     private void Update()
     {
-        if (!isInitialized || sharedAnchor == null) return;
+        if (!isInitialized || tableTransform == null) return;
         
         // Toggle ball adjust mode with A button (only in positioning mode)
         if ((IsInPositioningMode || localPositioningMode) && 
@@ -460,13 +486,16 @@ public class NetworkedBall : NetworkBehaviour
         }
         
         previousPosition = targetPosition;
-        targetPosition = tableTransform.TransformPoint(TableRelativePosition);
-        interpolationTime = 0f;
+        Vector3 newTargetPosition = tableTransform.TransformPoint(TableRelativePosition);
         
-        // Debug log periodically to help diagnose issues
-        if (Time.frameCount % 60 == 0) // Every ~1 second
+        // Only update if position changed significantly (avoid jitter)
+        if (Vector3.Distance(newTargetPosition, targetPosition) > 0.001f)
         {
-            Debug.Log($"[NetworkedBall] Client update: TableRelPos={TableRelativePosition}, WorldPos={targetPosition}, Table at {tableTransform.position}");
+            targetPosition = newTargetPosition;
+            interpolationTime = 0f;
+            
+            // Debug log when position changes
+            Debug.Log($"[NetworkedBall][CLIENT] Position updated: TableRelPos={TableRelativePosition}, WorldPos={targetPosition}, Table at pos={tableTransform.position} rot={tableTransform.rotation.eulerAngles}");
         }
     }
     
@@ -580,6 +609,42 @@ public class NetworkedBall : NetworkBehaviour
         TableRelativeVelocity = Vector3.zero;
         
         Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos} - IN POSITIONING MODE");
+    }
+    
+    /// <summary>
+    /// Called to refresh the table reference after alignment changes.
+    /// Useful for clients when the table position changes due to re-alignment.
+    /// </summary>
+    public void RefreshTableReference()
+    {
+        // Re-find the table
+        var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+        if (table != null)
+        {
+            Transform oldTable = tableTransform;
+            tableTransform = table.transform;
+            
+            bool positionChanged = oldTable == null || Vector3.Distance(oldTable.position, tableTransform.position) > 0.01f;
+            bool rotationChanged = oldTable == null || Quaternion.Angle(oldTable.rotation, tableTransform.rotation) > 1f;
+            
+            Debug.Log($"[NetworkedBall][REFRESH] Table reference refreshed: {table.name} at pos={tableTransform.position}, rot={tableTransform.rotation.eulerAngles}");
+            if (positionChanged || rotationChanged)
+            {
+                Debug.Log($"[NetworkedBall][REFRESH] Table MOVED! Position changed: {positionChanged}, Rotation changed: {rotationChanged}");
+            }
+            
+            // Track initial if not set
+            if (initialTablePosition == Vector3.zero)
+            {
+                initialTablePosition = tableTransform.position;
+                initialTableRotation = tableTransform.rotation;
+            }
+        }
+        else
+        {
+            Debug.LogWarning("[NetworkedBall][REFRESH] Could not find table to refresh reference");
+        }
     }
     
     private void FindTableObject()
