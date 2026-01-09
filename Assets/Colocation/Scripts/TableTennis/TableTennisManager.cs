@@ -28,6 +28,10 @@ public class TableTennisManager : NetworkBehaviour
     [Networked] private float NetworkedTableYRotation { get; set; }
     [Networked] private float NetworkedFloorOffset { get; set; } // Shared floor level adjustment
     
+    // Game phase tracking (for UI compatibility)
+    public enum GamePhase { TableSetup, BallPositioning, Playing }
+    public GamePhase CurrentPhase { get; private set; } = GamePhase.TableSetup;
+    
     // Runtime adjustment state
     private GameObject tableRoot;
     private bool isInAdjustMode = false;
