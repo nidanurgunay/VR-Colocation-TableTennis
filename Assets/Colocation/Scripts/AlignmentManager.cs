@@ -3,9 +3,6 @@ using System.Collections;
 
 public class AlignmentManager : MonoBehaviour
 {
-    // Enable/disable verbose alignment logging
-    private static readonly bool ALIGNMENT_DEBUG_ENABLED = true;
-    
     [Header("Alignment Settings")]
     [SerializeField] private float stabilizationDelay = 0.5f; // Wait for anchor to settle
     [SerializeField] private int alignmentIterations = 3; // More iterations for better accuracy
@@ -21,7 +18,7 @@ public class AlignmentManager : MonoBehaviour
     private OVRSpatialAnchor _secondaryAnchor; // Secondary (for 2-point alignment)
     private Coroutine _periodicAlignmentCoroutine;
     private bool _isAligned = false;
-    private float _additionalYRotation = 0f; // Additional Y rotation for client alignment (180° for opposite side)
+
 
     private void Awake()
     {
@@ -53,7 +50,7 @@ public class AlignmentManager : MonoBehaviour
         StartCoroutine(AlignmentCoroutine(anchor, enablePeriodic));
     }
 
-    public void AlignUserToTwoAnchors(OVRSpatialAnchor primaryAnchor, OVRSpatialAnchor secondaryAnchor, float additionalYRotation = 0f)
+    public void AlignUserToTwoAnchors(OVRSpatialAnchor primaryAnchor, OVRSpatialAnchor secondaryAnchor)
     {
         if (!primaryAnchor || !primaryAnchor.Localized || !secondaryAnchor || !secondaryAnchor.Localized)
         {
@@ -61,12 +58,11 @@ public class AlignmentManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"Colocation: Starting 2-point alignment. Primary: {primaryAnchor.Uuid}, Secondary: {secondaryAnchor.Uuid}, AdditionalRotation: {additionalYRotation}");
+        Debug.Log($"Colocation: Starting 2-point alignment. Primary: {primaryAnchor.Uuid}, Secondary: {secondaryAnchor.Uuid}");
         
         _currentAnchor = primaryAnchor; 
         _secondaryAnchor = secondaryAnchor;
-        _additionalYRotation = additionalYRotation; // Store for periodic re-alignment
-        StartCoroutine(TwoPointAlignmentCoroutine(primaryAnchor, secondaryAnchor, additionalYRotation));
+        StartCoroutine(TwoPointAlignmentCoroutine(primaryAnchor, secondaryAnchor));
     }
     
     /// <summary>
@@ -126,52 +122,28 @@ public class AlignmentManager : MonoBehaviour
         }
     }
 
-    private IEnumerator TwoPointAlignmentCoroutine(OVRSpatialAnchor primary, OVRSpatialAnchor secondary, float additionalYRotation = 0f)
+    private IEnumerator TwoPointAlignmentCoroutine(OVRSpatialAnchor primary, OVRSpatialAnchor secondary)
     {
         var primaryTransform = primary.transform;
         var secondaryTransform = secondary.transform;
 
-        LogAlignment("START", $"Beginning 2-point alignment");
-        LogAlignment("INPUT", $"Primary anchor UUID: {primary.Uuid}");
-        LogAlignment("INPUT", $"Secondary anchor UUID: {secondary.Uuid}");
-        LogAlignment("INPUT", $"Additional Y rotation: {additionalYRotation}°");
-        
-        // Log initial state BEFORE any changes
-        LogAlignment("BEFORE", $"CameraRig initial: pos={FormatV(_cameraRigTransform.position)}, rot={FormatV(_cameraRigTransform.eulerAngles)}");
-        LogAlignment("BEFORE", $"Primary anchor: pos={FormatV(primaryTransform.position)}, rot={FormatV(primaryTransform.eulerAngles)}");
-        LogAlignment("BEFORE", $"Secondary anchor: pos={FormatV(secondaryTransform.position)}, rot={FormatV(secondaryTransform.eulerAngles)}");
-
         Debug.Log($"Colocation: Waiting {stabilizationDelay}s for anchors to stabilize...");
         yield return new WaitForSeconds(stabilizationDelay);
-        
-        // Log after stabilization (anchors may have moved slightly)
-        LogAlignment("STABLE", $"Primary anchor after stabilization: pos={FormatV(primaryTransform.position)}");
-        LogAlignment("STABLE", $"Secondary anchor after stabilization: pos={FormatV(secondaryTransform.position)}");
 
         for (var alignmentCount = alignmentIterations; alignmentCount > 0; alignmentCount--)
         {
-            int iteration = alignmentIterations - alignmentCount + 1;
-            LogAlignment("ITER", $"=== Iteration {iteration}/{alignmentIterations} ===");
-            
-            // STEP 1: Reset Rig to Local Identity to measure raw offsets
-            LogAlignment("STEP1", "Resetting camera rig to origin (0,0,0)");
+            // 1. Reset Rig to Local Identity to measure raw offsets
             _cameraRigTransform.position = Vector3.zero;
             _cameraRigTransform.eulerAngles = Vector3.zero;
             yield return null;
-            
-            // Log anchor positions AFTER rig reset (they move relative to rig!)
-            LogAlignment("STEP1", $"After rig reset - Primary: {FormatV(primaryTransform.position)}, Secondary: {FormatV(secondaryTransform.position)}");
 
-            // STEP 2: Calculate Correction Rotation
+            // 2. Calculate Correction Rotation
             Vector3 realVector = secondaryTransform.position - primaryTransform.position;
-            LogAlignment("STEP2", $"Raw anchor vector (secondary - primary): {FormatV(realVector)}");
-            
             realVector.y = 0; // Flatten to horizontal plane
-            LogAlignment("STEP2", $"Flattened anchor vector (Y=0): {FormatV(realVector)}, magnitude={realVector.magnitude:F3}m");
             
             if (realVector.sqrMagnitude < 0.001f)
             {
-                LogAlignment("WARN", "⚠️ Anchors too close! Using fallback single-point alignment");
+                Debug.LogWarning("Colocation: Anchors too close! Fallback.");
                 _cameraRigTransform.position = primaryTransform.InverseTransformPoint(Vector3.zero);
                 _cameraRigTransform.eulerAngles = new Vector3(0, -primaryTransform.eulerAngles.y, 0);
             }
@@ -179,75 +151,25 @@ public class AlignmentManager : MonoBehaviour
             {
                 // We want Real Vector to align with Virtual Forward (+Z)
                 float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
-                LogAlignment("STEP2", $"Anchor vector heading: {realHeading:F1}°");
-                
-                // Add additional rotation (e.g., 180° for client to face opposite direction)
-                Vector3 targetRot = new Vector3(0, -realHeading + additionalYRotation, 0);
-                LogAlignment("STEP2", $"Target rig rotation: {FormatV(targetRot)} (= -{realHeading:F1}° + {additionalYRotation}°)");
+                Vector3 targetRot = new Vector3(0, -realHeading, 0);
 
                 // Apply Rotation
                 _cameraRigTransform.eulerAngles = targetRot;
-                LogAlignment("STEP2", $"Applied rotation. Rig now at rot={FormatV(_cameraRigTransform.eulerAngles)}");
                 
-                // STEP 3: Calculate Correction Position (After Rotation)
-                // Key insight: After rotation, the primary anchor is now at a different world position
-                // We want the primary anchor to be at world origin (0,0,0)
-                Vector3 primaryPosAfterRotation = primaryTransform.position;
-                LogAlignment("STEP3", $"Primary anchor position after rig rotation: {FormatV(primaryPosAfterRotation)}");
-                
-                // Move rig by negative of anchor position to bring anchor to origin
-                Vector3 targetPos = -primaryPosAfterRotation;
-                targetPos.y = 0; // Trust Guardian floor calibration
-                LogAlignment("STEP3", $"Target rig position: {FormatV(targetPos)} (= -primary, Y=0 for Guardian floor)");
-                
+                // 3. Calculate Correction Position (After Rotation)
+                // Keep Y at 0 to trust Guardian floor calibration
+                Vector3 targetPos = -primaryTransform.position;
+                targetPos.y = 0; // Trust Guardian floor
                 _cameraRigTransform.position = targetPos;
-                LogAlignment("STEP3", $"Applied position. Rig now at pos={FormatV(_cameraRigTransform.position)}");
             }
             
-            // Log final state for this iteration
-            LogAlignment("RESULT", $"Iteration {iteration} complete:");
-            LogAlignment("RESULT", $"  Rig: pos={FormatV(_cameraRigTransform.position)}, rot={FormatV(_cameraRigTransform.eulerAngles)}");
-            LogAlignment("RESULT", $"  Primary anchor now at: {FormatV(primaryTransform.position)}");
-            LogAlignment("RESULT", $"  Secondary anchor now at: {FormatV(secondaryTransform.position)}");
-            
+            Debug.Log($"Colocation: 2-Point Iteration {alignmentIterations - alignmentCount + 1}");
             yield return new WaitForEndOfFrame();
         }
 
-        // Final summary
-        LogAlignment("DONE", $"=== 2-Point alignment COMPLETE ===");
-        LogAlignment("DONE", $"Final rig: pos={FormatV(_cameraRigTransform.position)}, rot={FormatV(_cameraRigTransform.eulerAngles)}");
-        LogAlignment("DONE", $"Primary anchor at: {FormatV(primaryTransform.position)} (world space - doesn't change)");
-        LogAlignment("DONE", $"Secondary anchor at: {FormatV(secondaryTransform.position)}");
-        
-        // Calculate where the primary anchor APPEARS from the player's perspective
-        // After alignment, from the player's view, the anchor should appear at the rig's inverse position
-        Vector3 anchorRelativeToRig = primaryTransform.position - _cameraRigTransform.position;
-        LogAlignment("DONE", $"Primary anchor relative to rig: {FormatV(anchorRelativeToRig)}");
-        
-        // The anchor's XZ should be close to 0 relative to rig (it's our origin)
-        float relativeDistXZ = new Vector2(anchorRelativeToRig.x, anchorRelativeToRig.z).magnitude;
-        if (relativeDistXZ > 0.1f)
-        {
-            LogAlignment("WARN", $"⚠️ Primary anchor is {relativeDistXZ:F3}m from rig XZ origin - alignment may be imprecise!");
-        }
-        else
-        {
-            LogAlignment("OK", $"✓ Primary anchor is {relativeDistXZ:F3}m from rig XZ origin - good alignment");
-        }
-
-        Debug.Log($"Colocation: 2-Point alignment complete. Additional rotation: {additionalYRotation}");
+        Debug.Log("Colocation: 2-Point alignment complete.");
         _isAligned = true;
     }
-    
-    /// <summary>Log helper for alignment debugging</summary>
-    private void LogAlignment(string category, string message)
-    {
-        if (!ALIGNMENT_DEBUG_ENABLED) return;
-        Debug.Log($"[ALIGN][{category}] {message}");
-    }
-    
-    /// <summary>Format vector with 3 decimal places</summary>
-    private string FormatV(Vector3 v) => $"({v.x:F3}, {v.y:F3}, {v.z:F3})";
     
     private IEnumerator PeriodicAlignmentCoroutine()
     {
@@ -274,8 +196,7 @@ public class AlignmentManager : MonoBehaviour
                 realVector.y = 0; 
                 
                 float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
-                // Apply the stored additional rotation (e.g., 180° for client)
-                targetRotation = new Vector3(0, -realHeading + _additionalYRotation, 0);
+                targetRotation = new Vector3(0, -realHeading, 0);
                 
                 // For position, we effectively want to apply the translation that brings _currentAnchor to 0,0,0
                 // BUT we must account for the pivot of rotation.

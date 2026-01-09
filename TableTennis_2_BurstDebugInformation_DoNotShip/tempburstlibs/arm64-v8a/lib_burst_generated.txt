@@ -11,6 +11,7 @@ Library: /Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Tem
 --float-mode=Fast
 --generate-link-xml=Temp/burst.link.xml
 --temp-folder=/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Temp/Burst
+--debug=Full
 --key-folder=/Applications/Unity/Hub/Editor/2022.3.62f3/PlaybackEngines/AndroidPlayer
 --decode-folder=/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Library/Burst
 --output=/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Temp/BurstOutput/tempburstlibs/arm64-v8a/lib_burst_generated
@@ -28,6 +29,7 @@ Library: /Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Tem
 --target-framework=NetFramework
 --generate-link-xml=Temp/burst.link.xml
 --temp-folder=/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Temp/Burst
+--debug=Full
 --key-folder=/Applications/Unity/Hub/Editor/2022.3.62f3/PlaybackEngines/AndroidPlayer
 --decode-folder=/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Library/Burst
 --output=/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr/Temp/BurstOutput/tempburstlibs/arm64-v8a/lib_burst_generated

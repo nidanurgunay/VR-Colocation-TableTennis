@@ -93,6 +93,9 @@ public class ControllerRacket : NetworkBehaviour
     private bool isInitialized = false;
     private bool isNetworked = false; // True if spawned via Fusion, false if local-only
     
+    // Table reference for coordinate conversion (needed for proper sync after alignment)
+    private Transform tableTransform;
+    
     /// <summary>
     /// Called when spawned via Fusion network
     /// </summary>
@@ -101,7 +104,7 @@ public class ControllerRacket : NetworkBehaviour
         base.Spawned();
         isNetworked = true;
         isLocalPlayer = Object.HasInputAuthority;
-        Debug.Log($"[ControllerRacket] Spawned via Fusion - IsLocalPlayer: {isLocalPlayer}, HasStateAuthority: {Object.HasStateAuthority}");
+        Debug.Log($"[ControllerRacket][SPAWN] Spawned via Fusion - IsLocalPlayer: {isLocalPlayer}, HasStateAuthority: {Object.HasStateAuthority}, HasInputAuthority: {Object.HasInputAuthority}, InputAuthority: {Object.InputAuthority}, LocalPlayer: {Runner.LocalPlayer}");
         
         if (isLocalPlayer)
         {
@@ -110,7 +113,7 @@ public class ControllerRacket : NetworkBehaviour
             if (!Object.HasStateAuthority)
             {
                 Object.RequestStateAuthority();
-                Debug.Log("[ControllerRacket] Requested State Authority for local player's racket");
+                Debug.Log("[ControllerRacket][SPAWN] Requested State Authority for local player's racket");
             }
             
             // Local player - setup controller tracking
@@ -119,6 +122,7 @@ public class ControllerRacket : NetworkBehaviour
         else
         {
             // Remote player - create visual representations
+            Debug.Log("[ControllerRacket][SPAWN] This is REMOTE player's racket - creating remote visuals...");
             StartCoroutine(CreateRemoteRackets());
         }
     }
@@ -147,6 +151,7 @@ public class ControllerRacket : NetworkBehaviour
         isInitialized = true;
         Debug.Log($"[RACKET_DEBUG] ControllerRacket Start - Rotation: {racketRotation}, Offset: {racketOffset}, Scale: {racketScale}");
         FindControllers();
+        FindTableReference();
         
         // Try to find racket prefab - if not found, will retry in Update
         TryFindRacketTemplate();
@@ -225,6 +230,23 @@ public class ControllerRacket : NetworkBehaviour
         }
         
         Debug.LogWarning("[ControllerRacket] Could not find racket template in scene!");
+    }
+    
+    private void FindTableReference()
+    {
+        if (tableTransform != null) return;
+        
+        var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
+        if (table != null)
+        {
+            tableTransform = table.transform;
+            Debug.Log($"[ControllerRacket] Found table reference: {table.name} at {tableTransform.position}");
+        }
+        else
+        {
+            Debug.LogWarning("[ControllerRacket] Could not find table for coordinate conversion!");
+        }
     }
     
     private void FindControllers()
@@ -729,12 +751,24 @@ public class ControllerRacket : NetworkBehaviour
     /// </summary>
     private System.Collections.IEnumerator CreateRemoteRackets()
     {
+        Debug.Log("[ControllerRacket][REMOTE] Starting to create remote rackets...");
+        
+        int attempts = 0;
         // Wait for racket template to be available
-        while (racketPrefab == null)
+        while (racketPrefab == null && attempts < 50)
         {
             TryFindRacketTemplate();
+            attempts++;
             yield return new WaitForSeconds(0.2f);
         }
+        
+        if (racketPrefab == null)
+        {
+            Debug.LogError("[ControllerRacket][REMOTE] Failed to find racket template after 50 attempts!");
+            yield break;
+        }
+        
+        Debug.Log($"[ControllerRacket][REMOTE] Found racket template: {racketPrefab.name}, creating remote racket visuals...");
         
         // Create remote racket visuals (not parented to controllers)
         remoteRightRacket = Instantiate(racketPrefab);
@@ -747,7 +781,7 @@ public class ControllerRacket : NetworkBehaviour
         if (remoteRightRacketRb != null)
         {
             remoteRightRacketRb.isKinematic = false;
-            Debug.Log("[ControllerRacket] Remote right racket rigidbody set to non-kinematic for collisions");
+            Debug.Log("[ControllerRacket][REMOTE] Remote right racket rigidbody set to non-kinematic for collisions");
         }
         
         remoteLeftRacket = Instantiate(racketPrefab);
@@ -760,10 +794,10 @@ public class ControllerRacket : NetworkBehaviour
         if (remoteLeftRacketRb != null)
         {
             remoteLeftRacketRb.isKinematic = false;
-            Debug.Log("[ControllerRacket] Remote left racket rigidbody set to non-kinematic for collisions");
+            Debug.Log("[ControllerRacket][REMOTE] Remote left racket rigidbody set to non-kinematic for collisions");
         }
         
-        Debug.Log("[ControllerRacket] Created remote player racket visuals with non-kinematic rigidbodies");
+        Debug.Log("[ControllerRacket][REMOTE] Created remote player racket visuals successfully!");
     }
     
     /// <summary>
@@ -777,31 +811,81 @@ public class ControllerRacket : NetworkBehaviour
         if (!Object.HasStateAuthority)
         {
             // Keep requesting until we get it
+            if (Time.frameCount % 100 == 0) // Log occasionally
+            {
+                Debug.Log("[ControllerRacket][SYNC] Still waiting for State Authority...");
+            }
             Object.RequestStateAuthority();
             return;
         }
         
-        // Sync right racket
+        // Find table if not found yet
+        if (tableTransform == null)
+        {
+            FindTableReference();
+        }
+        
+        // Sync right racket - use table-relative coordinates for proper alignment
         if (rightRacket != null && rightActive)
         {
-            NetworkedRightRacketPos = rightRacket.transform.position;
-            NetworkedRightRacketRot = rightRacket.transform.rotation;
+            // Convert world position to table-relative for sync
+            if (tableTransform != null)
+            {
+                NetworkedRightRacketPos = tableTransform.InverseTransformPoint(rightRacket.transform.position);
+                // Store rotation relative to table
+                NetworkedRightRacketRot = Quaternion.Inverse(tableTransform.rotation) * rightRacket.transform.rotation;
+            }
+            else
+            {
+                NetworkedRightRacketPos = rightRacket.transform.position;
+                NetworkedRightRacketRot = rightRacket.transform.rotation;
+            }
             NetworkedRightRacketVisible = true;
+            
+            // Log occasionally
+            if (Time.frameCount % 300 == 0)
+            {
+                Debug.Log($"[ControllerRacket][SYNC] Syncing RIGHT racket: tableRelPos={NetworkedRightRacketPos}, worldPos={rightRacket.transform.position}");
+            }
         }
         else
         {
+            if (NetworkedRightRacketVisible) // Log when visibility changes
+            {
+                Debug.Log("[ControllerRacket][SYNC] RIGHT racket now hidden");
+            }
             NetworkedRightRacketVisible = false;
         }
         
-        // Sync left racket
+        // Sync left racket - use table-relative coordinates for proper alignment
         if (leftRacket != null && leftActive)
         {
-            NetworkedLeftRacketPos = leftRacket.transform.position;
-            NetworkedLeftRacketRot = leftRacket.transform.rotation;
+            // Convert world position to table-relative for sync
+            if (tableTransform != null)
+            {
+                NetworkedLeftRacketPos = tableTransform.InverseTransformPoint(leftRacket.transform.position);
+                // Store rotation relative to table
+                NetworkedLeftRacketRot = Quaternion.Inverse(tableTransform.rotation) * leftRacket.transform.rotation;
+            }
+            else
+            {
+                NetworkedLeftRacketPos = leftRacket.transform.position;
+                NetworkedLeftRacketRot = leftRacket.transform.rotation;
+            }
             NetworkedLeftRacketVisible = true;
+            
+            // Log occasionally
+            if (Time.frameCount % 300 == 0)
+            {
+                Debug.Log($"[ControllerRacket][SYNC] Syncing LEFT racket: tableRelPos={NetworkedLeftRacketPos}, worldPos={leftRacket.transform.position}");
+            }
         }
         else
         {
+            if (NetworkedLeftRacketVisible) // Log when visibility changes
+            {
+                Debug.Log("[ControllerRacket][SYNC] LEFT racket now hidden");
+            }
             NetworkedLeftRacketVisible = false;
         }
     }
@@ -813,14 +897,44 @@ public class ControllerRacket : NetworkBehaviour
     {
         if (isLocalPlayer) return;
         
+        // Find table if not found yet
+        if (tableTransform == null)
+        {
+            FindTableReference();
+        }
+        
+        // Debug log every few seconds to see what's happening
+        if (Time.frameCount % 180 == 0)
+        {
+            Debug.Log($"[ControllerRacket][REMOTE_RENDER] Right: visible={NetworkedRightRacketVisible}, tableRelPos={NetworkedRightRacketPos}, remoteRacket={remoteRightRacket != null}, table={tableTransform != null}");
+            Debug.Log($"[ControllerRacket][REMOTE_RENDER] Left: visible={NetworkedLeftRacketVisible}, tableRelPos={NetworkedLeftRacketPos}, remoteRacket={remoteLeftRacket != null}");
+        }
+        
         // Update remote right racket
         if (remoteRightRacket != null)
         {
-            remoteRightRacket.SetActive(NetworkedRightRacketVisible);
-            if (NetworkedRightRacketVisible)
+            bool shouldBeVisible = NetworkedRightRacketVisible;
+            if (remoteRightRacket.activeSelf != shouldBeVisible)
             {
-                Vector3 targetPos = NetworkedRightRacketPos;
-                Quaternion targetRot = NetworkedRightRacketRot;
+                remoteRightRacket.SetActive(shouldBeVisible);
+                Debug.Log($"[ControllerRacket][REMOTE] Right racket visibility changed to: {shouldBeVisible}");
+            }
+            
+            if (shouldBeVisible)
+            {
+                // Convert table-relative position back to world position
+                Vector3 targetPos;
+                Quaternion targetRot;
+                if (tableTransform != null)
+                {
+                    targetPos = tableTransform.TransformPoint(NetworkedRightRacketPos);
+                    targetRot = tableTransform.rotation * NetworkedRightRacketRot;
+                }
+                else
+                {
+                    targetPos = NetworkedRightRacketPos;
+                    targetRot = NetworkedRightRacketRot;
+                }
                 
                 // Use Rigidbody.MovePosition for physics-based movement (allows collisions)
                 if (remoteRightRacketRb != null)
@@ -856,11 +970,28 @@ public class ControllerRacket : NetworkBehaviour
         // Update remote left racket
         if (remoteLeftRacket != null)
         {
-            remoteLeftRacket.SetActive(NetworkedLeftRacketVisible);
-            if (NetworkedLeftRacketVisible)
+            bool shouldBeVisible = NetworkedLeftRacketVisible;
+            if (remoteLeftRacket.activeSelf != shouldBeVisible)
             {
-                Vector3 targetPos = NetworkedLeftRacketPos;
-                Quaternion targetRot = NetworkedLeftRacketRot;
+                remoteLeftRacket.SetActive(shouldBeVisible);
+                Debug.Log($"[ControllerRacket][REMOTE] Left racket visibility changed to: {shouldBeVisible}");
+            }
+            
+            if (shouldBeVisible)
+            {
+                // Convert table-relative position back to world position
+                Vector3 targetPos;
+                Quaternion targetRot;
+                if (tableTransform != null)
+                {
+                    targetPos = tableTransform.TransformPoint(NetworkedLeftRacketPos);
+                    targetRot = tableTransform.rotation * NetworkedLeftRacketRot;
+                }
+                else
+                {
+                    targetPos = NetworkedLeftRacketPos;
+                    targetRot = NetworkedLeftRacketRot;
+                }
                 
                 // Use Rigidbody.MovePosition for physics-based movement (allows collisions)
                 if (remoteLeftRacketRb != null)

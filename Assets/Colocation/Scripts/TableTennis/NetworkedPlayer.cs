@@ -19,13 +19,13 @@ public class NetworkedPlayer : NetworkBehaviour
     [SerializeField] private Vector3 racketRotation = new Vector3(0, 270, 40);
     [SerializeField] private float racketScale = 10f;
 
-    // Networked transforms for Head, Left Hand, Right Hand
+    // Networked transforms for Head, Left Hand, Right Hand (ANCHOR-RELATIVE for proper alignment)
     [Networked] private Vector3 HeadPos { get; set; }
     [Networked] private Quaternion HeadRot { get; set; }
-    
+
     [Networked] private Vector3 LeftHandPos { get; set; }
     [Networked] private Quaternion LeftHandRot { get; set; }
-    
+
     [Networked] private Vector3 RightHandPos { get; set; }
     [Networked] private Quaternion RightHandRot { get; set; }
     
@@ -37,7 +37,8 @@ public class NetworkedPlayer : NetworkBehaviour
     private Transform _localHead;
     private Transform _localLeftHand;
     private Transform _localRightHand;
-    
+    private Transform _sharedAnchor; // Reference to shared anchor for anchor-relative positioning
+
     // Standalone remote racket objects (lazy initialized)
     private GameObject _leftRemoteRacket;
     private GameObject _rightRemoteRacket;
@@ -46,12 +47,15 @@ public class NetworkedPlayer : NetworkBehaviour
     public override void Spawned()
     {
         Debug.Log($"[NetworkedPlayer] Spawned for Player {Object.InputAuthority.PlayerId}. IsLocal: {Object.HasInputAuthority}");
-        
+
+        // Find shared anchor for anchor-relative positioning
+        FindSharedAnchor();
+
         // If this is OUR player, find local hardware to drive values
         if (Object.HasInputAuthority)
         {
             FindLocalHardware();
-            
+
             // Hide visuals for self (so we don't see our own floating head)
             SetVisualsActive(false);
         }
@@ -59,11 +63,11 @@ public class NetworkedPlayer : NetworkBehaviour
         {
             // For remote players, ensure visuals are ON (if assigned)
             SetVisualsActive(true);
-            
+
             // DON'T create rackets here - they will be created lazily when needed
             // because the racket template might not exist yet (scene not loaded)
         }
-        
+
         // Name the object for easier debugging
         gameObject.name = $"NetworkedPlayer_{Object.InputAuthority.PlayerId}";
         DontDestroyOnLoad(gameObject);
@@ -160,6 +164,38 @@ public class NetworkedPlayer : NetworkBehaviour
         // Keep collider for potential ball hits
     }
 
+    private void FindSharedAnchor()
+    {
+        // Try to find the shared anchor for anchor-relative positioning
+        var anchors = FindObjectsOfType<OVRSpatialAnchor>();
+        foreach (var anchor in anchors)
+        {
+            if (anchor != null && anchor.Localized)
+            {
+                _sharedAnchor = anchor.transform;
+                Debug.Log($"[NetworkedPlayer] Found shared anchor: {anchor.name}");
+                return;
+            }
+        }
+
+        // If not found, try getting from AnchorGUIManager
+        var anchorGUI = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
+        if (anchorGUI != null)
+        {
+            var localizedAnchor = anchorGUI.GetLocalizedAnchor();
+            if (localizedAnchor != null)
+            {
+                _sharedAnchor = localizedAnchor.transform;
+                Debug.Log($"[NetworkedPlayer] Found shared anchor from GUIManager: {localizedAnchor.name}");
+            }
+        }
+
+        if (_sharedAnchor == null)
+        {
+            Debug.LogWarning("[NetworkedPlayer] Shared anchor not found - will retry later");
+        }
+    }
+
     private void FindLocalHardware()
     {
         var rig = FindObjectOfType<OVRCameraRig>();
@@ -205,22 +241,51 @@ public class NetworkedPlayer : NetworkBehaviour
             FindLocalHardware();
             if (_localHead == null) return;
         }
-        
-        HeadPos = _localHead.position;
-        HeadRot = _localHead.rotation;
 
-        if (_localLeftHand)
+        // Re-find anchor if lost
+        if (_sharedAnchor == null)
         {
-            LeftHandPos = _localLeftHand.position;
-            LeftHandRot = _localLeftHand.rotation;
+            FindSharedAnchor();
         }
 
-        if (_localRightHand)
+        // FIXED: Store positions as ANCHOR-RELATIVE for proper alignment across devices
+        if (_sharedAnchor != null)
         {
-            RightHandPos = _localRightHand.position;
-            RightHandRot = _localRightHand.rotation;
+            // Convert world positions to anchor-relative positions
+            HeadPos = _sharedAnchor.InverseTransformPoint(_localHead.position);
+            HeadRot = Quaternion.Inverse(_sharedAnchor.rotation) * _localHead.rotation;
+
+            if (_localLeftHand)
+            {
+                LeftHandPos = _sharedAnchor.InverseTransformPoint(_localLeftHand.position);
+                LeftHandRot = Quaternion.Inverse(_sharedAnchor.rotation) * _localLeftHand.rotation;
+            }
+
+            if (_localRightHand)
+            {
+                RightHandPos = _sharedAnchor.InverseTransformPoint(_localRightHand.position);
+                RightHandRot = Quaternion.Inverse(_sharedAnchor.rotation) * _localRightHand.rotation;
+            }
         }
-        
+        else
+        {
+            // Fallback to world positions if anchor not found yet
+            HeadPos = _localHead.position;
+            HeadRot = _localHead.rotation;
+
+            if (_localLeftHand)
+            {
+                LeftHandPos = _localLeftHand.position;
+                LeftHandRot = _localLeftHand.rotation;
+            }
+
+            if (_localRightHand)
+            {
+                RightHandPos = _localRightHand.position;
+                RightHandRot = _localRightHand.rotation;
+            }
+        }
+
         // Sync racket active states from ControllerRacket
         var controllerRacket = FindObjectOfType<ControllerRacket>();
         if (controllerRacket != null)
@@ -232,28 +297,53 @@ public class NetworkedPlayer : NetworkBehaviour
 
     private void UpdateVisuals()
     {
+        // Re-find anchor if lost
+        if (_sharedAnchor == null)
+        {
+            FindSharedAnchor();
+        }
+
         // Lazy create remote rackets (waits for scene to have the template)
         EnsureRemoteRacketsExist();
-        
+
+        // FIXED: Convert anchor-relative positions back to world positions for display
+        Vector3 worldHeadPos = HeadPos;
+        Quaternion worldHeadRot = HeadRot;
+        Vector3 worldLeftHandPos = LeftHandPos;
+        Quaternion worldLeftHandRot = LeftHandRot;
+        Vector3 worldRightHandPos = RightHandPos;
+        Quaternion worldRightHandRot = RightHandRot;
+
+        if (_sharedAnchor != null)
+        {
+            // Convert from anchor-relative to world space
+            worldHeadPos = _sharedAnchor.TransformPoint(HeadPos);
+            worldHeadRot = _sharedAnchor.rotation * HeadRot;
+            worldLeftHandPos = _sharedAnchor.TransformPoint(LeftHandPos);
+            worldLeftHandRot = _sharedAnchor.rotation * LeftHandRot;
+            worldRightHandPos = _sharedAnchor.TransformPoint(RightHandPos);
+            worldRightHandRot = _sharedAnchor.rotation * RightHandRot;
+        }
+
         // Update optional head/hand sphere visuals (if assigned)
         if (headVisual)
         {
-            headVisual.transform.position = HeadPos;
-            headVisual.transform.rotation = HeadRot;
+            headVisual.transform.position = worldHeadPos;
+            headVisual.transform.rotation = worldHeadRot;
         }
 
         if (leftHandVisual)
         {
-            leftHandVisual.transform.position = LeftHandPos;
-            leftHandVisual.transform.rotation = LeftHandRot;
+            leftHandVisual.transform.position = worldLeftHandPos;
+            leftHandVisual.transform.rotation = worldLeftHandRot;
         }
 
         if (rightHandVisual)
         {
-            rightHandVisual.transform.position = RightHandPos;
-            rightHandVisual.transform.rotation = RightHandRot;
+            rightHandVisual.transform.position = worldRightHandPos;
+            rightHandVisual.transform.rotation = worldRightHandRot;
         }
-        
+
         // Update standalone remote rackets - position them at hand positions
         if (_leftRemoteRacket != null)
         {
@@ -261,19 +351,19 @@ public class NetworkedPlayer : NetworkBehaviour
             if (LeftRacketActive)
             {
                 // Position at left hand with offset and rotation
-                _leftRemoteRacket.transform.position = LeftHandPos + (LeftHandRot * racketOffset);
-                _leftRemoteRacket.transform.rotation = LeftHandRot * Quaternion.Euler(racketRotation);
+                _leftRemoteRacket.transform.position = worldLeftHandPos + (worldLeftHandRot * racketOffset);
+                _leftRemoteRacket.transform.rotation = worldLeftHandRot * Quaternion.Euler(racketRotation);
             }
         }
-        
+
         if (_rightRemoteRacket != null)
         {
             _rightRemoteRacket.SetActive(RightRacketActive);
             if (RightRacketActive)
             {
                 // Position at right hand with offset and rotation
-                _rightRemoteRacket.transform.position = RightHandPos + (RightHandRot * racketOffset);
-                _rightRemoteRacket.transform.rotation = RightHandRot * Quaternion.Euler(racketRotation);
+                _rightRemoteRacket.transform.position = worldRightHandPos + (worldRightHandRot * racketOffset);
+                _rightRemoteRacket.transform.rotation = worldRightHandRot * Quaternion.Euler(racketRotation);
             }
         }
     }

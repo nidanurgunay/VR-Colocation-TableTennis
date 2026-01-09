@@ -4,281 +4,58 @@ using System.Collections;
 
 /// <summary>
 /// Manages the table tennis game setup and spawns the networked ball.
-/// Attach to a GameObject in the TableTennis scene.
+/// SIMPLIFIED VERSION based on alignment_changes branch approach.
+/// Key principle: Table rotation is anchor-relative, not network-synced rotation values.
 /// </summary>
 public class TableTennisManager : NetworkBehaviour
 {
     [Header("Prefabs")]
     [SerializeField] private NetworkPrefabRef ballPrefab;
-    [SerializeField] private NetworkPrefabRef networkedRacketPrefab; // Networked racket for multiplayer
-    [SerializeField] private GameObject racketPrefab; // Local prefab template
+    [SerializeField] private NetworkPrefabRef networkedRacketPrefab;
+    [SerializeField] private GameObject racketPrefab;
     
     [Header("Table Placement (relative to anchor)")]
-    [SerializeField] private Vector3 tablePositionOffset = Vector3.zero; // Position offset from anchor
+    [SerializeField] private Vector3 tablePositionOffset = Vector3.zero;
     [SerializeField] private float defaultTableHeight = 0.76f; // Standard ping pong table height
-    [SerializeField] private float tableXRotationOffset = 0f; // X rotation offset in degrees (set to 180 if table is upside down)
-    [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset in degrees
+    [SerializeField] private float tableXRotationOffset = 180f; // X rotation offset - set to 180 if table appears upside down
+    [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset
     
-    [Header("Feature Toggles")]
-    [SerializeField] private bool enableTableAdjustment = true; // Enable/disable table position/rotation adjustment with controllers
+    [Header("Runtime Adjustment Controls")]
+    [SerializeField] private float moveSpeed = 2.0f;
+    [SerializeField] private float rotateSpeed = 90f;
+    [SerializeField] private bool showAdjustmentInstructions = true;
+    [SerializeField] private bool enableTableAdjustment = true;
+    
+    // Networked table state - SIMPLE approach from alignment_changes branch
+    [Networked] private Vector3 NetworkedTablePosition { get; set; }
+    [Networked] private float NetworkedTableYRotation { get; set; }
+    [Networked] private float NetworkedFloorOffset { get; set; }
     
     // Game phase tracking
     public enum GamePhase { TableSetup, BallPositioning, Playing }
     [Networked] public NetworkBool GameStarted { get; set; }
     public GamePhase CurrentPhase { get; private set; } = GamePhase.TableSetup;
     
-    [Header("Runtime Adjustment Controls")]
-    [SerializeField] private float moveSpeed = 2.0f; // Meters per second
-    [SerializeField] private float rotateSpeed = 90f; // Degrees per second
-    [SerializeField] private bool showAdjustmentInstructions = true;
-    
-    // Networked table ADJUSTMENTS (relative to anchor-aligned position, not absolute world position)
-    // These are offsets that both host and client apply to their own aligned table position
-    [Networked] private float NetworkedHeightAdjustment { get; set; } // Y offset from aligned position
-    [Networked] private float NetworkedYRotationAdjustment { get; set; } // Y rotation offset from aligned rotation
-    [Networked] private float NetworkedXRotation { get; set; } // X rotation for upside-down correction
-    
-    // Legacy - kept for backward compatibility but using new approach
-    [Networked] private Vector3 NetworkedTablePosition { get; set; }
-    [Networked] private float NetworkedTableYRotation { get; set; }
-    [Networked] private float NetworkedTableXRotation { get; set; } // X rotation for upside-down correction
-    [Networked] private float NetworkedFloorOffset { get; set; } // Shared floor level adjustment
-    
-    // Networked room alignment - syncs room offset between host and client
-    [Networked] private Vector3 NetworkedRoomPositionOffset { get; set; }
-    [Networked] private float NetworkedRoomRotationOffset { get; set; }
-    [Networked] private NetworkBool RoomAlignmentApplied { get; set; }
-    
-    // Runtime adjustment state
+    // Runtime state
     private GameObject tableRoot;
-    private Transform roomParentTransform; // Cached reference to Environment
     private bool isInAdjustMode = false;
-    private bool tableInitialized = false; // True after PlaceTableAtAnchor completes
-    private bool localRoomAligned = false; // Track if this client has aligned the room
-    private bool clientAlignmentComplete = false; // Track if client finished alignment (prevents overwriting)
     private OVRCameraRig cameraRig;
-    
-    // Store the initial aligned position/rotation (before any adjustments)
-    private Vector3 baseAlignedPosition;
-    private float baseAlignedXRotation; // Base X rotation (for upside-down detection)
-    private float baseAlignedYRotation;
     
     [Header("Table Setup")]
     [SerializeField] private Transform tableTransform;
-    [SerializeField] private Vector3 racket1Position = new Vector3(-0.3f, 0.1f, 0f); // On table surface, player 1 side
-    [SerializeField] private Vector3 racket2Position = new Vector3(0.3f, 0.1f, 0f);  // On table surface, player 2 side
-    [SerializeField] private Vector3 racketRotation = new Vector3(0f, 0f, 0f); // Handle up
+    [SerializeField] private Vector3 racket1Position = new Vector3(-0.3f, 0.1f, 0f);
+    [SerializeField] private Vector3 racket2Position = new Vector3(0.3f, 0.1f, 0f);
+    [SerializeField] private Vector3 racketRotation = new Vector3(0f, 0f, 0f);
     
     [Header("Ball Spawn")]
-    [SerializeField] private Vector3 ballSpawnOffset = new Vector3(0f, 0.4f, 0f); // 40cm above anchor/table
+    [SerializeField] private Vector3 ballSpawnOffset = new Vector3(0f, 0.4f, 0f); // 40cm above anchor
     
     // References
     private NetworkedBall spawnedBall;
     private Transform sharedAnchor;
-    private Transform secondaryAnchor; // For 2-point alignment after scene transition
+    private Transform secondaryAnchor;
     private AlignmentManager alignmentManager;
     private GameObject[] localRackets = new GameObject[2];
-    
-    #region Alignment Debug Logging
-    
-    // Enable/disable comprehensive alignment logging (set to false for production builds)
-    private static readonly bool ALIGNMENT_DEBUG_ENABLED = true;
-    
-    /// <summary>
-    /// Comprehensive alignment debugging system.
-    /// All logs use [ALIGN] prefix for easy filtering in console.
-    /// 
-    /// Log format: [ALIGN][CATEGORY][ROLE] message
-    /// Categories:
-    ///   - STEP: Major alignment step being performed
-    ///   - DATA: Position/rotation data dump
-    ///   - WARN: Potential issues detected
-    ///   - ERROR: Critical alignment failures
-    /// </summary>
-    private void LogAlignmentDebug(string context, string extraInfo = "")
-    {
-        if (!ALIGNMENT_DEBUG_ENABLED) return;
-        
-        string role = (Object != null && Object.HasStateAuthority) ? "HOST" : "CLIENT";
-        
-        Debug.Log($"[ALIGN][STEP][{role}] ========== {context} ==========");
-        
-        // 1. Camera Rig State (most critical for alignment)
-        LogCameraRigState(role);
-        
-        // 2. Anchor Positions (what the alignment is based on)
-        LogAnchorState(role);
-        
-        // 3. Table State (what we're trying to align)
-        LogTableState(role);
-        
-        // 4. Room/Environment State
-        LogRoomState(role);
-        
-        // 5. Networked State (what's being synced)
-        LogNetworkedState(role);
-        
-        // 6. Alignment Flags
-        LogAlignmentFlags(role);
-        
-        if (!string.IsNullOrEmpty(extraInfo))
-        {
-            Debug.Log($"[ALIGN][INFO][{role}] Extra: {extraInfo}");
-        }
-        
-        Debug.Log($"[ALIGN][STEP][{role}] ========== END {context} ==========");
-    }
-    
-    private void LogCameraRigState(string role)
-    {
-        var rig = cameraRig ?? FindObjectOfType<OVRCameraRig>();
-        if (rig != null)
-        {
-            var rigT = rig.transform;
-            Debug.Log($"[ALIGN][DATA][{role}] CameraRig:");
-            Debug.Log($"[ALIGN][DATA][{role}]   Position: {FormatVector(rigT.position)}");
-            Debug.Log($"[ALIGN][DATA][{role}]   Rotation: {FormatVector(rigT.eulerAngles)}");
-            
-            // Also log where the center eye is (actual player head position)
-            if (rig.centerEyeAnchor != null)
-            {
-                Debug.Log($"[ALIGN][DATA][{role}]   CenterEye(head): {FormatVector(rig.centerEyeAnchor.position)}");
-            }
-        }
-        else
-        {
-            Debug.Log($"[ALIGN][WARN][{role}] CameraRig: NOT FOUND");
-        }
-    }
-    
-    private void LogAnchorState(string role)
-    {
-        Debug.Log($"[ALIGN][DATA][{role}] Anchors:");
-        
-        if (sharedAnchor != null)
-        {
-            Debug.Log($"[ALIGN][DATA][{role}]   Primary: pos={FormatVector(sharedAnchor.position)}, rot={FormatVector(sharedAnchor.eulerAngles)}");
-        }
-        else
-        {
-            Debug.Log($"[ALIGN][WARN][{role}]   Primary: NULL");
-        }
-        
-        if (secondaryAnchor != null)
-        {
-            Debug.Log($"[ALIGN][DATA][{role}]   Secondary: pos={FormatVector(secondaryAnchor.position)}, rot={FormatVector(secondaryAnchor.eulerAngles)}");
-            
-            // Calculate and log the vector between anchors (critical for 2-point alignment)
-            if (sharedAnchor != null)
-            {
-                Vector3 anchorVector = secondaryAnchor.position - sharedAnchor.position;
-                float distance = anchorVector.magnitude;
-                float heading = Quaternion.LookRotation(anchorVector).eulerAngles.y;
-                Debug.Log($"[ALIGN][DATA][{role}]   AnchorVector: {FormatVector(anchorVector)}, distance={distance:F3}m, heading={heading:F1}°");
-            }
-        }
-        else
-        {
-            Debug.Log($"[ALIGN][INFO][{role}]   Secondary: NULL (single-point mode)");
-        }
-    }
-    
-    private void LogTableState(string role)
-    {
-        if (tableRoot != null)
-        {
-            var t = tableRoot.transform;
-            Debug.Log($"[ALIGN][DATA][{role}] Table '{tableRoot.name}':");
-            Debug.Log($"[ALIGN][DATA][{role}]   WorldPos: {FormatVector(t.position)}");
-            Debug.Log($"[ALIGN][DATA][{role}]   WorldRot: {FormatVector(t.eulerAngles)}");
-            Debug.Log($"[ALIGN][DATA][{role}]   LocalPos: {FormatVector(t.localPosition)}");
-            Debug.Log($"[ALIGN][DATA][{role}]   LocalRot: {FormatVector(t.localEulerAngles)}");
-            Debug.Log($"[ALIGN][DATA][{role}]   Scale: {FormatVector(t.localScale)}");
-            
-            // Check for upside-down table (X or Z rotation close to 180)
-            float xRot = t.eulerAngles.x;
-            float zRot = t.eulerAngles.z;
-            if (Mathf.Abs(Mathf.DeltaAngle(xRot, 180)) < 30 || Mathf.Abs(Mathf.DeltaAngle(zRot, 180)) < 30)
-            {
-                Debug.Log($"[ALIGN][WARN][{role}]   ⚠️ TABLE MAY BE UPSIDE DOWN! X={xRot:F1}°, Z={zRot:F1}°");
-            }
-            
-            // Log parent hierarchy
-            if (t.parent != null)
-            {
-                Debug.Log($"[ALIGN][DATA][{role}]   Parent: '{t.parent.name}' at {FormatVector(t.parent.position)}");
-            }
-            else
-            {
-                Debug.Log($"[ALIGN][DATA][{role}]   Parent: ROOT (no parent)");
-            }
-        }
-        else
-        {
-            Debug.Log($"[ALIGN][WARN][{role}] Table: NOT FOUND");
-        }
-    }
-    
-    private void LogRoomState(string role)
-    {
-        if (roomParentTransform != null)
-        {
-            Debug.Log($"[ALIGN][DATA][{role}] Room/Environment '{roomParentTransform.name}':");
-            Debug.Log($"[ALIGN][DATA][{role}]   Position: {FormatVector(roomParentTransform.position)}");
-            Debug.Log($"[ALIGN][DATA][{role}]   Rotation: {FormatVector(roomParentTransform.eulerAngles)}");
-        }
-        else
-        {
-            // Try to find it
-            var room = FindRoomParent(tableRoot?.transform);
-            if (room != null)
-            {
-                Debug.Log($"[ALIGN][DATA][{role}] Room/Environment '{room.name}': pos={FormatVector(room.position)}, rot={FormatVector(room.eulerAngles)}");
-            }
-            else
-            {
-                Debug.Log($"[ALIGN][INFO][{role}] Room/Environment: NOT CACHED");
-            }
-        }
-    }
-    
-    private void LogNetworkedState(string role)
-    {
-        Debug.Log($"[ALIGN][DATA][{role}] Networked State:");
-        Debug.Log($"[ALIGN][DATA][{role}]   RoomPosOffset: {FormatVector(NetworkedRoomPositionOffset)}");
-        Debug.Log($"[ALIGN][DATA][{role}]   RoomRotOffset: {NetworkedRoomRotationOffset:F1}°");
-        Debug.Log($"[ALIGN][DATA][{role}]   RoomAlignmentApplied: {RoomAlignmentApplied}");
-        Debug.Log($"[ALIGN][DATA][{role}]   HeightAdj: {NetworkedHeightAdjustment:F3}m, YRotAdj: {NetworkedYRotationAdjustment:F1}°, XRot: {NetworkedXRotation:F1}°");
-        Debug.Log($"[ALIGN][DATA][{role}]   (Legacy) TablePos: {FormatVector(NetworkedTablePosition)}, YRot: {NetworkedTableYRotation:F1}°");
-    }
-    
-    private void LogAlignmentFlags(string role)
-    {
-        Debug.Log($"[ALIGN][DATA][{role}] Flags:");
-        Debug.Log($"[ALIGN][DATA][{role}]   tableInitialized: {tableInitialized}");
-        Debug.Log($"[ALIGN][DATA][{role}]   localRoomAligned: {localRoomAligned}");
-        Debug.Log($"[ALIGN][DATA][{role}]   clientAlignmentComplete: {clientAlignmentComplete}");
-        Debug.Log($"[ALIGN][DATA][{role}]   BaseAlignedPos: {FormatVector(baseAlignedPosition)}");
-        Debug.Log($"[ALIGN][DATA][{role}]   BaseAlignedRot: X={baseAlignedXRotation:F1}°, Y={baseAlignedYRotation:F1}°");
-    }
-    
-    /// <summary>Format vector with 3 decimal places for cleaner logs</summary>
-    private string FormatVector(Vector3 v)
-    {
-        return $"({v.x:F3}, {v.y:F3}, {v.z:F3})";
-    }
-    
-    /// <summary>
-    /// Quick one-line log for tracking alignment steps (less verbose than full debug)
-    /// </summary>
-    private void LogAlignmentStep(string step)
-    {
-        if (!ALIGNMENT_DEBUG_ENABLED) return;
-        string role = (Object != null && Object.HasStateAuthority) ? "HOST" : "CLIENT";
-        Debug.Log($"[ALIGN][STEP][{role}] → {step}");
-    }
-    
-    #endregion
     
     public override void Spawned()
     {
@@ -293,41 +70,56 @@ public class TableTennisManager : NetworkBehaviour
             Debug.Log("  - LEFT THUMBSTICK: Move table (X/Z)");
             Debug.Log("  - RIGHT THUMBSTICK X: Rotate table");
             Debug.Log("  - RIGHT THUMBSTICK Y: Move table up/down");
+            Debug.Log("  - GRIP button: Spawn ball and start game");
         }
     }
     
     private void Update()
     {
-        // Only allow table adjustment during setup phase
-        if (CurrentPhase == GamePhase.TableSetup)
+        if (enableTableAdjustment)
         {
             HandleTableAdjustment();
         }
-        
-        // Check if client needs to apply room alignment from host
-        ApplyNetworkedRoomAlignment();
-        
-        // Check for grip to start game (transition from TableSetup to BallPositioning)
         HandleGameStartInput();
     }
     
+    public override void FixedUpdateNetwork()
+    {
+        ApplyNetworkedTableState();
+    }
+    
     /// <summary>
-    /// Handle grip input to transition game phases
+    /// SIMPLIFIED: Apply networked table state - position + floor offset, fixed X rotation
+    /// </summary>
+    private void ApplyNetworkedTableState()
+    {
+        if (tableRoot == null) return;
+        
+        // Apply networked position (Y includes floor offset)
+        tableRoot.transform.position = new Vector3(
+            NetworkedTablePosition.x,
+            NetworkedTablePosition.y + NetworkedFloorOffset,
+            NetworkedTablePosition.z
+        );
+        
+        // Apply rotation - X is fixed offset, Y is networked
+        tableRoot.transform.rotation = Quaternion.Euler(tableXRotationOffset, NetworkedTableYRotation, 0);
+    }
+    
+    /// <summary>
+    /// Handle grip input to spawn ball and start game
     /// </summary>
     private void HandleGameStartInput()
     {
-        // Check for grip on either controller
         bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
                           OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
         
         if (gripPressed && CurrentPhase == GamePhase.TableSetup)
         {
-            // Transition to ball positioning
             CurrentPhase = GamePhase.BallPositioning;
-            isInAdjustMode = false; // Disable table adjust mode
+            isInAdjustMode = false;
             Debug.Log("[TableTennisManager] Grip pressed! Spawning ball...");
             
-            // Spawn ball (host spawns for networked, anyone can spawn for local)
             if (Object.HasStateAuthority || !Object.IsValid)
             {
                 GameStarted = true;
@@ -336,208 +128,24 @@ public class TableTennisManager : NetworkBehaviour
         }
     }
     
-    private IEnumerator SpawnBallDelayed()
-    {
-        yield return new WaitForSeconds(0.5f);
-        SpawnBall();
-    }
-    
     /// <summary>
-    /// Called when ball is hit for the first time - transitions from BallPositioning to Playing
-    /// </summary>
-    public void OnBallHit()
-    {
-        if (CurrentPhase == GamePhase.BallPositioning)
-        {
-            CurrentPhase = GamePhase.Playing;
-            Debug.Log("[TableTennisManager] Ball hit! Game is now in Playing phase.");
-        }
-    }
-    
-    // Fusion calls this every network tick - apply networked table state
-    public override void FixedUpdateNetwork()
-    {
-        // Apply networked table state to local table object
-        ApplyNetworkedTableState();
-    }
-    
-    /// <summary>
-    /// Initialize client's table state after camera rig alignment.
-    /// IMPORTANT: The AlignmentManager already aligned the camera rig to the shared anchor coordinate system.
-    /// Both host and client are now in the same coordinate system, so the table should appear
-    /// at the correct position WITHOUT any additional room/environment manipulation.
-    /// This method just initializes state for networked adjustments.
-    /// </summary>
-    private void ApplyNetworkedRoomAlignment()
-    {
-        // Skip if already initialized or if we're the host
-        if (localRoomAligned) return;
-        if (Object == null || !Object.IsValid) return;
-        if (Object.HasStateAuthority) return; // Host doesn't need this - it handles its own alignment
-        
-        // Check if host has applied room alignment (signal that alignment is ready)
-        if (!RoomAlignmentApplied)
-        {
-            // Log once every few seconds to show we're waiting
-            if (Time.frameCount % 300 == 0)
-            {
-                LogAlignmentStep("CLIENT waiting for host RoomAlignmentApplied signal...");
-            }
-            return;
-        }
-        
-        LogAlignmentStep("CLIENT: RoomAlignmentApplied signal received from host!");
-        
-        // Find table if not yet found
-        if (tableRoot == null)
-        {
-            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
-                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
-        }
-        
-        if (tableRoot == null)
-        {
-            Debug.LogWarning("[ALIGN][WARN][CLIENT] Cannot find table object!");
-            return;
-        }
-        
-        // CRITICAL: Ensure table is NOT parented to an anchor!
-        // If it's under an anchor, unparent it first
-        EnsureTableNotParentedToAnchor();
-        
-        // Log comprehensive state BEFORE initialization
-        LogAlignmentDebug("CLIENT_BEFORE_INIT");
-        
-        // Store current table position/rotation as the base for networked adjustments
-        // DO NOT move the room or table - just record where it is after camera rig alignment
-        baseAlignedPosition = tableRoot.transform.position;
-        baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
-        baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
-        
-        // Check for Z rotation (another way table can be flipped)
-        float zRot = tableRoot.transform.eulerAngles.z;
-        if (Mathf.Abs(Mathf.DeltaAngle(zRot, 180)) < 30)
-        {
-            Debug.LogWarning($"[ALIGN][WARN][CLIENT] ⚠️ Table Z rotation is {zRot:F1}° - correcting to 0");
-            tableRoot.transform.rotation = Quaternion.Euler(baseAlignedXRotation, baseAlignedYRotation, 0);
-        }
-        
-        LogAlignmentStep($"CLIENT: Stored base position: {FormatVector(baseAlignedPosition)}");
-        LogAlignmentStep($"CLIENT: Stored base rotation: X={baseAlignedXRotation:F1}°, Y={baseAlignedYRotation:F1}°");
-        
-        // Check if table appears to be upside down
-        if (Mathf.Abs(Mathf.DeltaAngle(baseAlignedXRotation, 180)) < 30)
-        {
-            Debug.LogWarning($"[ALIGN][WARN][CLIENT] ⚠️ Table X rotation is {baseAlignedXRotation:F1}° - TABLE MAY BE UPSIDE DOWN!");
-        }
-        
-        localRoomAligned = true;
-        clientAlignmentComplete = true;
-        tableInitialized = true;
-        
-        // Log comprehensive state AFTER initialization
-        LogAlignmentDebug("CLIENT_AFTER_INIT");
-        
-        Debug.Log($"[ALIGN][OK][CLIENT] ✓ Client initialization complete!");
-    }
-    
-    /// <summary>
-    /// Ensure the table is not parented to an anchor GameObject.
-    /// Tables parented to anchors will appear at different positions on each device
-    /// because anchor GameObjects are created at different world positions.
-    /// </summary>
-    private void EnsureTableNotParentedToAnchor()
-    {
-        if (tableRoot == null) return;
-        
-        Transform parent = tableRoot.transform.parent;
-        if (parent == null) return;
-        
-        // Check if parent is an anchor (has OVRSpatialAnchor component or name starts with "Anchor_")
-        bool isParentAnAnchor = parent.GetComponent<OVRSpatialAnchor>() != null || 
-                                parent.name.StartsWith("Anchor_");
-        
-        if (isParentAnAnchor)
-        {
-            Debug.LogWarning($"[ALIGN][WARN][CLIENT] Table is parented to anchor '{parent.name}'! Unparenting...");
-            
-            // Store world position/rotation before unparenting
-            Vector3 worldPos = tableRoot.transform.position;
-            Quaternion worldRot = tableRoot.transform.rotation;
-            
-            // Find Environment to reparent to
-            Transform environment = FindRoomParent(tableRoot.transform);
-            if (environment != null)
-            {
-                tableRoot.transform.SetParent(environment);
-                Debug.Log($"[ALIGN][INFO][CLIENT] Reparented table to '{environment.name}'");
-            }
-            else
-            {
-                tableRoot.transform.SetParent(null);
-                Debug.Log($"[ALIGN][INFO][CLIENT] Unparented table to root");
-            }
-            
-            // Restore world position/rotation
-            tableRoot.transform.position = worldPos;
-            tableRoot.transform.rotation = worldRot;
-            
-            Debug.Log($"[ALIGN][OK][CLIENT] Table unparented. Now at pos={FormatVector(worldPos)}, rot={FormatVector(worldRot.eulerAngles)}");
-        }
-    }
-    
-    /// <summary>
-    /// Apply the networked table adjustments to the local table object
-    /// Uses RELATIVE adjustments so both host and client apply the same offsets to their own aligned position
-    /// </summary>
-    private void ApplyNetworkedTableState()
-    {
-        if (tableRoot == null) return;
-        
-        // Don't apply until table is properly initialized and aligned
-        if (!tableInitialized) return;
-        
-        // Both host and client apply the SAME relative adjustments to their own aligned position
-        // This works because both devices aligned the table to the same physical location via anchors
-        
-        // Apply height adjustment (relative to base aligned position)
-        Vector3 adjustedPosition = baseAlignedPosition;
-        adjustedPosition.y += NetworkedHeightAdjustment;
-        tableRoot.transform.position = adjustedPosition;
-        
-        // Apply rotation adjustment
-        // X rotation: Use the networked value directly (0 means upright, 180 means upside down correction)
-        // Y rotation: Apply relative offset to base aligned rotation
-        float xRot = NetworkedXRotation; // Direct from network - host sets this to correct upside-down table
-        float yRot = baseAlignedYRotation + NetworkedYRotationAdjustment;
-        tableRoot.transform.rotation = Quaternion.Euler(xRot, yRot, 0);
-    }
-    
-    /// <summary>
-    /// Handle runtime table position/rotation adjustment via controller
-    /// Only the state authority (host) can adjust
+    /// Handle runtime table adjustment via controller
     /// </summary>
     private void HandleTableAdjustment()
     {
-        // Skip if table adjustment is disabled in inspector
-        if (!enableTableAdjustment) return;
-        
-        // Try to find tableRoot if not set yet
         if (tableRoot == null)
         {
             tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
                         ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
-            
             if (tableRoot == null) return;
         }
         
-        // Find camera rig for height adjustment
         if (cameraRig == null)
         {
             cameraRig = FindObjectOfType<OVRCameraRig>();
         }
         
-        // Toggle adjust mode with A button (Button.One) - check both controllers
+        // Toggle adjust mode with A button
         if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch) ||
             OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch) ||
             OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch))
@@ -548,563 +156,93 @@ public class TableTennisManager : NetworkBehaviour
         
         if (!isInAdjustMode) return;
         
-        // Only state authority can adjust table
         if (!Object.HasStateAuthority)
         {
-            // Request adjustment from host via RPC
             HandleClientAdjustmentInput();
             return;
         }
         
-        // Host: directly adjust networked values
         HandleHostAdjustmentInput();
     }
     
-    /// <summary>
-    /// Host directly modifies networked table state
-    /// Note: X/Z position is set by anchors. Only height and Y rotation can be adjusted.
-    /// </summary>
     private void HandleHostAdjustmentInput()
     {
         Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch);
         
-        // Left stick Y: Adjust table height (relative adjustment)
-        if (Mathf.Abs(leftStick.y) > 0.1f)
+        // Move table with left thumbstick (X/Z movement)
+        if (leftStick.magnitude > 0.1f)
         {
-            float verticalMove = leftStick.y * moveSpeed * Time.deltaTime;
-            NetworkedHeightAdjustment += verticalMove;
+            Vector3 movement = new Vector3(leftStick.x, 0, leftStick.y) * moveSpeed * Time.deltaTime;
+            movement = Quaternion.Euler(0, NetworkedTableYRotation, 0) * movement;
+            NetworkedTablePosition += movement;
         }
         
-        // Right stick X: Rotate table (relative adjustment)
+        // Rotate table with right thumbstick X axis
         if (Mathf.Abs(rightStick.x) > 0.1f)
         {
             float rotation = rightStick.x * rotateSpeed * Time.deltaTime;
-            NetworkedYRotationAdjustment += rotation;
+            NetworkedTableYRotation += rotation;
         }
-        // Right stick Y: Not used (rotation only from right stick X)
+        
+        // Adjust floor level with right thumbstick Y axis
+        if (Mathf.Abs(rightStick.y) > 0.1f)
+        {
+            float verticalMove = rightStick.y * moveSpeed * Time.deltaTime;
+            NetworkedFloorOffset += verticalMove;
+        }
     }
     
-    /// <summary>
-    /// Client sends adjustment requests to host via RPC
-    /// Note: X/Z position is set by anchors. Only height and Y rotation can be adjusted.
-    /// </summary>
     private void HandleClientAdjustmentInput()
     {
         Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch);
         
-        // Left stick Y: Request height adjustment
-        if (Mathf.Abs(leftStick.y) > 0.1f)
+        if (leftStick.magnitude > 0.1f)
         {
-            float verticalMove = leftStick.y * moveSpeed * Time.deltaTime;
-            // Send to host to sync (adjustment will be applied via ApplyNetworkedTableState)
-            RPC_RequestHeightAdjust(verticalMove);
+            Vector3 movement = new Vector3(leftStick.x, 0, leftStick.y) * moveSpeed * Time.deltaTime;
+            RPC_RequestTableMove(movement);
         }
         
-        // Right stick X: Request rotation
         if (Mathf.Abs(rightStick.x) > 0.1f)
         {
             float rotation = rightStick.x * rotateSpeed * Time.deltaTime;
-            // Send to host to sync (adjustment will be applied via ApplyNetworkedTableState)
-            RPC_RequestRotationAdjust(rotation);
+            RPC_RequestTableRotate(rotation);
         }
         
-        // Right stick Y: Not used (rotation only from right stick X)
+        if (Mathf.Abs(rightStick.y) > 0.1f)
+        {
+            float verticalMove = rightStick.y * moveSpeed * Time.deltaTime;
+            RPC_RequestFloorAdjust(verticalMove);
+        }
     }
     
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestHeightAdjust(float heightDelta)
-    {
-        NetworkedHeightAdjustment += heightDelta;
-    }
-    
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestRotationAdjust(float rotationDelta)
-    {
-        NetworkedYRotationAdjustment += rotationDelta;
-    }
-    
-    // Legacy RPCs - kept for compatibility
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestTableMove(Vector3 movement)
     {
-        NetworkedHeightAdjustment += movement.y;
+        movement = Quaternion.Euler(0, NetworkedTableYRotation, 0) * movement;
+        NetworkedTablePosition += movement;
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestTableRotate(float rotation)
     {
-        NetworkedYRotationAdjustment += rotation;
+        NetworkedTableYRotation += rotation;
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestFloorAdjust(float verticalMove)
     {
-        NetworkedHeightAdjustment += verticalMove;
+        NetworkedFloorOffset += verticalMove;
     }
     
     private IEnumerator InitializeGame()
     {
-        // Wait for anchor to be available (this also aligns the camera rig via AlignmentManager)
         yield return StartCoroutine(WaitForAnchor());
         
-        // Only HOST should place/align the table and room
-        // Client will receive alignment via network
-        if (Object.HasStateAuthority)
-        {
-            // Place the table at the anchor position
-            PlaceTableAtAnchor();
-        }
-        else
-        {
-            // Client: After WaitForAnchor completes, camera rig is already aligned to anchors
-            // The table should appear at the correct position relative to the anchors
-            Debug.Log("[TableTennisManager] Client: Camera rig aligned to anchors");
-            
-            // Wait a bit for alignment to fully settle
-            yield return new WaitForSeconds(0.5f);
-            
-            // Find table reference for client
-            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
-                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
-            
-            if (tableRoot != null)
-            {
-                Debug.Log($"[TableTennisManager] Client found table: {tableRoot.name} at position {tableRoot.transform.position}, rotation {tableRoot.transform.eulerAngles}");
-                
-                // Log detailed anchor and table positions for debugging
-                LogAlignmentDebug("CLIENT_INIT");
-                
-                // Store the table's current position as base for networked adjustments
-                // This is where the table appears after camera rig alignment
-                baseAlignedPosition = tableRoot.transform.position;
-                baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
-                baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
-                
-                localRoomAligned = true;
-                clientAlignmentComplete = true;
-                tableInitialized = true;
-                
-                Debug.Log($"[TableTennisManager] Client: Table initialized at base position={baseAlignedPosition}, baseXRot={baseAlignedXRotation}, baseYRot={baseAlignedYRotation}");
-                
-                // Refresh any existing ball's table reference after alignment
-                RefreshBallTableReferences();
-            }
-            else
-            {
-                Debug.LogWarning("[TableTennisManager] Client: Could not find table!");
-            }
-        }
+        PlaceTableAtAnchor();
         
-        // Setup controller-based rackets (replaces old grab system)
         SetupControllerRackets();
-        
-        // Ball will be spawned when player presses GRIP to start the game
-        // (handled in HandleGameStartInput)
-    }
-    
-    /// <summary>
-    /// Place the table/pingpong at the anchor position with adjustable offset and Y rotation
-    /// If table was already placed by AnchorGUIManager (via AlignTableToAnchors), use its current position
-    /// </summary>
-    private void PlaceTableAtAnchor()
-    {
-        // Find the PingPongTable (now a separate root object) or fallback to old names
-        tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
-                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
-        
-        if (tableRoot == null && tableTransform != null)
-        {
-            tableRoot = tableTransform.gameObject;
-        }
-        
-        if (tableRoot == null)
-        {
-            Debug.LogWarning("[TableTennisManager] Could not find table object!");
-            return;
-        }
-        
-        // PRIORITY 1: Check if anchor positions were stored (recalculate and move room here in TableTennis scene)
-        Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
-        Vector3 secondAnchor = AnchorGUIManager_AutoAlignment.SecondAnchorPosition;
-        
-        Debug.Log($"[TableTennisManager] Static anchor positions: first={firstAnchor}, second={secondAnchor}");
-        Debug.Log($"[TableTennisManager] Static first magnitude={firstAnchor.sqrMagnitude}, second magnitude={secondAnchor.sqrMagnitude}");
-        Debug.Log($"[TableTennisManager] TableWasAligned={AnchorGUIManager_AutoAlignment.TableWasAligned}, AlignedPos={AnchorGUIManager_AutoAlignment.AlignedTablePosition}");
-        Debug.Log($"[TableTennisManager] Anchor UUIDs: first={AnchorGUIManager_AutoAlignment.FirstAnchorUuid}, second={AnchorGUIManager_AutoAlignment.SecondAnchorUuid}");
-        Debug.Log($"[TableTennisManager] HasStateAuthority={Object.HasStateAuthority}");
-        
-        // FALLBACK: If static variables are empty, use the localized anchors in scene
-        if (firstAnchor.sqrMagnitude < 0.01f || secondAnchor.sqrMagnitude < 0.01f)
-        {
-            Debug.Log("[TableTennisManager] Static anchor positions empty, trying to use scene anchors...");
-            
-            // Use sharedAnchor and secondaryAnchor if available
-            if (sharedAnchor != null && secondaryAnchor != null)
-            {
-                firstAnchor = sharedAnchor.position;
-                secondAnchor = secondaryAnchor.position;
-                Debug.Log($"[TableTennisManager] FALLBACK: Using scene anchors: first={firstAnchor}, second={secondAnchor}");
-                Debug.Log($"[TableTennisManager] WARNING: Scene anchor order may not match placement order!");
-            }
-            else
-            {
-                Debug.Log($"[TableTennisManager] Scene anchors: sharedAnchor={(sharedAnchor != null ? sharedAnchor.position.ToString() : "NULL")}, secondaryAnchor={(secondaryAnchor != null ? secondaryAnchor.position.ToString() : "NULL")}");
-            }
-        }
-        else
-        {
-            Debug.Log($"[TableTennisManager] Using STATIC anchor positions (correct order from AnchorGUI)");
-        }
-        
-        if (firstAnchor.sqrMagnitude > 0.01f && secondAnchor.sqrMagnitude > 0.01f)
-        {
-            // Recalculate target center from stored anchor positions
-            Vector3 targetCenter = (firstAnchor + secondAnchor) / 2f;
-            float heightOffset = AnchorGUIManager_AutoAlignment.TableHeightOffsetStatic;
-            targetCenter.y = (firstAnchor.y + secondAnchor.y) / 2f + heightOffset;
-            
-            // Calculate target rotation
-            // Table long axis should be ALONG the line between anchors (players at ends)
-            Vector3 direction = (secondAnchor - firstAnchor).normalized;
-            direction.y = 0;
-            Quaternion targetRotation = Quaternion.identity;
-            if (direction.sqrMagnitude > 0.001f)
-            {
-                // LookRotation points Z along direction, but table's long axis is typically Z
-                // Add 90 degrees if table model has long axis on X instead
-                targetRotation = Quaternion.LookRotation(direction, Vector3.up) * Quaternion.Euler(0, 90f, 0);
-            }
-            
-            Debug.Log($"[TableTennisManager] Recalculating from anchors: first={firstAnchor}, second={secondAnchor}, target={targetCenter}, rotation={targetRotation.eulerAngles}");
-            
-            // Find room parent (Environment)
-            Transform roomParent = FindRoomParent(tableRoot.transform);
-            roomParentTransform = roomParent; // Cache for later use
-            
-            // Check if table is parented to an anchor (not to Environment)
-            bool tableIsChildOfRoom = roomParent != null && tableRoot.transform.IsChildOf(roomParent);
-            Debug.Log($"[TableTennisManager] Table: {tableRoot.name}, Parent: {(tableRoot.transform.parent != null ? tableRoot.transform.parent.name : "NONE")}");
-            Debug.Log($"[TableTennisManager] Is table child of Environment? {tableIsChildOfRoom}");
-            
-            // If table is parented to anchor, unparent it and reparent to Environment
-            if (!tableIsChildOfRoom && tableRoot.transform.parent != null)
-            {
-                Debug.Log($"[TableTennisManager] Unparenting table from {tableRoot.transform.parent.name}");
-                Vector3 worldPos = tableRoot.transform.position;
-                Quaternion worldRot = tableRoot.transform.rotation;
-                
-                // Reparent to Environment if available
-                if (roomParent != null)
-                {
-                    tableRoot.transform.SetParent(roomParent);
-                    Debug.Log($"[TableTennisManager] Reparented table to {roomParent.name}");
-                }
-                else
-                {
-                    tableRoot.transform.SetParent(null);
-                }
-                
-                // Restore world position/rotation
-                tableRoot.transform.position = worldPos;
-                tableRoot.transform.rotation = worldRot;
-            }
-            
-            if (roomParent != null)
-            {
-                Debug.Log($"[TableTennisManager] RoomParent: {roomParent.name}, RoomPos: {roomParent.position}");
-                
-                // Calculate offsets
-                Vector3 currentTablePosition = tableRoot.transform.position;
-                Debug.Log($"[TableTennisManager] Table current position (before move): {currentTablePosition}");
-                Vector3 positionOffset = targetCenter - currentTablePosition;
-                
-                float currentYRot = tableRoot.transform.eulerAngles.y;
-                float targetYRotation = targetRotation.eulerAngles.y;
-                float rotationOffset = targetYRotation - currentYRot;
-                
-                Debug.Log($"[TableTennisManager] Moving room: offset={positionOffset}, rotOffset={rotationOffset}°");
-                
-                // First rotate the room around the table's position
-                if (Mathf.Abs(rotationOffset) > 0.1f)
-                {
-                    roomParent.RotateAround(currentTablePosition, Vector3.up, rotationOffset);
-                    Debug.Log($"[TableTennisManager] After rotation, table at: {tableRoot.transform.position}");
-                }
-                
-                // Then move the room so table ends up at target
-                Vector3 roomPosBefore = roomParent.position;
-                roomParent.position += positionOffset;
-                Debug.Log($"[TableTennisManager] Room moved from {roomPosBefore} to {roomParent.position}");
-                Debug.Log($"[TableTennisManager] After room move, table at: {tableRoot.transform.position}, expected: {targetCenter}");
-                
-                // Now center Environment's origin at the table position
-                // Store table's current world position
-                Vector3 tableWorldPos = tableRoot.transform.position;
-                
-                // Calculate offset to move room origin to table position
-                Vector3 tableLocalPos = tableRoot.transform.localPosition;
-                
-                // Move room so its origin is at table's world position
-                roomParent.position = tableWorldPos;
-                
-                // Adjust table's local position to compensate (keep it at world origin of room)
-                tableRoot.transform.localPosition = Vector3.zero;
-                
-                Debug.Log($"[TableTennisManager] Environment origin centered at table. Room at: {roomParent.position}, Table local: {tableRoot.transform.localPosition}");
-                
-                // Host syncs room offset to network so clients can apply same alignment
-                if (Object.HasStateAuthority)
-                {
-                    NetworkedRoomPositionOffset = roomParent.position; // Store final room position
-                    NetworkedRoomRotationOffset = rotationOffset;
-                    RoomAlignmentApplied = true;
-                    Debug.Log($"[TableTennisManager] Room final position synced: {roomParent.position}, rot={rotationOffset}");
-                }
-                
-                localRoomAligned = true;
-                Debug.Log($"[TableTennisManager] Alignment complete. Table at: {tableRoot.transform.position}, Room origin at: {roomParent.position}");
-            }
-            else
-            {
-                // Fallback: move just the table
-                tableRoot.transform.position = targetCenter;
-                tableRoot.transform.rotation = targetRotation;
-            }
-            
-            // Host syncs to network
-            if (Object.HasStateAuthority)
-            {
-                NetworkedTablePosition = tableRoot.transform.position;
-                NetworkedTableYRotation = tableRoot.transform.eulerAngles.y;
-                NetworkedTableXRotation = tableXRotationOffset; // Sync X rotation for upside-down fix
-                NetworkedFloorOffset = 0f;
-                
-                // Initialize relative adjustment values to zero
-                NetworkedHeightAdjustment = 0f;
-                NetworkedYRotationAdjustment = 0f;
-                NetworkedXRotation = tableXRotationOffset;
-            }
-            
-            // Store the base aligned position for relative adjustments
-            baseAlignedPosition = tableRoot.transform.position;
-            baseAlignedXRotation = 0f; // Table should be upright after placement
-            baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
-            
-            tableInitialized = true;
-            Debug.Log($"[TableTennisManager] Table positioned at: {tableRoot.transform.position}, base stored for adjustments");
-            
-            // Log detailed alignment debug info
-            LogAlignmentDebug("HOST_PLACE_TABLE_ANCHOR");
-            return;
-        }
-        
-        // PRIORITY 2: Check if AnchorGUIManager aligned the table (static flag - fallback)
-        if (AnchorGUIManager_AutoAlignment.TableWasAligned)
-        {
-            Vector3 alignedPos = AnchorGUIManager_AutoAlignment.AlignedTablePosition;
-            Quaternion alignedRot = AnchorGUIManager_AutoAlignment.AlignedTableRotation;
-            
-            Debug.Log($"[TableTennisManager] Using AnchorGUI aligned position: {alignedPos}");
-            
-            // Apply the aligned position
-            tableRoot.transform.position = alignedPos;
-            tableRoot.transform.rotation = alignedRot;
-            
-            // Store the base aligned position for relative adjustments
-            baseAlignedPosition = alignedPos;
-            baseAlignedXRotation = alignedRot.eulerAngles.x;
-            baseAlignedYRotation = alignedRot.eulerAngles.y;
-            
-            // Host syncs to network
-            if (Object.HasStateAuthority)
-            {
-                NetworkedTablePosition = alignedPos;
-                NetworkedTableYRotation = alignedRot.eulerAngles.y;
-                NetworkedTableXRotation = alignedRot.eulerAngles.x; // Sync X rotation
-                NetworkedFloorOffset = 0f;
-                
-                // Initialize relative adjustment values to zero
-                NetworkedHeightAdjustment = 0f;
-                NetworkedYRotationAdjustment = 0f;
-                NetworkedXRotation = alignedRot.eulerAngles.x;
-            }
-            
-            tableInitialized = true;
-            LogAlignmentDebug("HOST_PLACE_TABLE_GUI_ALIGNED");
-            return;
-        }
-        
-        // PRIORITY 3: Check if table was already positioned (not at origin)
-        Vector3 currentTablePos = tableRoot.transform.position;
-        bool tableAlreadyPlaced = currentTablePos.sqrMagnitude > 0.1f; // Not at origin
-        
-        if (tableAlreadyPlaced)
-        {
-            Debug.Log($"[TableTennisManager] Table already placed at {currentTablePos}, using existing position");
-            
-            // Store the base aligned position for relative adjustments
-            baseAlignedPosition = currentTablePos;
-            baseAlignedXRotation = tableRoot.transform.eulerAngles.x;
-            baseAlignedYRotation = tableRoot.transform.eulerAngles.y;
-            
-            // Host syncs the current position to network
-            if (Object.HasStateAuthority)
-            {
-                NetworkedTablePosition = currentTablePos;
-                NetworkedTableYRotation = tableRoot.transform.eulerAngles.y;
-                NetworkedTableXRotation = tableRoot.transform.eulerAngles.x; // Sync X rotation
-                NetworkedFloorOffset = 0f;
-                
-                // Initialize relative adjustment values to zero
-                NetworkedHeightAdjustment = 0f;
-                NetworkedYRotationAdjustment = 0f;
-                NetworkedXRotation = tableRoot.transform.eulerAngles.x;
-            }
-            
-            tableInitialized = true;
-            LogAlignmentDebug("HOST_PLACE_TABLE_EXISTING");
-            return;
-        }
-        
-        // Fallback: Place at anchor if table wasn't pre-positioned
-        if (sharedAnchor == null)
-        {
-            Debug.LogWarning("[TableTennisManager] No anchor to place table at!");
-            return;
-        }
-        
-        // Calculate position: X/Z from anchor, Y = Standard Height (since anchor is floor)
-        Vector3 rotatedOffset = Quaternion.Euler(0, tableYRotationOffset, 0) * tablePositionOffset;
-        Vector3 anchorPos = sharedAnchor.position + rotatedOffset;
-        
-        // Set table at standard height relative to WORLD FLOOR (ignoring anchor Y)
-        // This is safer if anchor was placed in the air (held in hand)
-        Vector3 tablePos = new Vector3(anchorPos.x, defaultTableHeight, anchorPos.z);
-        
-        // Apply initial position
-        tableRoot.transform.position = tablePos;
-        tableRoot.transform.rotation = Quaternion.Euler(0, tableYRotationOffset, 0); // Keep table upright
-        
-        // Store the base aligned position for relative adjustments
-        baseAlignedPosition = tablePos;
-        baseAlignedXRotation = 0f; // Table placed upright
-        baseAlignedYRotation = tableYRotationOffset;
-        
-        // Host initializes networked values
-        if (Object.HasStateAuthority)
-        {
-            NetworkedTablePosition = tablePos;
-            NetworkedTableYRotation = tableYRotationOffset;
-            NetworkedTableXRotation = tableXRotationOffset; // Sync X rotation
-            NetworkedFloorOffset = 0f;
-            
-            // Initialize relative adjustment values to zero
-            NetworkedHeightAdjustment = 0f;
-            NetworkedYRotationAdjustment = 0f;
-            NetworkedXRotation = tableXRotationOffset;
-        }
-        
-        tableInitialized = true;
-        Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}, base stored for adjustments");
-        LogAlignmentDebug("HOST_PLACE_TABLE_FALLBACK");
-    }
-    
-    /// <summary>
-    /// Setup ControllerRacket component to show racket on controllers
-    /// Now spawns as a networked object so other players can see the racket
-    /// </summary>
-    private void SetupControllerRackets()
-    {
-        // Each player spawns their own networked ControllerRacket
-        // The host spawns for itself, client spawns for itself
-        StartCoroutine(SpawnNetworkedRacketController());
-    }
-    
-    private IEnumerator SpawnNetworkedRacketController()
-    {
-        yield return new WaitForSeconds(0.5f);
-        
-        // Check if we already have a ControllerRacket for this player
-        var existingRacket = FindObjectsOfType<ControllerRacket>();
-        foreach (var r in existingRacket)
-        {
-            if (r.Object != null && r.Object.HasInputAuthority)
-            {
-                Debug.Log("[TableTennisManager] Already have a ControllerRacket for this player");
-                yield break;
-            }
-        }
-        
-        // If networkedRacketPrefab is set, spawn it via Fusion
-        if (networkedRacketPrefab.IsValid && Runner != null)
-        {
-            Debug.Log("[TableTennisManager] Spawning networked ControllerRacket...");
-            
-            var spawnedRacket = Runner.Spawn(
-                networkedRacketPrefab, 
-                Vector3.zero, 
-                Quaternion.identity, 
-                Runner.LocalPlayer // Input authority to local player
-            );
-            
-            if (spawnedRacket != null)
-            {
-                Debug.Log($"[TableTennisManager] Spawned networked ControllerRacket for player {Runner.LocalPlayer}");
-            }
-        }
-        else
-        {
-            // Fallback: Create local-only ControllerRacket (won't be visible to other players)
-            Debug.LogWarning("[TableTennisManager] networkedRacketPrefab not set - using local-only racket (won't be visible to other players)");
-            
-            var existingManager = GameObject.Find("ControllerRacketManager");
-            if (existingManager == null)
-            {
-                var manager = new GameObject("ControllerRacketManager");
-                manager.AddComponent<ControllerRacket>();
-                Debug.Log("[TableTennisManager] Created local ControllerRacketManager");
-            }
-        }
-    }
-    
-    /// <summary>
-    /// Parent the pingpong/table objects to the anchor so they stay fixed in anchor space
-    /// This is critical for colocation - objects must be relative to the shared anchor
-    /// </summary>
-    private void ParentSceneToAnchor()
-    {
-        if (sharedAnchor == null)
-        {
-            Debug.LogWarning("[TableTennisManager] No anchor to parent scene to!");
-            return;
-        }
-        
-        // Find the main game parent object
-        GameObject gameRoot = null;
-        
-        // Try to find pingpong parent
-        gameRoot = GameObject.Find("pingpong");
-        if (gameRoot == null) gameRoot = GameObject.Find("PingPong");
-        if (gameRoot == null) gameRoot = GameObject.Find("TableTennis");
-        if (gameRoot == null && tableTransform != null) gameRoot = tableTransform.gameObject;
-        
-        if (gameRoot != null)
-        {
-            // Store current world position/rotation
-            Vector3 worldPos = gameRoot.transform.position;
-            Quaternion worldRot = gameRoot.transform.rotation;
-            
-            // Parent to anchor
-            gameRoot.transform.SetParent(sharedAnchor, worldPositionStays: true);
-            
-            Debug.Log($"[TableTennisManager] Parented '{gameRoot.name}' to anchor. Local pos: {gameRoot.transform.localPosition}");
-        }
-        else
-        {
-            Debug.LogWarning("[TableTennisManager] Could not find game root object to parent to anchor");
-        }
     }
     
     private IEnumerator WaitForAnchor()
@@ -1113,16 +251,16 @@ public class TableTennisManager : NetworkBehaviour
         OVRSpatialAnchor primaryOVRAnchor = null;
         OVRSpatialAnchor secondaryOVRAnchor = null;
         
-        // Find AlignmentManager in scene (or create one)
+        // Find or create AlignmentManager
         alignmentManager = FindObjectOfType<AlignmentManager>();
         if (alignmentManager == null)
         {
             var alignObj = new GameObject("AlignmentManager");
             alignmentManager = alignObj.AddComponent<AlignmentManager>();
-            Debug.Log("[TableTennisManager] Created AlignmentManager for scene transition alignment");
+            Debug.Log("[TableTennisManager] Created AlignmentManager");
         }
         
-        // Try getting explicitly from AnchorGUIManager first (most reliable)
+        // Try getting from AnchorGUIManager first
         var anchorGUI = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
         if (anchorGUI != null)
         {
@@ -1135,11 +273,10 @@ public class TableTennisManager : NetworkBehaviour
             }
         }
 
-        // Search for all preserved anchors
+        // Search for preserved anchors
         while ((sharedAnchor == null || secondaryAnchor == null) && attempts < 50)
         {
-            // Look for any OVRSpatialAnchor that was preserved from the previous scene
-            var anchors = FindObjectsOfType<OVRSpatialAnchor>(true); // Include inactive
+            var anchors = FindObjectsOfType<OVRSpatialAnchor>(true);
             
             foreach (var anchor in anchors)
             {
@@ -1167,8 +304,6 @@ public class TableTennisManager : NetworkBehaviour
         if (sharedAnchor == null)
         {
             Debug.LogWarning("[TableTennisManager] Could not find shared anchor after 50 attempts");
-            
-            // Use table as fallback reference
             if (tableTransform != null)
             {
                 sharedAnchor = tableTransform;
@@ -1177,319 +312,209 @@ public class TableTennisManager : NetworkBehaviour
         }
         else
         {
-            // CRITICAL: Check if alignment was already done by AnchorGUIManager
-            if (AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic)
+            // CRITICAL: Re-align camera rig to preserved anchors
+            Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors...");
+            
+            if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
             {
-                Debug.Log("[TableTennisManager] Alignment already completed by AnchorGUIManager, skipping WaitForAnchor alignment");
+                alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
+                Debug.Log("[TableTennisManager] Applied 2-point alignment");
             }
-            else
+            else if (primaryOVRAnchor != null)
             {
-                // Check if camera rig is already aligned (not at origin)
-                var cameraRigObj = FindObjectOfType<OVRCameraRig>();
-                bool rigAlreadyAligned = false;
-                if (cameraRigObj != null)
-                {
-                    // If rig is not at origin, assume alignment was already done
-                    float rigDistFromOrigin = cameraRigObj.transform.position.magnitude;
-                    float rigRotFromIdentity = Mathf.Abs(cameraRigObj.transform.eulerAngles.y);
-                    rigAlreadyAligned = rigDistFromOrigin > 0.05f || rigRotFromIdentity > 1f;
-                    
-                    Debug.Log($"[TableTennisManager] Camera rig at pos={cameraRigObj.transform.position}, rot={cameraRigObj.transform.eulerAngles}. Already aligned: {rigAlreadyAligned}");
-                }
-                
-                if (rigAlreadyAligned)
-                {
-                    Debug.Log("[TableTennisManager] Camera rig already aligned, skipping re-alignment to preserve existing state");
-                }
-                else
-                {
-                    Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors after scene transition...");
-                    
-                    // CRITICAL: Sort anchors by UUID to ensure consistent ordering!
-                    if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
-                    {
-                        // Sort by UUID string to ensure same order as AnchorGUIManager
-                        OVRSpatialAnchor first, second;
-                        if (string.Compare(primaryOVRAnchor.Uuid.ToString(), secondaryOVRAnchor.Uuid.ToString()) <= 0)
-                        {
-                            first = primaryOVRAnchor;
-                            second = secondaryOVRAnchor;
-                        }
-                        else
-                        {
-                            first = secondaryOVRAnchor;
-                            second = primaryOVRAnchor;
-                        }
-                        
-                        Debug.Log($"[TableTennisManager] Sorted anchors by UUID: first={first.Uuid}, second={second.Uuid}");
-                        
-                        // Log anchor positions BEFORE alignment
-                        Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Primary anchor world={first.transform.position}, local={first.transform.localPosition}, rot={first.transform.eulerAngles}");
-                        Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Secondary anchor world={second.transform.position}, local={second.transform.localPosition}, rot={second.transform.eulerAngles}");
-                        
-                        // Update our references to use sorted order
-                        sharedAnchor = first.transform;
-                        secondaryAnchor = second.transform;
-                        
-                        // Both host and client use the same alignment
-                        alignmentManager.AlignUserToTwoAnchors(first, second, 0f);
-                        Debug.Log($"[TableTennisManager] Applied 2-point alignment with sorted anchors");
-                    }
-                    else if (primaryOVRAnchor != null)
-                    {
-                        Debug.Log($"[ALIGN_DEBUG] PRE_ALIGN: Single anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
-                        alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
-                        Debug.Log("[TableTennisManager] Applied single-point alignment");
-                    }
-                    
-                    // Wait for alignment to complete before placing table
-                    yield return new WaitForSeconds(1.0f);
-                    
-                    // Log anchor positions AFTER alignment
-                    if (primaryOVRAnchor != null)
-                    {
-                        Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Primary anchor world={primaryOVRAnchor.transform.position}, local={primaryOVRAnchor.transform.localPosition}, rot={primaryOVRAnchor.transform.eulerAngles}");
-                    }
-                    if (secondaryOVRAnchor != null)
-                    {
-                        Debug.Log($"[ALIGN_DEBUG] POST_ALIGN: Secondary anchor world={secondaryOVRAnchor.transform.position}, local={secondaryOVRAnchor.transform.localPosition}, rot={secondaryOVRAnchor.transform.eulerAngles}");
-                    }
-                }
+                alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
+                Debug.Log("[TableTennisManager] Applied single-point alignment");
             }
+            
+            // Wait for alignment to complete
+            yield return new WaitForSeconds(1.0f);
         }
     }
     
     /// <summary>
-    /// Find existing rackets in the scene and ensure they have GrabbableRacket component
+    /// SIMPLIFIED: Place table at anchor position with anchor-relative rotation
     /// </summary>
-    private void FindExistingRackets()
+    private void PlaceTableAtAnchor()
     {
-        // Find rackets by tag or name in the scene
-        var allRackets = GameObject.FindGameObjectsWithTag("Racket");
-        
-        if (allRackets.Length == 0)
+        if (sharedAnchor == null)
         {
-            // Try finding by name if not tagged
-            var pingPongParent = GameObject.Find("pingpong");
-            if (pingPongParent == null)
-            {
-                pingPongParent = GameObject.Find("PingPong");
-            }
+            Debug.LogWarning("[TableTennisManager] No anchor to place table at!");
+            return;
+        }
+        
+        tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+        
+        if (tableRoot == null && tableTransform != null)
+        {
+            tableRoot = tableTransform.gameObject;
+        }
+        
+        if (tableRoot != null)
+        {
+            // Calculate position offset from anchor
+            Vector3 localOffset = Quaternion.Euler(0, tableYRotationOffset, 0) * tablePositionOffset;
             
-            if (pingPongParent != null)
+            // Table position: anchor position + offset, at proper height
+            Vector3 tablePos = sharedAnchor.position + localOffset;
+            tablePos.y = sharedAnchor.position.y + defaultTableHeight;
+
+            // CRITICAL: Rotation is relative to anchor rotation
+            // This ensures table faces same direction relative to anchor for both players
+            Quaternion anchorRotation = sharedAnchor.rotation;
+            Quaternion tableRotation = anchorRotation * Quaternion.Euler(tableXRotationOffset, tableYRotationOffset, 0);
+
+            // Host initializes networked values
+            if (Object.HasStateAuthority)
             {
-                // Find all children that might be rackets
-                foreach (Transform child in pingPongParent.GetComponentsInChildren<Transform>())
-                {
-                    if (child.name.ToLower().Contains("racket") || child.name.ToLower().Contains("paddle"))
-                    {
-                        EnsureRacketSetup(child.gameObject);
-                        
-                        // Add to our tracking array
-                        if (localRackets[0] == null)
-                            localRackets[0] = child.gameObject;
-                        else if (localRackets[1] == null)
-                            localRackets[1] = child.gameObject;
-                    }
-                }
+                NetworkedTablePosition = tablePos;
+                NetworkedTableYRotation = tableYRotationOffset;
+                NetworkedFloorOffset = 0f;
             }
+
+            // Apply position and anchor-relative rotation
+            tableRoot.transform.position = tablePos;
+            tableRoot.transform.rotation = tableRotation;
+
+            Debug.Log($"[TableTennisManager] Table placed at {tableRoot.transform.position}, " +
+                      $"rotation: {tableRotation.eulerAngles} (anchor rot: {anchorRotation.eulerAngles})");
         }
         else
         {
-            // Found rackets by tag
-            for (int i = 0; i < Mathf.Min(allRackets.Length, 2); i++)
-            {
-                localRackets[i] = allRackets[i];
-                EnsureRacketSetup(allRackets[i]);
-            }
+            Debug.LogWarning("[TableTennisManager] Could not find table object to place at anchor");
         }
-        
-        int racketCount = (localRackets[0] != null ? 1 : 0) + (localRackets[1] != null ? 1 : 0);
-        Debug.Log($"[TableTennisManager] Found {racketCount} existing rackets in scene");
     }
     
-    private void EnsureRacketSetup(GameObject racket)
+    private void SetupControllerRackets()
     {
-        // Ensure it has a collider for ball detection
-        if (racket.GetComponent<Collider>() == null)
+        var existingManager = GameObject.Find("ControllerRacketManager");
+        if (existingManager == null)
         {
-            var boxCollider = racket.AddComponent<BoxCollider>();
-            // Adjust size based on typical racket dimensions
-            boxCollider.size = new Vector3(0.15f, 0.01f, 0.17f);
+            var manager = new GameObject("ControllerRacketManager");
+            var component = manager.AddComponent(System.Type.GetType("ControllerRacket"));
+            if (component != null)
+            {
+                Debug.Log("[TableTennisManager] Created ControllerRacketManager - press B/Y to show racket");
+            }
+            else
+            {
+                manager.AddComponent<ControllerRacket>();
+                Debug.Log("[TableTennisManager] Created ControllerRacketManager (direct)");
+            }
         }
-        
-        // Ensure tagged for ball collision
-        racket.tag = "Racket";
-        
-        // Add rigidbody for velocity tracking
-        var rb = racket.GetComponent<Rigidbody>();
-        if (rb == null)
-        {
-            rb = racket.AddComponent<Rigidbody>();
-        }
-        rb.isKinematic = true; // Start kinematic (on table)
-        rb.useGravity = false;
     }
     
     private void SpawnBall()
     {
         Vector3 spawnPosition = Vector3.zero;
         
-        // PRIORITY 1: Use stored anchor positions (40cm above center of anchors)
+        // Use stored anchor positions if available
         Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
         Vector3 secondAnchor = AnchorGUIManager_AutoAlignment.SecondAnchorPosition;
         
         if (firstAnchor.sqrMagnitude > 0.01f && secondAnchor.sqrMagnitude > 0.01f)
         {
             Vector3 anchorCenter = (firstAnchor + secondAnchor) / 2f;
-            spawnPosition = anchorCenter + new Vector3(0, 0.4f, 0); // 40cm above anchor center
-            Debug.Log($"[TableTennisManager] Ball spawn using stored anchors: center={anchorCenter}, spawn={spawnPosition}");
+            spawnPosition = anchorCenter + new Vector3(0, 0.4f, 0);
+            Debug.Log($"[TableTennisManager] Ball spawn using anchors: {spawnPosition}");
         }
-        // PRIORITY 2: Use sharedAnchor transform
         else if (sharedAnchor != null)
         {
-            spawnPosition = sharedAnchor.position + new Vector3(0, 0.4f, 0); // 40cm above anchor
-            Debug.Log($"[TableTennisManager] Ball spawn using sharedAnchor: {sharedAnchor.position}, spawn={spawnPosition}");
+            spawnPosition = sharedAnchor.position + new Vector3(0, 0.4f, 0);
+            Debug.Log($"[TableTennisManager] Ball spawn using sharedAnchor: {spawnPosition}");
         }
-        // PRIORITY 3: Use table position
         else if (tableRoot != null)
         {
             spawnPosition = tableRoot.transform.position + ballSpawnOffset;
-            Debug.Log($"[TableTennisManager] Ball spawn using tableRoot: {tableRoot.transform.position}");
+            Debug.Log($"[TableTennisManager] Ball spawn using tableRoot: {spawnPosition}");
         }
-        // PRIORITY 4: Fallback to camera position
         else
         {
             var cam = Camera.main;
             if (cam != null)
             {
                 spawnPosition = cam.transform.position + cam.transform.forward * 0.5f;
-                spawnPosition.y = cam.transform.position.y; // Same height as camera
+                spawnPosition.y = cam.transform.position.y;
             }
             else
             {
                 spawnPosition = new Vector3(0, 1.0f, 0);
             }
-            Debug.LogWarning($"[TableTennisManager] No anchor/table reference, spawning ball at {spawnPosition}");
+            Debug.LogWarning($"[TableTennisManager] No anchor/table, spawning ball at {spawnPosition}");
         }
         
-        Debug.Log($"[TableTennisManager] SPAWNING BALL at position: {spawnPosition}");
+        Debug.Log($"[TableTennisManager] SPAWNING BALL at: {spawnPosition}");
         
-        // Always create a visible local ball first (guaranteed to be visible)
+        // Create local ball for immediate visibility
         CreateLocalBall(spawnPosition);
         
-        // Also try to spawn networked ball if prefab is assigned
+        // Spawn networked ball
         if (ballPrefab != default && Runner != null)
         {
-            try
+            var ballObj = Runner.Spawn(
+                ballPrefab,
+                spawnPosition,
+                Quaternion.identity,
+                Object.InputAuthority
+            );
+            
+            if (ballObj != null)
             {
-                var ballObj = Runner.Spawn(
-                    ballPrefab,
-                    spawnPosition,
-                    Quaternion.identity,
-                    Object.InputAuthority
-                );
-                
-                if (ballObj != null)
-                {
-                    spawnedBall = ballObj.GetComponent<NetworkedBall>();
-                    
-                    // IMPORTANT: Unparent the ball so it's not affected by PingPong object transforms
-                    ballObj.transform.SetParent(null);
-                    
-                    // Force world position (in case parent had offset)
-                    ballObj.transform.position = spawnPosition;
-                    
-                    Debug.Log($"[TableTennisManager] Spawned networked ball at {spawnPosition}, unparented to world root");
-                }
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogWarning($"[TableTennisManager] Networked ball spawn failed: {e.Message}");
+                spawnedBall = ballObj.GetComponent<NetworkedBall>();
+                Debug.Log($"[TableTennisManager] Spawned networked ball at {spawnPosition}");
             }
         }
     }
     
-    /// <summary>
-    /// Create a simple visible ball for testing when networked spawn fails
-    /// </summary>
     private void CreateLocalBall(Vector3 position)
     {
-        Debug.Log($"[TableTennisManager] Creating local ball at WORLD position: {position}");
+        var localBall = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        localBall.name = "LocalBall_Fallback";
+        localBall.transform.position = position;
+        localBall.transform.localScale = Vector3.one * 0.04f; // 4cm diameter
         
-        // Create sphere primitive (at world root, not parented)
-        GameObject ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        ball.name = "LocalPingPongBall";
-        ball.tag = "Ball"; // Tag for collision detection
-        ball.transform.SetParent(null); // Ensure it's at world root
-        ball.transform.position = position; // Set WORLD position
-        ball.transform.localScale = Vector3.one * 0.08f; // 8cm diameter for visibility
-        
-        // Set material to bright orange for visibility - use URP compatible shader
-        var renderer = ball.GetComponent<Renderer>();
+        var renderer = localBall.GetComponent<Renderer>();
         if (renderer != null)
         {
-            // Try different shaders in order of preference for URP
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Simple Lit");
-            if (shader == null) shader = Shader.Find("Unlit/Color");
-            if (shader == null) shader = Shader.Find("Standard");
-            
-            Material mat;
-            if (shader != null)
-            {
-                mat = new Material(shader);
-                mat.color = new Color(1f, 0.5f, 0f); // Orange color
-                
-                // Set base color for URP shaders
-                if (mat.HasProperty("_BaseColor"))
-                {
-                    mat.SetColor("_BaseColor", new Color(1f, 0.5f, 0f));
-                }
-            }
-            else
-            {
-                // Fallback: use the primitive's default material and just change color
-                mat = renderer.material;
-                mat.color = new Color(1f, 0.5f, 0f);
-            }
-            
-            renderer.material = mat;
+            renderer.material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            renderer.material.color = Color.white;
         }
         
-        // Add rigidbody - non-kinematic for collision detection
-        var rb = ball.AddComponent<Rigidbody>();
-        rb.mass = 0.0027f;
+        var rb = localBall.AddComponent<Rigidbody>();
+        rb.mass = 0.0027f; // Standard ping pong ball mass
         rb.drag = 0.1f;
-        rb.isKinematic = false; // Non-kinematic for collision detection
-        rb.useGravity = false;
-        rb.constraints = RigidbodyConstraints.FreezeAll; // Freeze until hit
-        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        rb.angularDrag = 0.05f;
+        rb.useGravity = true;
         
-        // Add local ball handler for collision detection
-        var ballHandler = ball.AddComponent<LocalBallHandler>();
-        ballHandler.Initialize(rb);
+        var collider = localBall.GetComponent<SphereCollider>();
+        if (collider != null)
+        {
+            var physicMat = new PhysicMaterial("BallPhysics");
+            physicMat.bounciness = 0.9f;
+            physicMat.bounceCombine = PhysicMaterialCombine.Maximum;
+            collider.material = physicMat;
+        }
         
-        Debug.Log($"[TableTennisManager] Created local ball at {ball.transform.position} - WORLD ROOT, IN POSITIONING MODE");
+        Debug.Log($"[TableTennisManager] Created local fallback ball at {position}");
     }
     
-    /// <summary>
-    /// Reset the game - respawn ball, reset rackets
-    /// </summary>
+    public void OnBallHit()
+    {
+        if (CurrentPhase == GamePhase.BallPositioning)
+        {
+            CurrentPhase = GamePhase.Playing;
+            Debug.Log("[TableTennisManager] Ball hit! Game is now in Playing phase.");
+        }
+    }
+    
     public void ResetGame()
     {
-        // Rackets are now attached to controllers via ControllerRacket, no need to reset
-        
-        // Reset ball (handled by NetworkedBall)
         if (spawnedBall != null)
         {
             spawnedBall.RequestServe(Vector3.forward);
         }
     }
     
-    /// <summary>
-    /// Serve the ball
-    /// </summary>
     public void ServeBall()
     {
         if (spawnedBall != null)
@@ -1498,69 +523,8 @@ public class TableTennisManager : NetworkBehaviour
         }
     }
     
-    /// <summary>
-    /// Refresh all balls' table references after alignment changes.
-    /// This ensures balls use the updated table position.
-    /// </summary>
-    private void RefreshBallTableReferences()
-    {
-        Debug.Log("[TableTennisManager] Refreshing ball table references after alignment...");
-        
-        // Find all NetworkedBall instances
-        var balls = FindObjectsOfType<NetworkedBall>();
-        foreach (var ball in balls)
-        {
-            ball.RefreshTableReference();
-        }
-        
-        Debug.Log($"[TableTennisManager] Refreshed {balls.Length} ball(s) table references");
-    }
-    
-    /// <summary>
-    /// Find the room parent object that contains the table and room environment
-    /// </summary>
-    private Transform FindRoomParent(Transform table)
-    {
-        // First try to find Environment directly in scene root
-        GameObject envObj = GameObject.Find("Environment");
-        if (envObj != null)
-        {
-            Debug.Log($"[TableTennisManager] Found Environment directly: {envObj.name}");
-            return envObj.transform;
-        }
-        
-        // Look for common room parent names
-        string[] roomNames = { "Environment", "Room", "Scene", "World", "Level", "pingpong", "PingPong", "TableTennisRoom" };
-        
-        // Check if table's parent or grandparent is the room
-        Transform current = table.parent;
-        while (current != null)
-        {
-            string nameLower = current.name.ToLower();
-            foreach (string roomName in roomNames)
-            {
-                if (nameLower.Contains(roomName.ToLower()))
-                {
-                    Debug.Log($"[TableTennisManager] Found room parent: {current.name}");
-                    return current;
-                }
-            }
-            current = current.parent;
-        }
-        
-        // If table has a parent, use that as the room
-        if (table.parent != null)
-        {
-            Debug.Log($"[TableTennisManager] Using table's parent as room: {table.parent.name}");
-            return table.parent;
-        }
-        
-        return null;
-    }
-    
     private void OnDestroy()
     {
-        // Cleanup local rackets
         foreach (var racket in localRackets)
         {
             if (racket != null)

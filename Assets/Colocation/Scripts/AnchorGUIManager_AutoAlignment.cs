@@ -4,7 +4,6 @@ using UnityEngine.SceneManagement;
 using TMPro;
 using System;
 using System.Text;
-using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -71,46 +70,33 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         Done 
     }
     private AlignmentStep currentStep = AlignmentStep.Start;
-    private bool anchorPlacementMode = false; // True when user can place anchors with A/X buttons
-    private Transform firstAnchorTransform; // Reference to first anchor for distance calculation
-    private Transform secondAnchorTransform; // Reference to second anchor
-    private Vector3 firstAnchorPosition; // Stored position of first anchor (more reliable than transform)
-    private Vector3 secondAnchorPosition; // Stored position of second anchor
-    private GameObject distanceDisplayObj; // Floating text showing distance (right controller)
-    private TextMeshPro distanceText; // 3D text component
-    private GameObject distanceDisplayObjLeft; // Floating text for left controller
-    private TextMeshPro distanceTextLeft; // 3D text component for left controller
     
-    [Header("Table Alignment")]
-    [SerializeField] private Transform tableObject; // The table to align between anchors
-    [SerializeField] private string tableTag = "Table"; // Tag to find table if not assigned
-    [SerializeField] private float tableHeightOffset = 0f; // Height offset from anchor average
+    // Anchor placement preview
+    private GameObject anchorCursor; // Visual indicator where anchor will be placed
+    private Vector3 firstAnchorWorldPosition; // Stored position of first anchor
+    private LineRenderer distanceLine; // Line between anchors to visualize distance
+    private bool waitingForGripToPlaceAnchor = false; // True when user should press grip to place anchor
     
-    // Static variables - persist between scenes for TableTennisManager to use
-    public static Vector3 AlignedTablePosition { get; private set; }
-    public static Quaternion AlignedTableRotation { get; private set; }
-    public static bool TableWasAligned { get; private set; } = false;
-    
-    // Static anchor positions - for recalculating in TableTennis scene
+    // Static properties for cross-scene access (TableTennisManager, NetworkedBall)
     public static Vector3 FirstAnchorPosition { get; private set; }
     public static Vector3 SecondAnchorPosition { get; private set; }
+    public static Guid FirstAnchorUuid { get; private set; }
+    public static Guid SecondAnchorUuid { get; private set; }
     public static float TableHeightOffsetStatic { get; private set; }
+    public static bool AlignmentCompletedStatic { get; private set; }
+    public static bool TableWasAligned { get; private set; }
+    public static Vector3 AlignedTablePosition { get; private set; }
+    public static Quaternion AlignedTableRotation { get; private set; }
     
-    // Static anchor UUIDs - to correctly identify anchors after scene transition
-    public static System.Guid FirstAnchorUuid { get; private set; }
-    public static System.Guid SecondAnchorUuid { get; private set; }
+    // Instance variables for anchor positions (before static assignment)
+    private Vector3 firstAnchorPosition;
+    private Vector3 secondAnchorPosition;
+    private float tableHeightOffset = 0f;
     
-    // Track if alignment has been successfully completed to prevent repeated alignments
+    // Alignment state flags
     private bool _alignmentCompleted = false;
     private bool _alignmentInProgress = false;
-    
-    // Static flag accessible from TableTennisManager to check if alignment is done
-    public static bool AlignmentCompletedStatic { get; private set; } = false;
-    
-    // Static room offset - for syncing room position across network
-    public static Vector3 RoomPositionOffset { get; private set; }
-    public static float RoomRotationOffset { get; private set; }
-    
+
 #if FUSION2
     private NetworkRunner networkRunner;
     private NetworkObject spawnedCube; // Track the single spawned cube
@@ -156,6 +142,48 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         UpdateAllUI();
         UpdateUIWizard(); // Init text
         Log("Ready - Click Start Alignment (Host) to begin");
+        
+        // Create anchor placement cursor (preview sphere)
+        CreateAnchorCursor();
+    }
+    
+    private void CreateAnchorCursor()
+    {
+        // Create a small sphere to show where anchor will be placed
+        anchorCursor = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        anchorCursor.name = "AnchorPlacementCursor";
+        anchorCursor.transform.localScale = Vector3.one * 0.1f; // 10cm sphere
+        
+        // Remove collider
+        var col = anchorCursor.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        
+        // Set material to semi-transparent green
+        var renderer = anchorCursor.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            var mat = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
+            mat.color = new Color(0f, 1f, 0f, 0.5f); // Semi-transparent green
+            if (mat.HasProperty("_Surface"))
+            {
+                mat.SetFloat("_Surface", 1); // Transparent
+                mat.SetFloat("_Blend", 0);
+            }
+            renderer.material = mat;
+        }
+        
+        anchorCursor.SetActive(false); // Hidden until placement mode
+        
+        // Create line renderer for distance visualization
+        var lineObj = new GameObject("AnchorDistanceLine");
+        distanceLine = lineObj.AddComponent<LineRenderer>();
+        distanceLine.startWidth = 0.02f;
+        distanceLine.endWidth = 0.02f;
+        distanceLine.positionCount = 2;
+        distanceLine.material = new Material(Shader.Find("Sprites/Default"));
+        distanceLine.startColor = Color.yellow;
+        distanceLine.endColor = Color.yellow;
+        distanceLine.enabled = false;
     }
 
 #if FUSION2
@@ -176,16 +204,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         UpdateStatusIndicator();
         UpdateButtonStates();
         
-        // Check for anchor placement via controller buttons
-        if (anchorPlacementMode && isHost)
+        // Update anchor placement cursor and distance preview
+        UpdateAnchorPlacementPreview();
+        
+        // Check for grip button press to place anchor
+        if (waitingForGripToPlaceAnchor)
         {
-            CheckControllerAnchorPlacement();
-            UpdateDistanceDisplay(); // Show distance from first anchor
-        }
-        else if (distanceDisplayObj != null)
-        {
-            // Hide distance display when not in placement mode
-            distanceDisplayObj.SetActive(false);
+            // Check both controllers for grip press
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) || 
+                OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger))
+            {
+                PlaceAnchorAtCurrentPosition();
+            }
         }
         
 #if FUSION2
@@ -240,6 +270,126 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
 
     // ==================== AUTO ALIGN ====================
+    
+    private void UpdateAnchorPlacementPreview()
+    {
+        // Show cursor only during anchor placement steps
+        bool showCursor = (currentStep == AlignmentStep.PlaceAnchor1 || currentStep == AlignmentStep.PlaceAnchor2);
+        
+        if (anchorCursor != null)
+        {
+            anchorCursor.SetActive(showCursor);
+            
+            if (showCursor)
+            {
+                // Move cursor to floor position under controller
+                Vector3 cursorPos = GetControllerAnchorPosition();
+                anchorCursor.transform.position = cursorPos;
+                
+                // Show distance line if placing second anchor
+                if (currentStep == AlignmentStep.PlaceAnchor2 && distanceLine != null)
+                {
+                    distanceLine.enabled = true;
+                    distanceLine.SetPosition(0, firstAnchorWorldPosition + Vector3.up * 0.05f);
+                    distanceLine.SetPosition(1, cursorPos + Vector3.up * 0.05f);
+                    
+                    // Calculate and display distance
+                    float distance = Vector3.Distance(firstAnchorWorldPosition, cursorPos);
+                    UpdateDistanceDisplay(distance);
+                }
+                else if (distanceLine != null)
+                {
+                    distanceLine.enabled = false;
+                }
+            }
+        }
+        else if (distanceLine != null)
+        {
+            distanceLine.enabled = false;
+        }
+    }
+    
+    private void UpdateDistanceDisplay(float distance)
+    {
+        // Show distance in button text
+        if (autoAlignButton != null)
+        {
+            var btnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+            if (btnText != null)
+            {
+                string distanceStr = $"{distance:F2}m";
+                string warning = distance < 0.5f ? " ⚠️ Too close!" : (distance < 1f ? " (OK)" : " ✓");
+                btnText.text = $"📍 Anchor 2 ({distanceStr}){warning}";
+            }
+        }
+        
+        // Color the line based on distance (green if good, red if too close)
+        if (distanceLine != null)
+        {
+            Color lineColor = distance < 0.5f ? Color.red : (distance < 1f ? Color.yellow : Color.green);
+            distanceLine.startColor = lineColor;
+            distanceLine.endColor = lineColor;
+        }
+    }
+    
+    private async void PlaceAnchorAtCurrentPosition()
+    {
+        waitingForGripToPlaceAnchor = false;
+        
+        if (currentStep == AlignmentStep.PlaceAnchor1)
+        {
+            // Create Anchor 1 at current cursor position
+            autoAlignButton.interactable = false;
+            firstAnchorWorldPosition = GetControllerAnchorPosition();
+            var anchor1 = await CreateAnchor(firstAnchorWorldPosition, Quaternion.identity);
+            autoAlignButton.interactable = true;
+            
+            if (anchor1 != null)
+            {
+                Log($"✓ Anchor 1 Created! Now move to second position (aim for 1-2m distance)");
+                currentStep = AlignmentStep.PlaceAnchor2;
+                UpdateUIWizard();
+            }
+            else
+            {
+                Log("Failed to create Anchor 1. Try again.", true);
+                waitingForGripToPlaceAnchor = true; // Allow retry
+            }
+        }
+        else if (currentStep == AlignmentStep.PlaceAnchor2)
+        {
+            // Create Anchor 2 at current cursor position
+            Vector3 anchor2Pos = GetControllerAnchorPosition();
+            float anchorDistance = Vector3.Distance(firstAnchorWorldPosition, anchor2Pos);
+            
+            if (anchorDistance < 0.3f)
+            {
+                Log($"⚠️ Too close ({anchorDistance:F2}m)! Move further (at least 0.5m)", true);
+                waitingForGripToPlaceAnchor = true; // Allow retry at better position
+                return;
+            }
+            
+            autoAlignButton.interactable = false;
+            var anchor2 = await CreateAnchor(anchor2Pos, Quaternion.identity);
+            autoAlignButton.interactable = true;
+            
+            if (anchor2 != null)
+            {
+                Log($"✓ Anchor 2 Created! Distance: {anchorDistance:F2}m - Ready to Share");
+                // Hide cursor and distance line
+                if (anchorCursor != null) anchorCursor.SetActive(false);
+                if (distanceLine != null) distanceLine.enabled = false;
+                
+                currentStep = AlignmentStep.ReadyToShare;
+                UpdateUIWizard();
+            }
+            else
+            {
+                Log("Failed to create Anchor 2. Try again.", true);
+                waitingForGripToPlaceAnchor = true; // Allow retry
+            }
+        }
+    }
 
     private async void OnAutoAlignClicked()
     {
@@ -274,33 +424,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         switch (currentStep)
         {
             case AlignmentStep.Start:
-                // Start -> Enter placement mode
-                Log("Press A/X at table edges to place anchors");
-                if (statusText != null)
-                {
-                    statusText.text = "Point controller at TABLE EDGE and press A or X";
-                }
+                // Start -> Place Anchor 1
+                Log("Step 1: Place Anchor 1 on the FLOOR (Origin)");
                 currentStep = AlignmentStep.PlaceAnchor1;
-                anchorPlacementMode = true; // Enable controller button placement
                 UpdateUIWizard();
                 break;
 
             case AlignmentStep.PlaceAnchor1:
-                // Already in placement mode, remind user
-                Log("Press A/X at first table edge");
-                if (statusText != null)
-                {
-                    statusText.text = "Point at TABLE EDGE #1 → Press A or X";
-                }
+                // Enter placement mode - wait for grip press
+                waitingForGripToPlaceAnchor = true;
+                Log("👆 Press GRIP button to place Anchor 1");
+                UpdateUIWizard();
                 break;
 
             case AlignmentStep.PlaceAnchor2:
-                // Already in placement mode, remind user
-                Log("Press A/X at second table edge");
-                if (statusText != null)
-                {
-                    statusText.text = "Point at TABLE EDGE #2 (opposite side) → Press A or X";
-                }
+                // Enter placement mode - wait for grip press
+                waitingForGripToPlaceAnchor = true;
+                Log("👆 Press GRIP button to place Anchor 2");
+                UpdateUIWizard();
                 break;
 
             case AlignmentStep.ReadyToShare:
@@ -308,14 +449,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 Log("Sharing anchors and aligning...");
                 PrepareColocation(); // Triggers ShareAnchors()
                 currentStep = AlignmentStep.Done;
-                anchorPlacementMode = false;
                 UpdateUIWizard();
                 break;
                 
             case AlignmentStep.Done:
-                // Re-share anchors for clients who missed it
-                Log("Re-sharing anchors for late clients...");
-                ShareAnchors();
+                Log("Already aligned!");
                 break;
         }
 #else
@@ -334,22 +472,28 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             case AlignmentStep.Start:
                 if (isHost) 
-                    btnText.text = "Place Anchors";
+                    btnText.text = "Start Alignment (Host)";
                 else 
                     btnText.text = "Client: Waiting for Host...";
                 break;
             case AlignmentStep.PlaceAnchor1:
-                btnText.text = "Press A/X: Anchor 1";
+                if (waitingForGripToPlaceAnchor)
+                    btnText.text = "🎯 Press GRIP to place Anchor 1";
+                else
+                    btnText.text = "📍 Place Anchor 1 (Floor)";
                 break;
             case AlignmentStep.PlaceAnchor2:
-                btnText.text = "Press A/X: Anchor 2";
+                if (waitingForGripToPlaceAnchor)
+                    btnText.text = "🎯 Press GRIP to place Anchor 2";
+                else
+                    btnText.text = "📍 Place Anchor 2 (Floor)";
                 break;
             case AlignmentStep.ReadyToShare:
-                btnText.text = "Share & Align";
+                btnText.text = "✅ Share & Align";
                 break;
             case AlignmentStep.Done:
-                btnText.text = "Re-Share Anchors";
-                autoAlignButton.interactable = true; // Keep interactable to allow re-sharing
+                btnText.text = "✓ Aligned!";
+                autoAlignButton.interactable = false;
                 break;
         }
     }
@@ -400,68 +544,117 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
     // ==================== STANDALONE ALIGN (NO NETWORK) ====================
 
+    protected override async void DiscoverNearbySession()
+    {
+        Log("🔎 Client: Starting session discovery...");
+        base.DiscoverNearbySession();
+    }
+
+    protected override void OnColocationSessionDiscovered(OVRColocationSession.Data session)
+    {
+        Log($"🔍 Session discovered! UUID: {session.AdvertisementUuid}");
+        base.OnColocationSessionDiscovered(session);
+    }
+
     protected override async void LoadAndAlignToAnchor(Guid groupUuid)
     {
-        // CRITICAL: Prevent repeated alignments - they reset the camera rig!
-        if (_alignmentCompleted)
-        {
-            Debug.Log($"[ALIGN][INFO][CLIENT] Alignment already completed, skipping repeated call");
-            return;
-        }
-        
-        if (_alignmentInProgress)
-        {
-            Debug.Log($"[ALIGN][INFO][CLIENT] Alignment already in progress, skipping repeated call");
-            return;
-        }
-        
-        _alignmentInProgress = true;
-        
         try
         {
-            Debug.Log($"[ALIGN][STEP][CLIENT] ========== LoadAndAlignToAnchor START ==========");
-            Debug.Log($"[ALIGN][INPUT][CLIENT] Group UUID: {groupUuid}");
-            
-            // Log camera rig state BEFORE alignment
-            var rig = FindObjectOfType<OVRCameraRig>();
-            if (rig != null)
-            {
-                Debug.Log($"[ALIGN][BEFORE][CLIENT] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
-            }
-            
-            Log($"Loading anchors for Group UUID: {groupUuid}...");
+            Log($"Client: Loading anchors for Group UUID: {groupUuid.ToString().Substring(0, 8)}...");
 
+            // CRITICAL: Wait a bit for host's ShareAsync to complete
+            // This is necessary because the client might discover the session BEFORE 
+            // the host has finished sharing the anchors to that session
+            Log("⏳ Waiting 3 seconds for host to complete anchor sharing...");
+            await Task.Delay(3000);
+
+            // CRITICAL FIX: Retry loading with delays (anchors may take time to propagate)
             var unboundAnchors = new List<OVRSpatialAnchor.UnboundAnchor>();
-            var loadResult = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, unboundAnchors);
+            bool loadSuccess = false;
+            int retryCount = 0;
+            const int MAX_RETRIES = 8; // Increased from 5
 
-            if (!loadResult.Success || unboundAnchors.Count == 0)
+            while (retryCount < MAX_RETRIES)
             {
-                Debug.Log($"[ALIGN][ERROR][CLIENT] Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}");
-                Log($"Failed to load anchors. Success: {loadResult.Success}, Count: {unboundAnchors.Count}", true);
-                _alignmentInProgress = false; // Allow retry on failure
+                unboundAnchors.Clear();
+                Log($"Attempt {retryCount + 1}: Calling LoadUnboundSharedAnchorsAsync with UUID: {groupUuid}");
+                var loadResult = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, unboundAnchors);
+
+                Log($"LoadResult: Success={loadResult.Success}, Status={loadResult.Status}, Count={unboundAnchors.Count}");
+
+                if (loadResult.Success && unboundAnchors.Count > 0)
+                {
+                    Log($"✓ Found {unboundAnchors.Count} shared anchors!");
+                    loadSuccess = true;
+                    break;
+                }
+
+                // Log the actual status to understand why it failed
+                if (!loadResult.Success)
+                {
+                    Log($"⚠️ Load failed with status: {loadResult.Status}", true);
+                }
+                else if (unboundAnchors.Count == 0)
+                {
+                    Log($"⚠️ Load succeeded but no anchors returned (host may still be sharing)");
+                }
+
+                retryCount++;
+                if (retryCount < MAX_RETRIES)
+                {
+                    int waitTime = retryCount * 2; // Increasing wait: 2s, 4s, 6s, 8s
+                    Log($"⏱️ Retry {retryCount}/{MAX_RETRIES}: Waiting {waitTime}s...");
+                    await Task.Delay(waitTime * 1000);
+                }
+            }
+
+            if (!loadSuccess || unboundAnchors.Count == 0)
+            {
+                Log($"❌ Failed to load anchors after {MAX_RETRIES} retries", true);
+                Log($"Count: {unboundAnchors.Count}", true);
+                Log("TROUBLESHOOTING:", true);
+                Log("1. Make sure HOST clicked 'Share & Align' and it succeeded", true);
+                Log("2. Check both devices have internet connection", true);
+                Log("3. Verify spatial data sharing is enabled on both devices", true);
+                Log("4. Try walking around the area where host placed anchors", true);
+                Log($"5. Group UUID: {groupUuid}", true);
                 return;
             }
 
-            Debug.Log($"[ALIGN][INFO][CLIENT] Found {unboundAnchors.Count} shared anchors. Localizing...");
-            Log($"Found {unboundAnchors.Count} shared anchors. Localizing...");
+            Log($"Localizing {unboundAnchors.Count} anchors in the physical space...");
+            Log("💡 TIP: Walk around slowly to help Quest scan the environment");
 
             // Localize ALL found anchors
             var localizedAnchors = new List<OVRSpatialAnchor>();
 
-            foreach (var unboundAnchor in unboundAnchors)
+            for (int i = 0; i < unboundAnchors.Count; i++)
             {
-                Debug.Log($"[ALIGN][INFO][CLIENT] Attempting to localize anchor: {unboundAnchor.Uuid}");
-                
-                if (await unboundAnchor.LocalizeAsync())
-                {
-                    Log($"Anchor localized: {unboundAnchor.Uuid}");
+                var unboundAnchor = unboundAnchors[i];
+                Log($"Localizing anchor {i + 1}/{unboundAnchors.Count}: {unboundAnchor.Uuid.ToString().Substring(0, 8)}...");
 
-                    var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid}");
+                // Give more time for localization with timeout
+                var localizeTask = unboundAnchor.LocalizeAsync();
+                int timeoutMs = 30000; // 30 second timeout per anchor
+                int elapsed = 0;
+
+                while (!localizeTask.IsCompleted && elapsed < timeoutMs)
+                {
+                    await Task.Delay(500);
+                    elapsed += 500;
+
+                    if (elapsed % 5000 == 0) // Log every 5 seconds
+                    {
+                        Log($"Still localizing... ({elapsed / 1000}s elapsed)");
+                    }
+                }
+
+                if (await localizeTask)
+                {
+                    Log($"✓ Anchor {i + 1} localized: {unboundAnchor.Uuid.ToString().Substring(0, 8)}");
+
+                    var anchorGameObject = new GameObject($"Anchor_{unboundAnchor.Uuid.ToString().Substring(0, 8)}");
                     var spatialAnchor = anchorGameObject.AddComponent<OVRSpatialAnchor>();
                     unboundAnchor.BindTo(spatialAnchor);
-                    
-                    // Log anchor position immediately after binding
-                    Debug.Log($"[ALIGN][DATA][CLIENT] Anchor {unboundAnchor.Uuid} bound at: pos={anchorGameObject.transform.position}, rot={anchorGameObject.transform.eulerAngles}");
 
                     // Add visual
                     if (anchorMarkerPrefab != null)
@@ -472,7 +665,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                         visual.transform.localRotation = Quaternion.identity;
                         float validScale = Mathf.Max(anchorScale, 0.01f);
                         visual.transform.localScale = Vector3.one * validScale;
-                        
+
                          // Remove physics from visual
                         foreach (var col in visual.GetComponentsInChildren<Collider>())
                             Destroy(col);
@@ -485,116 +678,53 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 }
                 else
                 {
-                    Debug.Log($"[ALIGN][ERROR][CLIENT] Failed to localize anchor: {unboundAnchor.Uuid}");
-                    Log($"Failed to localize anchor: {unboundAnchor.Uuid}", true);
+                    Log($"❌ Failed to localize anchor {i + 1}: {unboundAnchor.Uuid.ToString().Substring(0, 8)}", true);
+                    Log("Try moving closer to where the host placed the anchors", true);
                 }
             }
-            
-            // Log all localized anchor positions
-            Debug.Log($"[ALIGN][INFO][CLIENT] Total localized anchors: {localizedAnchors.Count}");
-            for (int i = 0; i < localizedAnchors.Count; i++)
-            {
-                var a = localizedAnchors[i];
-                Debug.Log($"[ALIGN][DATA][CLIENT] Anchor[{i}] {a.Uuid}: pos={a.transform.position}, rot={a.transform.eulerAngles}");
-            }
-            
+
             // Now Align based on what we found
             if (localizedAnchors.Count >= 2)
             {
-                Debug.Log($"[ALIGN][STEP][CLIENT] Aligning to TWO anchors...");
-                Log("Aligning to TWO anchors...");
+                Log($"✓ Client aligned! Using 2-point alignment with {localizedAnchors.Count} anchors");
+                currentStep = AlignmentStep.Done;
+
+                _localizedAnchor = localizedAnchors[0]; // Set primary as main
+                alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1]);
                 
-                // CRITICAL: Sort anchors by UUID to ensure consistent ordering between host and client!
-                // Without this, anchors can be in different order causing 180° rotation difference
-                var sortedAnchors = localizedAnchors.OrderBy(a => a.Uuid.ToString()).ToList();
-                Debug.Log($"[ALIGN][INFO][CLIENT] Sorted anchors by UUID: [0]={sortedAnchors[0].Uuid}, [1]={sortedAnchors[1].Uuid}");
+                // Store anchor positions and mark alignment complete
+                FirstAnchorPosition = localizedAnchors[0].transform.position;
+                SecondAnchorPosition = localizedAnchors[1].transform.position;
+                AlignmentCompletedStatic = true;
                 
-                // Calculate anchor vector for logging
-                Vector3 anchorVector = sortedAnchors[1].transform.position - sortedAnchors[0].transform.position;
-                float anchorDistance = anchorVector.magnitude;
-                float anchorHeading = Quaternion.LookRotation(anchorVector).eulerAngles.y;
-                Debug.Log($"[ALIGN][DATA][CLIENT] Anchor vector: {anchorVector}, distance={anchorDistance:F3}m, heading={anchorHeading:F1}°");
-                
-                _localizedAnchor = sortedAnchors[0]; // Set primary as main
-                
-                // Client aligns to anchors the same way as host
-                // Both see the same anchor positions in world space
-                // No additional rotation needed - anchors define the shared coordinate system
-                Debug.Log($"[ALIGN][STEP][CLIENT] Calling AlignUserToTwoAnchors with additional rotation = 0°");
-                alignmentManager.AlignUserToTwoAnchors(sortedAnchors[0], sortedAnchors[1], 0f);
-                
-                // CLIENT: Store anchor positions for scene transition
-                // Wait a frame for anchor positions to be updated after localization
-                Debug.Log($"[ALIGN][INFO][CLIENT] Waiting 100ms for positions to stabilize...");
-                await Task.Delay(100);
-                
-                FirstAnchorPosition = sortedAnchors[0].transform.position;
-                SecondAnchorPosition = sortedAnchors[1].transform.position;
-                FirstAnchorUuid = sortedAnchors[0].Uuid;
-                SecondAnchorUuid = sortedAnchors[1].Uuid;
-                TableHeightOffsetStatic = tableHeightOffset;
-                
-                Debug.Log($"[ALIGN][DATA][CLIENT] AFTER alignment - Anchor[0]: pos={FirstAnchorPosition}");
-                Debug.Log($"[ALIGN][DATA][CLIENT] AFTER alignment - Anchor[1]: pos={SecondAnchorPosition}");
-                
-                // Log camera rig state AFTER alignment
-                if (rig != null)
-                {
-                    Debug.Log($"[ALIGN][AFTER][CLIENT] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
-                }
-                
-                // Log table state if found
-                var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
-                if (table != null)
-                {
-                    Debug.Log($"[ALIGN][DATA][CLIENT] Table after alignment: pos={table.transform.position}, rot={table.transform.eulerAngles}");
-                    
-                    // Check if table appears upside down
-                    float xRot = table.transform.eulerAngles.x;
-                    if (Mathf.Abs(Mathf.DeltaAngle(xRot, 180)) < 30)
-                    {
-                        Debug.Log($"[ALIGN][WARN][CLIENT] ⚠️ TABLE MAY BE UPSIDE DOWN! X rotation = {xRot:F1}°");
-                    }
-                }
+                UpdateUIWizard();
             }
             else if (localizedAnchors.Count == 1)
             {
-                Debug.Log($"[ALIGN][STEP][CLIENT] Only 1 anchor localized. Using single point alignment.");
-                Log("Only 1 anchor localized. Using single point alignment.");
+                Log("✓ Client aligned! Using single-point alignment (only 1 anchor found)");
+                currentStep = AlignmentStep.Done;
+
                 _localizedAnchor = localizedAnchors[0];
                 alignmentManager.AlignUserToAnchor(localizedAnchors[0]);
                 
-                // Store single anchor position
-                await Task.Delay(100);
+                // Store anchor position and mark alignment complete
                 FirstAnchorPosition = localizedAnchors[0].transform.position;
-                FirstAnchorUuid = localizedAnchors[0].Uuid;
-                Debug.Log($"[ALIGN][DATA][CLIENT] Stored single anchor position: {FirstAnchorPosition}");
+                AlignmentCompletedStatic = true;
+                
+                UpdateUIWizard();
             }
             else
             {
-                Debug.Log($"[ALIGN][ERROR][CLIENT] No anchors localized!");
-                Log("No anchors localized!", true);
-                _alignmentInProgress = false; // Allow retry
-                return;
+                Log("❌ No anchors localized! Cannot align.", true);
+                Log("Make sure you're in the same physical location as the host", true);
             }
-            
-            // Mark alignment as successfully completed - prevent future re-alignments
-            _alignmentCompleted = true;
-            _alignmentInProgress = false;
-            AlignmentCompletedStatic = true; // Set static flag for TableTennisManager to check
-            
-            // Wait for alignment coroutine to actually complete (it has stabilization delay + iterations)
-            Debug.Log($"[ALIGN][INFO][CLIENT] Waiting 1.5s for alignment coroutine to fully complete...");
-            await Task.Delay(1500);
-            
-            Debug.Log($"[ALIGN][OK][CLIENT] ✓ Alignment completed successfully! Future alignment calls will be skipped.");
-            Debug.Log($"[ALIGN][STEP][CLIENT] ========== LoadAndAlignToAnchor END ==========");
+
             UpdateAllUI();
         }
         catch (Exception e)
         {
-            _alignmentInProgress = false; // Allow retry on error
-            Log($"Error during anchor loading and alignment: {e.Message}", true);
+            Log($"❌ Error during anchor loading: {e.Message}", true);
+            Log($"Stack: {e.StackTrace}", true);
         }
     }
 
@@ -603,52 +733,77 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     {
         try
         {
-            Debug.Log($"[ALIGN][STEP][HOST] ========== ShareAnchors START ==========");
-            
             if (currentAnchors.Count == 0)
             {
-                Debug.Log($"[ALIGN][ERROR][HOST] No anchors to share!");
                 Log("No anchors to share! Did you create anchors first?", true);
                 return;
             }
-            
+
             // Check if we have a valid group UUID
             if (_sharedAnchorGroupId == Guid.Empty)
             {
-                Debug.Log($"[ALIGN][ERROR][HOST] Group UUID is empty!");
                 Log("ERROR: Group UUID is empty! Advertisement may not have completed.", true);
                 Log("Attempting to start advertisement first...");
                 AdvertiseColocationSession();
                 return; // Will retry via callback chain
             }
-            
-            Debug.Log($"[ALIGN][INFO][HOST] Saving {currentAnchors.Count} anchors to Group: {_sharedAnchorGroupId}");
-            Log($"Saving and sharing {currentAnchors.Count} anchors to Group: {_sharedAnchorGroupId}...");
-            
-            // Log camera rig state BEFORE host alignment
-            var rig = FindObjectOfType<OVRCameraRig>();
-            if (rig != null)
+
+            Log($"Waiting for {currentAnchors.Count} anchors to fully stabilize...");
+
+            // CRITICAL FIX: Wait for all anchors to be fully localized and stable
+            await Task.Delay(1000); // Give anchors time to stabilize
+
+            // Verify all anchors are still valid and localized
+            int localizedCount = 0;
+            foreach (var anchor in currentAnchors)
             {
-                Debug.Log($"[ALIGN][BEFORE][HOST] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
+                if (anchor != null && anchor.Localized)
+                {
+                    localizedCount++;
+                    Log($"Anchor {anchor.Uuid.ToString().Substring(0, 8)} is localized");
+                }
+                else
+                {
+                    Log($"WARNING: Anchor {anchor?.Uuid.ToString().Substring(0, 8)} is NOT localized yet", true);
+                }
             }
-            
+
+            if (localizedCount < currentAnchors.Count)
+            {
+                Log($"Only {localizedCount}/{currentAnchors.Count} anchors localized. Waiting longer...");
+                await Task.Delay(1000);
+            }
+
+            Log($"Saving and sharing {currentAnchors.Count} anchors to Group: {_sharedAnchorGroupId}...");
+
             // Save all anchors
             var anchorsToShare = new List<OVRSpatialAnchor>();
             foreach (var anchor in currentAnchors)
             {
                  if (anchor != null && anchor.Localized)
                  {
-                     Debug.Log($"[ALIGN][INFO][HOST] Saving anchor {anchor.Uuid} at pos={anchor.transform.position}");
-                     Log($"Saving anchor {anchor.Uuid}...");
+                     Log($"Saving anchor {anchor.Uuid.ToString().Substring(0, 8)}...");
                      var saveResult = await anchor.SaveAnchorAsync();
                      if (!saveResult.Success)
                      {
-                         Debug.Log($"[ALIGN][ERROR][HOST] Failed to save anchor {anchor.Uuid}: Status={saveResult.Status}");
-                         Log($"Failed to save anchor {anchor.Uuid}: Status={saveResult.Status}", true);
+                         Log($"❌ Failed to save anchor {anchor.Uuid.ToString().Substring(0, 8)}: Status={saveResult.Status}", true);
+
+                         // Provide specific error guidance
+                         if (saveResult.Status.ToString().Contains("Pending"))
+                         {
+                             Log("Anchor save is pending. Waiting and retrying...");
+                             await Task.Delay(2000);
+                             saveResult = await anchor.SaveAnchorAsync();
+                             if (saveResult.Success)
+                             {
+                                 Log($"✓ Anchor {anchor.Uuid.ToString().Substring(0, 8)} saved on retry");
+                                 anchorsToShare.Add(anchor);
+                             }
+                         }
                      }
                      else
                      {
-                         Log($"Anchor {anchor.Uuid} saved successfully");
+                         Log($"✓ Anchor {anchor.Uuid.ToString().Substring(0, 8)} saved successfully");
                          anchorsToShare.Add(anchor);
                      }
                  }
@@ -657,84 +812,61 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                      Log($"Skipping anchor: null={anchor == null}, localized={anchor?.Localized}", true);
                  }
             }
-            
+
             if (anchorsToShare.Count == 0)
             {
-                Debug.Log($"[ALIGN][ERROR][HOST] No valid anchors to share after save attempt.");
                 Log("No valid anchors to share after save attempt.", true);
+                Log("TROUBLESHOOTING: Make sure cloud storage is enabled in Meta Quest settings.", true);
                 return;
             }
 
-            Debug.Log($"[ALIGN][INFO][HOST] Sharing {anchorsToShare.Count} anchors to group {_sharedAnchorGroupId}...");
             Log($"Sharing {anchorsToShare.Count} anchors to group {_sharedAnchorGroupId}...");
             var shareResult = await OVRSpatialAnchor.ShareAsync(anchorsToShare, _sharedAnchorGroupId);
 
             if (shareResult.Success)
             {
-                Debug.Log($"[ALIGN][OK][HOST] Successfully shared {anchorsToShare.Count} anchors!");
-                Log($"Success! Shared {anchorsToShare.Count} anchors. Group UUID: {_sharedAnchorGroupId}");
+                Log($"✓ Success! Shared {anchorsToShare.Count} anchors. Group UUID: {_sharedAnchorGroupId}");
                 currentStep = AlignmentStep.Done;
-                
+
                 // HOST ALIGNMENT
                 if (anchorsToShare.Count >= 2)
                 {
-                    // Log anchor positions
-                    Debug.Log($"[ALIGN][DATA][HOST] Anchor[0]: pos={anchorsToShare[0].transform.position}, rot={anchorsToShare[0].transform.eulerAngles}");
-                    Debug.Log($"[ALIGN][DATA][HOST] Anchor[1]: pos={anchorsToShare[1].transform.position}, rot={anchorsToShare[1].transform.eulerAngles}");
-                    
-                    // Calculate anchor vector
-                    Vector3 anchorVector = anchorsToShare[1].transform.position - anchorsToShare[0].transform.position;
-                    float anchorDistance = anchorVector.magnitude;
-                    float anchorHeading = Quaternion.LookRotation(anchorVector).eulerAngles.y;
-                    Debug.Log($"[ALIGN][DATA][HOST] Anchor vector: {anchorVector}, distance={anchorDistance:F3}m, heading={anchorHeading:F1}°");
-                    
-                    // Note: Host already aligned via AlignTableToAnchors() when placing anchors
-                    // Static FirstAnchorPosition/SecondAnchorPosition already set there
-                    // Just do the camera rig alignment
-                    Log("Host: Aligning camera rig to 2 anchors...");
+                    // Host aligns to its own anchors
+                    Log("Host: Aligning to 2 anchors...");
                     _localizedAnchor = anchorsToShare[0];
-                    Debug.Log($"[ALIGN][STEP][HOST] Calling AlignUserToTwoAnchors...");
                     alignmentManager.AlignUserToTwoAnchors(anchorsToShare[0], anchorsToShare[1]);
                     
-                    // Wait for alignment to complete
-                    await Task.Delay(500);
-                    
-                    // Log state AFTER alignment
-                    if (rig != null)
-                    {
-                        Debug.Log($"[ALIGN][AFTER][HOST] CameraRig: pos={rig.transform.position}, rot={rig.transform.eulerAngles}");
-                    }
-                    Debug.Log($"[ALIGN][AFTER][HOST] Anchor[0]: pos={anchorsToShare[0].transform.position}");
-                    Debug.Log($"[ALIGN][AFTER][HOST] Anchor[1]: pos={anchorsToShare[1].transform.position}");
-                    
-                    // Log table state
-                    var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
-                    if (table != null)
-                    {
-                        Debug.Log($"[ALIGN][DATA][HOST] Table after alignment: pos={table.transform.position}, rot={table.transform.eulerAngles}");
-                    }
+                    // Store anchor positions and mark alignment complete
+                    FirstAnchorPosition = anchorsToShare[0].transform.position;
+                    SecondAnchorPosition = anchorsToShare[1].transform.position;
+                    AlignmentCompletedStatic = true;
                 }
                 else
                 {
                     Log("Host: Aligning to single anchor...");
                     _localizedAnchor = anchorsToShare[0];
                     alignmentManager.AlignUserToAnchor(anchorsToShare[0]);
+                    
+                    FirstAnchorPosition = anchorsToShare[0].transform.position;
+                    AlignmentCompletedStatic = true;
                 }
-                
-                Debug.Log($"[ALIGN][STEP][HOST] ========== ShareAnchors END ==========");
+
                 UpdateUIWizard();
             }
             else
             {
-                Debug.Log($"[ALIGN][ERROR][HOST] Failed to share anchors. Status: {shareResult.Status}");
-                Log($"Failed to share anchors. Status: {shareResult.Status}", true);
-                Log("Make sure both devices have sharing permissions enabled in Meta settings.", true);
+                Log($"❌ Failed to share anchors. Status: {shareResult.Status}", true);
+                Log("TROUBLESHOOTING:", true);
+                Log("1. Check Meta Quest Settings > Privacy > Spatial Data > Allow apps to share", true);
+                Log("2. Make sure both devices are signed into Meta accounts", true);
+                Log("3. Ensure internet connection is active", true);
+                Log($"4. Group UUID: {_sharedAnchorGroupId}", true);
             }
         }
         catch (Exception e)
         {
-            Debug.Log($"[ALIGN][ERROR][HOST] Exception in ShareAnchors: {e.Message}");
-            Log($"Error in ShareAnchors: {e.Message}", true);
+            Log($"❌ Error in ShareAnchors: {e.Message}", true);
+            Log($"Stack trace: {e.StackTrace}", true);
         }
     }
 
@@ -1069,479 +1201,45 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
 #endif
 
-    /// <summary>
-    /// Check if A or X button is pressed to place anchor at controller position
-    /// </summary>
-    private void CheckControllerAnchorPlacement()
-    {
-        // A button on right controller (Button.One on RTouch)
-        // X button on left controller (Button.Three on LTouch OR Button.One on LTouch)
-        bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
-        bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch) ||
-                        OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
-        
-        // Also check without specifying controller (in case controller detection is different)
-        bool anyAPressed = OVRInput.GetDown(OVRInput.Button.One);
-        bool anyXPressed = OVRInput.GetDown(OVRInput.Button.Three);
-        
-        if (aPressed || xPressed || anyAPressed || anyXPressed)
-        {
-            Debug.Log($"[AnchorGUI] Button pressed! A={aPressed}, X={xPressed}, anyA={anyAPressed}, anyX={anyXPressed}");
-            
-            // Get the controller that was pressed
-            var cameraRig = FindObjectOfType<OVRCameraRig>();
-            Vector3 anchorPosition = Vector3.zero;
-            Quaternion anchorRotation = Quaternion.identity;
-            
-            if (cameraRig != null)
-            {
-                // Prefer right controller for A, left for X
-                Transform controller = (aPressed || anyAPressed) ? cameraRig.rightControllerAnchor : cameraRig.leftControllerAnchor;
-                if (controller != null)
-                {
-                    // Place anchor at controller position, flat rotation (only Y axis)
-                    anchorPosition = controller.position;
-                    anchorRotation = Quaternion.Euler(0, controller.eulerAngles.y, 0);
-                }
-            }
-            
-            if (anchorPosition != Vector3.zero)
-            {
-                PlaceAnchorAtPosition(anchorPosition, anchorRotation);
-            }
-        }
-    }
-    
-    /// <summary>
-    /// Place anchor at specified position (called from controller button press)
-    /// </summary>
-    private async void PlaceAnchorAtPosition(Vector3 position, Quaternion rotation)
-    {
-        if (currentStep == AlignmentStep.PlaceAnchor1)
-        {
-            Log("Placing Anchor 1...");
-            
-            // Store the exact position BEFORE creating anchor (anchor transform can shift)
-            firstAnchorPosition = position;
-            Debug.Log($"[AnchorGUI] Storing first anchor position: {position}");
-            
-            var anchor1 = await CreateAnchor(position, rotation);
-            
-            if (anchor1 != null)
-            {
-                // Store reference to first anchor for distance calculation
-                firstAnchorTransform = anchor1.transform;
-                
-                Log("✓ Anchor 1 placed at table edge!");
-                if (statusText != null)
-                {
-                    statusText.text = "✓ Anchor 1 Done! Now point at OPPOSITE table edge → Press A/X";
-                }
-                currentStep = AlignmentStep.PlaceAnchor2;
-                UpdateUIWizard();
-                
-                // Create distance display for second anchor placement
-                CreateDistanceDisplay();
-            }
-            else
-            {
-                Log("Failed to create Anchor 1. Try again.", true);
-                firstAnchorPosition = Vector3.zero; // Reset on failure
-                if (statusText != null)
-                {
-                    statusText.text = "Failed! Try again - Press A/X at table edge";
-                }
-            }
-        }
-        else if (currentStep == AlignmentStep.PlaceAnchor2)
-        {
-            Log("Placing Anchor 2...");
-            
-            // Store the exact position BEFORE creating anchor (anchor transform can shift)
-            secondAnchorPosition = position;
-            Debug.Log($"[AnchorGUI] Storing second anchor position: {position}");
-            
-            var anchor2 = await CreateAnchor(position, rotation);
-            
-            if (anchor2 != null)
-            {
-                // Store reference to second anchor
-                secondAnchorTransform = anchor2.transform;
-                
-                // Align table between the two anchors
-                AlignTableToAnchors();
-                
-                Log("✓ Anchor 2 placed! Table aligned. Click 'Share & Align' to continue");
-                if (statusText != null)
-                {
-                    statusText.text = "✓ Table aligned between anchors! Click 'Share & Align'";
-                }
-                currentStep = AlignmentStep.ReadyToShare;
-                anchorPlacementMode = false; // Exit placement mode
-                UpdateUIWizard();
-                
-                // Hide and destroy distance display
-                if (distanceDisplayObj != null)
-                {
-                    Destroy(distanceDisplayObj);
-                    distanceDisplayObj = null;
-                }
-            }
-            else
-            {
-                Log("Failed to create Anchor 2. Try again.", true);
-                secondAnchorPosition = Vector3.zero; // Reset on failure
-                if (statusText != null)
-                {
-                    statusText.text = "Failed! Try again - Press A/X at table edge";
-                }
-            }
-        }
-    }
-    
-    /// <summary>
-    /// Find the table object if not assigned
-    /// </summary>
-    private void FindTableObject()
-    {
-        if (tableObject != null) return;
-        
-        // Try to find by tag
-        GameObject tableByTag = GameObject.FindGameObjectWithTag(tableTag);
-        if (tableByTag != null)
-        {
-            tableObject = tableByTag.transform;
-            Debug.Log($"[AnchorGUI] Found table by tag: {tableObject.name}");
-            return;
-        }
-        
-        // Try to find by name
-        var allObjects = FindObjectsOfType<Transform>();
-        foreach (var obj in allObjects)
-        {
-            if (obj.name.ToLower().Contains("table") && obj.GetComponent<Collider>() != null)
-            {
-                tableObject = obj;
-                Debug.Log($"[AnchorGUI] Found table by name: {tableObject.name}");
-                return;
-            }
-        }
-        
-        Debug.LogWarning("[AnchorGUI] Could not find table object. Assign it in Inspector or tag as 'Table'");
-    }
-    
-    /// <summary>
-    /// Align the room/table to be centered between the two anchors.
-    /// Moves the entire room parent so the table ends up at the center between anchors.
-    /// </summary>
-    private void AlignTableToAnchors()
-    {
-        // Find table if not assigned
-        FindTableObject();
-        
-        if (tableObject == null)
-        {
-            Log("No table found to align!", true);
-            return;
-        }
-        
-        if (firstAnchorPosition == Vector3.zero || secondAnchorPosition == Vector3.zero)
-        {
-            Log("Need both anchor positions to align table!", true);
-            return;
-        }
-        
-        // Calculate target center (midpoint between anchors)
-        Vector3 anchor1Pos = firstAnchorPosition;
-        Vector3 anchor2Pos = secondAnchorPosition;
-        Vector3 targetCenter = (anchor1Pos + anchor2Pos) / 2f;
-        
-        // Apply height offset
-        targetCenter.y = (anchor1Pos.y + anchor2Pos.y) / 2f + tableHeightOffset;
-        
-        // Calculate target rotation - table long axis should align with anchor direction
-        Vector3 direction = (anchor2Pos - anchor1Pos).normalized;
-        direction.y = 0; // Keep table level
-        
-        Quaternion targetRotation = Quaternion.identity;
-        if (direction.sqrMagnitude > 0.001f)
-        {
-            targetRotation = Quaternion.LookRotation(direction, Vector3.up);
-        }
-        
-        // Find room parent - the table's root parent that contains the whole room
-        Transform roomParent = FindRoomParent(tableObject);
-        
-        if (roomParent != null)
-        {
-            // Calculate how much we need to move the room so table ends up at target
-            Vector3 currentTablePos = tableObject.position;
-            Vector3 positionOffset = targetCenter - currentTablePos;
-            
-            // Calculate rotation offset around Y axis
-            float currentTableYRotation = tableObject.eulerAngles.y;
-            float targetYRotation = targetRotation.eulerAngles.y;
-            float rotationOffset = targetYRotation - currentTableYRotation;
-            
-            Debug.Log($"[AnchorGUI] Moving room: offset={positionOffset}, rotOffset={rotationOffset}°");
-            
-            // Store offsets in static variables for network sync
-            RoomPositionOffset = positionOffset;
-            RoomRotationOffset = rotationOffset;
-            
-            // First rotate the room around the table's position
-            if (Mathf.Abs(rotationOffset) > 0.1f)
-            {
-                roomParent.RotateAround(currentTablePos, Vector3.up, rotationOffset);
-            }
-            
-            // Then move the room
-            roomParent.position += positionOffset;
-            
-            Debug.Log($"[AnchorGUI] Room moved. Table now at: {tableObject.position}");
-            Debug.Log($"[AnchorGUI] Room offsets stored: pos={RoomPositionOffset}, rot={RoomRotationOffset}");
-        }
-        else
-        {
-            // Fallback: move just the table if no room parent found
-            Debug.Log($"[AnchorGUI] No room parent found, moving table directly");
-            tableObject.position = targetCenter;
-            tableObject.rotation = targetRotation;
-        }
-        
-        // Store in static variables so TableTennisManager can use in the OTHER scene
-        AlignedTablePosition = targetCenter;
-        AlignedTableRotation = targetRotation;
-        TableWasAligned = true;
-        
-        // Also store anchor positions so TableTennisManager can recalculate if needed
-        FirstAnchorPosition = anchor1Pos;
-        SecondAnchorPosition = anchor2Pos;
-        TableHeightOffsetStatic = tableHeightOffset;
-        
-        float distance = Vector3.Distance(anchor1Pos, anchor2Pos);
-        Debug.Log($"[AnchorGUI] Alignment complete: center={targetCenter}, distance={distance:F2}m");
-        Debug.Log($"[AnchorGUI] Anchor positions stored: first={anchor1Pos}, second={anchor2Pos}");
-        Log($"Room aligned ({distance:F2}m between anchors)");
-    }
-    
-    /// <summary>
-    /// Find the room parent object that contains the table and room environment
-    /// </summary>
-    private Transform FindRoomParent(Transform table)
-    {
-        // Look for common room parent names - Environment first as it's most common
-        string[] roomNames = { "Environment", "Room", "Scene", "World", "Level", "pingpong", "PingPong", "TableTennisRoom" };
-        
-        // First try to find Environment directly in scene root
-        GameObject envObj = GameObject.Find("Environment");
-        if (envObj != null)
-        {
-            Debug.Log($"[AnchorGUI] Found Environment directly: {envObj.name}");
-            return envObj.transform;
-        }
-        
-        // Check if table's parent or grandparent is the room
-        Transform current = table.parent;
-        while (current != null)
-        {
-            string nameLower = current.name.ToLower();
-            foreach (string roomName in roomNames)
-            {
-                if (nameLower.Contains(roomName.ToLower()))
-                {
-                    Debug.Log($"[AnchorGUI] Found room parent: {current.name}");
-                    return current;
-                }
-            }
-            current = current.parent;
-        }
-        
-        // If table has a parent, use that as the room
-        if (table.parent != null)
-        {
-            Debug.Log($"[AnchorGUI] Using table's parent as room: {table.parent.name}");
-            return table.parent;
-        }
-        
-        return null;
-    }
-    
-    /// <summary>
-    /// Create floating 3D text to show distance from first anchor - on BOTH controllers
-    /// </summary>
-    private void CreateDistanceDisplay()
-    {
-        // Create right controller display
-        if (distanceDisplayObj == null)
-        {
-            distanceDisplayObj = new GameObject("DistanceDisplayRight");
-            distanceText = distanceDisplayObj.AddComponent<TextMeshPro>();
-            distanceText.text = "0.00m";
-            distanceText.fontSize = 0.3f;
-            distanceText.alignment = TextAlignmentOptions.Center;
-            distanceText.color = Color.yellow;
-            Debug.Log("[AnchorGUI] Right controller distance display created");
-        }
-        
-        // Create left controller display
-        if (distanceDisplayObjLeft == null)
-        {
-            distanceDisplayObjLeft = new GameObject("DistanceDisplayLeft");
-            distanceTextLeft = distanceDisplayObjLeft.AddComponent<TextMeshPro>();
-            distanceTextLeft.text = "0.00m";
-            distanceTextLeft.fontSize = 0.3f;
-            distanceTextLeft.alignment = TextAlignmentOptions.Center;
-            distanceTextLeft.color = Color.yellow;
-            Debug.Log("[AnchorGUI] Left controller distance display created");
-        }
-    }
-    
-    /// <summary>
-    /// Update distance display position and value - shows above BOTH controllers
-    /// </summary>
-    private void UpdateDistanceDisplay()
-    {
-        if (currentStep != AlignmentStep.PlaceAnchor2 || firstAnchorTransform == null)
-        {
-            if (distanceDisplayObj != null) distanceDisplayObj.SetActive(false);
-            if (distanceDisplayObjLeft != null) distanceDisplayObjLeft.SetActive(false);
-            return;
-        }
-        
-        if (distanceDisplayObj == null || distanceDisplayObjLeft == null) CreateDistanceDisplay();
-        
-        var cameraRig = FindObjectOfType<OVRCameraRig>();
-        if (cameraRig == null) return;
-        
-        // Update RIGHT controller display
-        if (cameraRig.rightControllerAnchor != null)
-        {
-            distanceDisplayObj.SetActive(true);
-            Transform rightController = cameraRig.rightControllerAnchor;
-            Vector3 rightPos = rightController.position;
-            
-            // Position above right controller
-            distanceDisplayObj.transform.position = rightPos + Vector3.up * 0.15f;
-            
-            // Face the camera
-            if (cameraTransform != null)
-            {
-                distanceDisplayObj.transform.LookAt(cameraTransform);
-                distanceDisplayObj.transform.Rotate(0, 180, 0);
-            }
-            
-            // Update text
-            float distance = Vector3.Distance(firstAnchorTransform.position, rightPos);
-            UpdateDistanceText(distanceText, distance, rightPos.y - firstAnchorTransform.position.y);
-        }
-        else
-        {
-            distanceDisplayObj.SetActive(false);
-        }
-        
-        // Update LEFT controller display
-        if (cameraRig.leftControllerAnchor != null)
-        {
-            distanceDisplayObjLeft.SetActive(true);
-            Transform leftController = cameraRig.leftControllerAnchor;
-            Vector3 leftPos = leftController.position;
-            
-            // Position above left controller
-            distanceDisplayObjLeft.transform.position = leftPos + Vector3.up * 0.15f;
-            
-            // Face the camera
-            if (cameraTransform != null)
-            {
-                distanceDisplayObjLeft.transform.LookAt(cameraTransform);
-                distanceDisplayObjLeft.transform.Rotate(0, 180, 0);
-            }
-            
-            // Update text
-            float distance = Vector3.Distance(firstAnchorTransform.position, leftPos);
-            UpdateDistanceText(distanceTextLeft, distance, leftPos.y - firstAnchorTransform.position.y);
-        }
-        else
-        {
-            distanceDisplayObjLeft.SetActive(false);
-        }
-    }
-    
-    /// <summary>
-    /// Update the text content and color of a distance display
-    /// </summary>
-    private void UpdateDistanceText(TextMeshPro textComponent, float distance, float heightDiff)
-    {
-        if (textComponent == null) return;
-        
-        string heightStr = heightDiff >= 0 ? $"+{heightDiff:F2}m" : $"{heightDiff:F2}m";
-        string optimumInfo = "";
-        
-        // Add guidance about optimum distance (table tennis table = 2.74m)
-        if (distance < 2.0f)
-        {
-            optimumInfo = "\n<size=60%>Too close! 2.74m</size>";
-        }
-        else if (distance >= 2.0f && distance < 2.6f)
-        {
-            optimumInfo = "\n<size=60%>Closer... 2.74m</size>";
-        }
-        else if (distance >= 2.6f && distance <= 2.9f)
-        {
-            if (distance >= 2.70f && distance <= 2.78f)
-            {
-                optimumInfo = "\n<size=60%>★ PERFECT! ★</size>";
-            }
-            else
-            {
-                optimumInfo = "\n<size=60%>Good! 2.74m</size>";
-            }
-        }
-        else if (distance > 2.9f && distance <= 3.5f)
-        {
-            optimumInfo = "\n<size=60%>Too far 2.74m</size>";
-        }
-        else
-        {
-            optimumInfo = "\n<size=60%>WAY too far!</size>";
-        }
-        
-        textComponent.text = $"<size=120%>{distance:F2}m</size>\n<size=70%>H:{heightStr}</size>{optimumInfo}";
-        
-        // Color based on table tennis table length (2.74m)
-        if (distance >= 2.70f && distance <= 2.78f)
-        {
-            textComponent.color = Color.green;
-        }
-        else if (distance >= 2.5f && distance <= 3.0f)
-        {
-            textComponent.color = new Color(0.5f, 1f, 0.5f);
-        }
-        else if (distance >= 2.0f && distance <= 3.5f)
-        {
-            textComponent.color = Color.yellow;
-        }
-        else
-        {
-            textComponent.color = Color.red;
-        }
-    }
-
     private Vector3 GetControllerAnchorPosition()
     {
-        // Try to get right controller position for anchor placement
+        // // Try to get right controller position for anchor placement
+        // var cameraRig = FindObjectOfType<OVRCameraRig>();
+        // if (cameraRig != null && cameraRig.rightControllerAnchor != null)
+        // {
+        //     Transform rightHand = cameraRig.rightControllerAnchor;
+
+        //     // SIMPLE FIX: Just use Y=0 (Guardian floor level) with controller's XZ position
+        //     // This is more reliable than raycasting which may fail
+        //     Vector3 floorPosition = new Vector3(rightHand.position.x, 0f, rightHand.position.z);
+        //     Debug.Log($"[AnchorGUI] Placing anchor on floor at Y=0, position: {floorPosition}");
+        //     return floorPosition;
+        // }
+
+        // // Fallback to camera position if controller not found
+        // if (cameraTransform != null)
+        // {
+        //     return new Vector3(cameraTransform.position.x, 0f, cameraTransform.position.z) + cameraTransform.forward * 0.3f;
+        // }
+
+        // return Vector3.zero;
+            // Try to get right controller position for anchor placement
         var cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
         {
             Transform rightHand = cameraRig.rightControllerAnchor;
-            // Create anchor 5cm in front of controller tip
-            return rightHand.position + rightHand.forward * 0.05f;
+
+            // SIMPLE FIX: Just use Y=0 (Guardian floor level) with controller's XZ position
+            // This is more reliable than raycasting which may fail
+            Vector3 floorPosition = new Vector3(rightHand.position.x, 0f, rightHand.position.z);
+            Debug.Log($"[AnchorGUI] Placing anchor on floor at Y=0, position: {floorPosition}");
+            return floorPosition;
         }
 
         // Fallback to camera position if controller not found
         if (cameraTransform != null)
         {
-            return cameraTransform.position + cameraTransform.forward * 0.3f;
+            return new Vector3(cameraTransform.position.x, 0f, cameraTransform.position.z) + cameraTransform.forward * 0.3f;
         }
 
         return Vector3.zero;

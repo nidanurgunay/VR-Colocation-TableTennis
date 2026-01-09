@@ -77,6 +77,10 @@ public class NetworkedBall : NetworkBehaviour
             rb = gameObject.AddComponent<Rigidbody>();
         }
         
+        // Initialize target position to current position to avoid jumps
+        targetPosition = transform.position;
+        previousPosition = transform.position;
+        
         // Ensure ball has a visual mesh
         EnsureBallVisual();
         
@@ -497,6 +501,9 @@ public class NetworkedBall : NetworkBehaviour
             // Debug log when position changes
             Debug.Log($"[NetworkedBall][CLIENT] Position updated: TableRelPos={TableRelativePosition}, WorldPos={targetPosition}, Table at pos={tableTransform.position} rot={tableTransform.rotation.eulerAngles}");
         }
+        
+        // Actually move the ball to the target position
+        transform.position = targetPosition;
     }
     
     private void InterpolatePosition()
@@ -632,6 +639,16 @@ public class NetworkedBall : NetworkBehaviour
             if (positionChanged || rotationChanged)
             {
                 Debug.Log($"[NetworkedBall][REFRESH] Table MOVED! Position changed: {positionChanged}, Rotation changed: {rotationChanged}");
+                
+                // Immediately update ball position based on new table transform
+                if (!Object.HasStateAuthority)
+                {
+                    Vector3 newWorldPos = tableTransform.TransformPoint(TableRelativePosition);
+                    transform.position = newWorldPos;
+                    targetPosition = newWorldPos;
+                    previousPosition = newWorldPos;
+                    Debug.Log($"[NetworkedBall][REFRESH] Client ball position updated to {newWorldPos}");
+                }
             }
             
             // Track initial if not set
