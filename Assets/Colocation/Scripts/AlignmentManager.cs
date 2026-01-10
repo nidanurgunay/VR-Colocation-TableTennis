@@ -8,10 +8,16 @@ public class AlignmentManager : MonoBehaviour
     [SerializeField] private int alignmentIterations = 3; // More iterations for better accuracy
     
     [Header("Periodic Re-alignment")]
-    [SerializeField] private bool enablePeriodicAlignment = true;
-    [SerializeField] private float realignmentInterval = 5.0f; // Re-align every X seconds
+    [SerializeField] private bool enablePeriodicAlignment = false; // OFF by default now
+    [SerializeField] private float realignmentInterval = 5.0f; // Check every X seconds
     [SerializeField] private bool smoothRealignment = true; // Smoothly interpolate instead of snap
     [SerializeField] private float smoothSpeed = 2.0f; // How fast to interpolate
+    [Tooltip("If true, periodic 2-point alignment only corrects position (more stable). If false, uses full rotation recalculation (original logic).")]
+    [SerializeField] private bool positionOnlyPeriodicFor2Point = true; // New: simpler mode for 2-point periodic
+    
+    [Header("Drift Thresholds (only realign if drift exceeds these)")]
+    [SerializeField] private float positionDriftThreshold = 0.05f; // 5cm position drift
+    [SerializeField] private float rotationDriftThreshold = 2.0f; // 2 degrees rotation drift
     
     private Transform _cameraRigTransform;
     private OVRSpatialAnchor _currentAnchor; // Primary
@@ -127,6 +133,12 @@ public class AlignmentManager : MonoBehaviour
         var primaryTransform = primary.transform;
         var secondaryTransform = secondary.transform;
 
+        // DEBUG: Log anchor UUIDs and initial positions
+        Debug.Log($"[COLOC] Primary Anchor UUID: {primary.Uuid}");
+        Debug.Log($"[COLOC] Secondary Anchor UUID: {secondary.Uuid}");
+        Debug.Log($"[COLOC] Primary Initial Pos: {primaryTransform.position}, Rot: {primaryTransform.eulerAngles}");
+        Debug.Log($"[COLOC] Secondary Initial Pos: {secondaryTransform.position}, Rot: {secondaryTransform.eulerAngles}");
+
         Debug.Log($"Colocation: Waiting {stabilizationDelay}s for anchors to stabilize...");
         yield return new WaitForSeconds(stabilizationDelay);
 
@@ -137,9 +149,14 @@ public class AlignmentManager : MonoBehaviour
             _cameraRigTransform.eulerAngles = Vector3.zero;
             yield return null;
 
+            // DEBUG: Log anchor positions after rig reset
+            Debug.Log($"[COLOC] After reset - Primary Pos: {primaryTransform.position}, Secondary Pos: {secondaryTransform.position}");
+
             // 2. Calculate Correction Rotation
             Vector3 realVector = secondaryTransform.position - primaryTransform.position;
+            Debug.Log($"[COLOC] Raw realVector (P->S): {realVector}");
             realVector.y = 0; // Flatten to horizontal plane
+            Debug.Log($"[COLOC] Flattened realVector: {realVector}, magnitude: {realVector.magnitude}");
             
             if (realVector.sqrMagnitude < 0.001f)
             {
@@ -152,23 +169,38 @@ public class AlignmentManager : MonoBehaviour
                 // We want Real Vector to align with Virtual Forward (+Z)
                 float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
                 Vector3 targetRot = new Vector3(0, -realHeading, 0);
+                Debug.Log($"[COLOC] realHeading: {realHeading}, targetRot: {targetRot}");
 
                 // Apply Rotation
                 _cameraRigTransform.eulerAngles = targetRot;
+                Debug.Log($"[COLOC] Applied Rig Rotation: {_cameraRigTransform.eulerAngles}");
                 
                 // 3. Calculate Correction Position (After Rotation)
                 // Keep Y at 0 to trust Guardian floor calibration
                 Vector3 targetPos = -primaryTransform.position;
                 targetPos.y = 0; // Trust Guardian floor
                 _cameraRigTransform.position = targetPos;
+                Debug.Log($"[COLOC] Applied Rig Position: {_cameraRigTransform.position}");
             }
             
             Debug.Log($"Colocation: 2-Point Iteration {alignmentIterations - alignmentCount + 1}");
             yield return new WaitForEndOfFrame();
         }
 
+        // DEBUG: Log final rig state
+        Debug.Log($"[COLOC] FINAL Rig Position: {_cameraRigTransform.position}, Rotation: {_cameraRigTransform.eulerAngles}");
         Debug.Log("Colocation: 2-Point alignment complete.");
         _isAligned = true;
+        
+        // Start periodic re-alignment if enabled
+        if (enablePeriodicAlignment)
+        {
+            if (_periodicAlignmentCoroutine != null)
+            {
+                StopCoroutine(_periodicAlignmentCoroutine);
+            }
+            _periodicAlignmentCoroutine = StartCoroutine(PeriodicAlignmentCoroutine());
+        }
     }
     
     private IEnumerator PeriodicAlignmentCoroutine()
@@ -185,49 +217,81 @@ public class AlignmentManager : MonoBehaviour
                 break;
             }
             
+            // DEBUG: Log current state before periodic alignment
+            Debug.Log($"[COLOC] PERIODIC Before - Rig Pos: {_cameraRigTransform.position}, Rot: {_cameraRigTransform.eulerAngles}");
+            Debug.Log($"[COLOC] PERIODIC Primary Anchor Pos: {_currentAnchor.transform.position}");
+            if (_secondaryAnchor != null)
+                Debug.Log($"[COLOC] PERIODIC Secondary Anchor Pos: {_secondaryAnchor.transform.position}");
+            
             // Calculate target position/rotation
             Vector3 targetPosition;
             Vector3 targetRotation;
             
             if (_secondaryAnchor != null && _secondaryAnchor.Localized)
             {
-               // 2-POINT LOGIC
-                Vector3 realVector = _secondaryAnchor.transform.position - _currentAnchor.transform.position;
-                realVector.y = 0; 
-                
-                float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
-                targetRotation = new Vector3(0, -realHeading, 0);
-                
-                // For position, we effectively want to apply the translation that brings _currentAnchor to 0,0,0
-                // BUT we must account for the pivot of rotation.
-                // Since this is SmoothRealign, we are calculating the DESTINATION Rig Pose.
-                // If Rig was at TargetRotation...
-                // Anchor would be at `RotatedPos`.
-                // We want to translate by `-RotatedPos`.
-                // RotatedPos = RefRig.TransformPoint(AnchorLocal).
-                // RefRig is (0,0,0) with rotation TargetRotation.
-                // AnchorLocal = Rig_Current.InverseTransformPoint(Anchor_Current).
-                // So:
-                // 1. Get Anchor Local Pos relative to current rig:
-                Vector3 anchorLocal = _cameraRigTransform.InverseTransformPoint(_currentAnchor.transform.position);
-                // 2. Rotate this local pos by Target Rotation:
-                Vector3 anchorRotatedVector = Quaternion.Euler(targetRotation) * anchorLocal;
-                // 3. Target Position is negative of that:
-                targetPosition = -anchorRotatedVector;
-                
-                // Note: This assumes Rig Origin is the pivot.
+                if (positionOnlyPeriodicFor2Point)
+                {
+                    // SIMPLIFIED 2-POINT PERIODIC LOGIC (more stable)
+                    // Keep current rotation stable, only correct position drift.
+                    // The rotation was established correctly during initial 2-point alignment.
+                    
+                    targetRotation = _cameraRigTransform.eulerAngles;
+                    
+                    // For position: we want primary anchor to appear at world origin (0,0,0)
+                    Vector3 anchorWorldPos = _currentAnchor.transform.position;
+                    targetPosition = _cameraRigTransform.position - anchorWorldPos;
+                    targetPosition.y = 0; // Trust Guardian floor
+                    
+                    Debug.Log($"[COLOC] PERIODIC 2-Point (position-only) targetPosition: {targetPosition}, keeping rotation: {targetRotation}");
+                }
+                else
+                {
+                    // ORIGINAL 2-POINT PERIODIC LOGIC (full rotation recalculation)
+                    Vector3 realVector = _secondaryAnchor.transform.position - _currentAnchor.transform.position;
+                    Debug.Log($"[COLOC] PERIODIC 2-Point realVector (before flatten): {realVector}");
+                    realVector.y = 0; 
+                    Debug.Log($"[COLOC] PERIODIC 2-Point realVector (after flatten): {realVector}");
+                    
+                    float realHeading = Quaternion.LookRotation(realVector).eulerAngles.y;
+                    targetRotation = new Vector3(0, -realHeading, 0);
+                    Debug.Log($"[COLOC] PERIODIC realHeading: {realHeading}, targetRotation: {targetRotation}");
+                    
+                    // Calculate position accounting for rotation pivot
+                    Vector3 anchorLocal = _cameraRigTransform.InverseTransformPoint(_currentAnchor.transform.position);
+                    Vector3 anchorRotatedVector = Quaternion.Euler(targetRotation) * anchorLocal;
+                    targetPosition = -anchorRotatedVector;
+                    targetPosition.y = 0; // Trust Guardian floor
+                    Debug.Log($"[COLOC] PERIODIC 2-Point targetPosition: {targetPosition}");
+                }
             }
             else
             {
                 // SINGLE POINT LOGIC
                 targetPosition = _currentAnchor.transform.InverseTransformPoint(Vector3.zero);
                 targetRotation = new Vector3(0, -_currentAnchor.transform.eulerAngles.y, 0);
+                Debug.Log($"[COLOC] PERIODIC Single-Point targetPos: {targetPosition}, targetRot: {targetRotation}");
             }
+            
+            // Calculate drift from current position
+            Vector3 currentPos = _cameraRigTransform.position;
+            Vector3 currentRot = _cameraRigTransform.eulerAngles;
+            float posDrift = Vector3.Distance(currentPos, targetPosition);
+            float rotDrift = Mathf.Abs(Mathf.DeltaAngle(currentRot.y, targetRotation.y));
+            
+            // Only realign if drift exceeds threshold
+            if (posDrift < positionDriftThreshold && rotDrift < rotationDriftThreshold)
+            {
+                Debug.Log($"[COLOC] PERIODIC Drift below threshold (Pos: {posDrift:F3}m < {positionDriftThreshold}m, Rot: {rotDrift:F1}° < {rotationDriftThreshold}°) - skipping realign");
+                continue; // Skip this cycle, wait for next interval
+            }
+            
+            Debug.Log($"[COLOC] PERIODIC Drift exceeded threshold! (Pos: {posDrift:F3}m, Rot: {rotDrift:F1}°) - realigning...");
             
             if (smoothRealignment)
             {
                 // Smoothly interpolate to target over several frames
                 yield return StartCoroutine(SmoothRealignCoroutine(targetPosition, targetRotation));
+                Debug.Log($"[COLOC] PERIODIC After smooth realign - Rig Pos: {_cameraRigTransform.position}, Rot: {_cameraRigTransform.eulerAngles}");
             }
             else
             {
@@ -248,32 +312,23 @@ public class AlignmentManager : MonoBehaviour
     
     private IEnumerator SmoothRealignCoroutine(Vector3 targetPosition, Vector3 targetRotation)
     {
-        // First reset to origin to get proper transform
+        // Store starting position/rotation
         Vector3 startPos = _cameraRigTransform.position;
         Vector3 startRot = _cameraRigTransform.eulerAngles;
         
-        // Calculate the difference (drift amount)
-        _cameraRigTransform.position = Vector3.zero;
-        _cameraRigTransform.eulerAngles = Vector3.zero;
-        yield return null;
-        
-        Vector3 correctPos = _currentAnchor.transform.InverseTransformPoint(Vector3.zero);
-        Vector3 correctRot = new Vector3(0, -_currentAnchor.transform.eulerAngles.y, 0);
-        
-        // Calculate drift
-        Vector3 posDrift = correctPos - startPos;
-        float rotDrift = Mathf.DeltaAngle(startRot.y, correctRot.y);
+        // Calculate drift from target (passed from periodic alignment calculation)
+        Vector3 posDrift = targetPosition - startPos;
+        float rotDrift = Mathf.DeltaAngle(startRot.y, targetRotation.y);
         
         // Only correct if drift is significant (more than 1cm or 0.5 degrees)
         if (posDrift.magnitude < 0.01f && Mathf.Abs(rotDrift) < 0.5f)
         {
-            // Restore original position - drift is negligible
-            _cameraRigTransform.position = startPos;
-            _cameraRigTransform.eulerAngles = startRot;
+            // Drift is negligible, no correction needed
+            Debug.Log($"[COLOC] Drift negligible - Pos: {posDrift.magnitude:F3}m, Rot: {rotDrift:F1}° - skipping");
             yield break;
         }
         
-        Debug.Log($"Colocation: Correcting drift - Position: {posDrift.magnitude:F3}m, Rotation: {rotDrift:F1}°");
+        Debug.Log($"[COLOC] Correcting drift - Position: {posDrift.magnitude:F3}m, Rotation: {rotDrift:F1}°");
         
         // Smoothly interpolate
         float elapsed = 0f;
@@ -284,15 +339,15 @@ public class AlignmentManager : MonoBehaviour
             elapsed += Time.deltaTime;
             float t = Mathf.SmoothStep(0, 1, elapsed / duration);
             
-            _cameraRigTransform.position = Vector3.Lerp(startPos, correctPos, t);
-            _cameraRigTransform.eulerAngles = new Vector3(0, Mathf.LerpAngle(startRot.y, correctRot.y, t), 0);
+            _cameraRigTransform.position = Vector3.Lerp(startPos, targetPosition, t);
+            _cameraRigTransform.eulerAngles = new Vector3(0, Mathf.LerpAngle(startRot.y, targetRotation.y, t), 0);
             
             yield return null;
         }
         
         // Ensure we end at exact target
-        _cameraRigTransform.position = correctPos;
-        _cameraRigTransform.eulerAngles = correctRot;
+        _cameraRigTransform.position = targetPosition;
+        _cameraRigTransform.eulerAngles = new Vector3(0, targetRotation.y, 0);
         
         Debug.Log($"Colocation: Smooth re-alignment complete");
     }

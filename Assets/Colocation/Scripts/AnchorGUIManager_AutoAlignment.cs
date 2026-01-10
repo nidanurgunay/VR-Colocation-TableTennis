@@ -58,8 +58,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private GameObject anchorMarkerPrefab;
     // _sharedAnchorGroupId and _localizedAnchor are in base class
     private bool isHost = false;
-    private enum SessionState { Idle, Advertising, Discovering, HostAligned, ClientAligned }
+    private enum SessionState { Idle, Advertising, Discovering, Sharing, HostAligned, ClientAligned }
     private SessionState currentState = SessionState.Idle;
+    private int _clientLocalizedAnchorCount = 0; // Track how many anchors client has localized
 
     // Wizard State
     private enum AlignmentStep { 
@@ -72,10 +73,19 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private AlignmentStep currentStep = AlignmentStep.Start;
     
     // Anchor placement preview
-    private GameObject anchorCursor; // Visual indicator where anchor will be placed
+    private GameObject anchorCursor1; // Visual indicator for left controller anchor
+    private GameObject anchorCursor2; // Visual indicator for right controller anchor
     private Vector3 firstAnchorWorldPosition; // Stored position of first anchor
     private LineRenderer distanceLine; // Line between anchors to visualize distance
-    private bool waitingForGripToPlaceAnchor = false; // True when user should press grip to place anchor
+    private bool waitingForGripToPlaceAnchors = false; // True when user should press grips to place anchors
+    private bool anchor1Placed = false; // Track if anchor 1 (left grip) is placed
+    private bool anchor2Placed = false; // Track if anchor 2 (right grip) is placed
+    
+    // Distance display above controllers
+    private GameObject leftDistanceDisplay;
+    private GameObject rightDistanceDisplay;
+    private TextMesh leftDistanceText;
+    private TextMesh rightDistanceText;
     
     // Static properties for cross-scene access (TableTennisManager, NetworkedBall)
     public static Vector3 FirstAnchorPosition { get; private set; }
@@ -149,30 +159,31 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     
     private void CreateAnchorCursor()
     {
-        // Create a small sphere to show where anchor will be placed
-        anchorCursor = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        anchorCursor.name = "AnchorPlacementCursor";
-        anchorCursor.transform.localScale = Vector3.one * 0.1f; // 10cm sphere
+        // No spheres - only distance text displays
+        anchorCursor1 = null;
+        anchorCursor2 = null;
         
-        // Remove collider
-        var col = anchorCursor.GetComponent<Collider>();
-        if (col != null) Destroy(col);
+        // Create distance display above left controller
+        leftDistanceDisplay = new GameObject("LeftDistanceDisplay");
+        leftDistanceText = leftDistanceDisplay.AddComponent<TextMesh>();
+        leftDistanceText.fontSize = 50;
+        leftDistanceText.characterSize = 0.01f;
+        leftDistanceText.anchor = TextAnchor.MiddleCenter;
+        leftDistanceText.alignment = TextAlignment.Center;
+        leftDistanceText.color = Color.white;
+        leftDistanceText.text = "";
+        leftDistanceDisplay.SetActive(false);
         
-        // Set material to semi-transparent green
-        var renderer = anchorCursor.GetComponent<Renderer>();
-        if (renderer != null)
-        {
-            var mat = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
-            mat.color = new Color(0f, 1f, 0f, 0.5f); // Semi-transparent green
-            if (mat.HasProperty("_Surface"))
-            {
-                mat.SetFloat("_Surface", 1); // Transparent
-                mat.SetFloat("_Blend", 0);
-            }
-            renderer.material = mat;
-        }
-        
-        anchorCursor.SetActive(false); // Hidden until placement mode
+        // Create distance display above right controller
+        rightDistanceDisplay = new GameObject("RightDistanceDisplay");
+        rightDistanceText = rightDistanceDisplay.AddComponent<TextMesh>();
+        rightDistanceText.fontSize = 50;
+        rightDistanceText.characterSize = 0.01f;
+        rightDistanceText.anchor = TextAnchor.MiddleCenter;
+        rightDistanceText.alignment = TextAlignment.Center;
+        rightDistanceText.color = Color.white;
+        rightDistanceText.text = "";
+        rightDistanceDisplay.SetActive(false);
         
         // Create line renderer for distance visualization
         var lineObj = new GameObject("AnchorDistanceLine");
@@ -207,14 +218,25 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Update anchor placement cursor and distance preview
         UpdateAnchorPlacementPreview();
         
-        // Check for grip button press to place anchor
-        if (waitingForGripToPlaceAnchor)
+        // Check for grip button press to place anchors
+        // Either grip can place anchors - first grip = Anchor 1, second grip = Anchor 2
+        if (waitingForGripToPlaceAnchors)
         {
-            // Check both controllers for grip press
-            if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) || 
-                OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger))
+            bool leftGripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger);
+            bool rightGripPressed = OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
+            
+            if (leftGripPressed || rightGripPressed)
             {
-                PlaceAnchorAtCurrentPosition();
+                bool useLeft = leftGripPressed;
+                
+                if (!anchor1Placed)
+                {
+                    PlaceAnchorAtController(1, useLeft);
+                }
+                else if (!anchor2Placed)
+                {
+                    PlaceAnchorAtController(2, useLeft);
+                }
             }
         }
         
@@ -239,7 +261,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 }
                 
                 // Auto-start or retry discovery if not aligned
-                if (!IsAlignmentComplete())
+                // BUT skip if we already have 2 anchors localized
+                if (!IsAlignmentComplete() && _clientLocalizedAnchorCount < 2)
                 {
                     // Start discovery if not started, OR retry after interval if no anchors found
                     if (!_discoveryStarted || (Time.time - _lastDiscoveryTime > DISCOVERY_RETRY_INTERVAL))
@@ -273,39 +296,106 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     
     private void UpdateAnchorPlacementPreview()
     {
-        // Show cursor only during anchor placement steps
-        bool showCursor = (currentStep == AlignmentStep.PlaceAnchor1 || currentStep == AlignmentStep.PlaceAnchor2);
+        bool inPlacementMode = waitingForGripToPlaceAnchors && (currentStep == AlignmentStep.PlaceAnchor1 || currentStep == AlignmentStep.PlaceAnchor2);
         
-        if (anchorCursor != null)
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig == null) return;
+        
+        Transform leftHand = cameraRig.leftControllerAnchor;
+        Transform rightHand = cameraRig.rightControllerAnchor;
+        
+        if (leftHand == null || rightHand == null) return;
+        
+        // Before Anchor 1 is placed - show instruction on both controllers
+        if (inPlacementMode && !anchor1Placed)
         {
-            anchorCursor.SetActive(showCursor);
-            
-            if (showCursor)
+            if (leftDistanceDisplay != null && leftDistanceText != null)
             {
-                // Move cursor to floor position under controller
-                Vector3 cursorPos = GetControllerAnchorPosition();
-                anchorCursor.transform.position = cursorPos;
+                leftDistanceDisplay.SetActive(true);
+                leftDistanceDisplay.transform.position = leftHand.position + Vector3.up * 0.15f;
+                if (cameraTransform != null)
+                    leftDistanceDisplay.transform.LookAt(cameraTransform);
+                leftDistanceDisplay.transform.Rotate(0, 180, 0);
+                leftDistanceText.text = "Grip\nAnchor 1";
+                leftDistanceText.color = Color.cyan;
+            }
+            
+            if (rightDistanceDisplay != null && rightDistanceText != null)
+            {
+                rightDistanceDisplay.SetActive(true);
+                rightDistanceDisplay.transform.position = rightHand.position + Vector3.up * 0.15f;
+                if (cameraTransform != null)
+                    rightDistanceDisplay.transform.LookAt(cameraTransform);
+                rightDistanceDisplay.transform.Rotate(0, 180, 0);
+                rightDistanceText.text = "Grip\nAnchor 1";
+                rightDistanceText.color = Color.cyan;
+            }
+            
+            if (distanceLine != null) distanceLine.enabled = false;
+        }
+        // After Anchor 1 is placed - show distance from ACTUAL anchor position
+        else if (inPlacementMode && anchor1Placed && !anchor2Placed)
+        {
+            // Get the actual anchor position from the created anchor
+            Vector3 anchor1Pos = firstAnchorWorldPosition;
+            if (currentAnchors.Count > 0 && currentAnchors[0] != null)
+            {
+                anchor1Pos = currentAnchors[0].transform.position;
+            }
+            
+            // Calculate distance from Anchor 1 to each controller
+            float distanceLeft = Vector3.Distance(anchor1Pos, leftHand.position);
+            float distanceRight = Vector3.Distance(anchor1Pos, rightHand.position);
+            
+            // Update line from anchor 1 to the further controller
+            if (distanceLine != null)
+            {
+                distanceLine.enabled = true;
+                distanceLine.SetPosition(0, anchor1Pos);
+                // Show line to whichever controller is further
+                Vector3 targetPos = distanceLeft > distanceRight ? leftHand.position : rightHand.position;
+                distanceLine.SetPosition(1, targetPos);
                 
-                // Show distance line if placing second anchor
-                if (currentStep == AlignmentStep.PlaceAnchor2 && distanceLine != null)
-                {
-                    distanceLine.enabled = true;
-                    distanceLine.SetPosition(0, firstAnchorWorldPosition + Vector3.up * 0.05f);
-                    distanceLine.SetPosition(1, cursorPos + Vector3.up * 0.05f);
-                    
-                    // Calculate and display distance
-                    float distance = Vector3.Distance(firstAnchorWorldPosition, cursorPos);
-                    UpdateDistanceDisplay(distance);
-                }
-                else if (distanceLine != null)
-                {
-                    distanceLine.enabled = false;
-                }
+                float dist = Mathf.Max(distanceLeft, distanceRight);
+                Color lineColor = dist < 0.5f ? Color.red : (dist < 1f ? Color.yellow : Color.green);
+                distanceLine.startColor = lineColor;
+                distanceLine.endColor = lineColor;
+            }
+            
+            // Show on LEFT controller
+            if (leftDistanceDisplay != null && leftDistanceText != null)
+            {
+                leftDistanceDisplay.SetActive(true);
+                leftDistanceDisplay.transform.position = leftHand.position + Vector3.up * 0.15f;
+                if (cameraTransform != null)
+                    leftDistanceDisplay.transform.LookAt(cameraTransform);
+                leftDistanceDisplay.transform.Rotate(0, 180, 0);
+                
+                string warning = distanceLeft < 0.5f ? "\n\u26a0\ufe0f Close!" : (distanceLeft < 1f ? "" : "\n\u2713");
+                leftDistanceText.text = $"Grip\n{distanceLeft:F2}m{warning}";
+                leftDistanceText.color = distanceLeft < 0.5f ? Color.red : (distanceLeft < 1f ? Color.yellow : Color.green);
+            }
+            
+            // Show on RIGHT controller
+            if (rightDistanceDisplay != null && rightDistanceText != null)
+            {
+                rightDistanceDisplay.SetActive(true);
+                rightDistanceDisplay.transform.position = rightHand.position + Vector3.up * 0.15f;
+                if (cameraTransform != null)
+                    rightDistanceDisplay.transform.LookAt(cameraTransform);
+                rightDistanceDisplay.transform.Rotate(0, 180, 0);
+                
+                string warning = distanceRight < 0.5f ? "\n\u26a0\ufe0f Close!" : (distanceRight < 1f ? "" : "\n\u2713");
+                rightDistanceText.text = $"Grip\n{distanceRight:F2}m{warning}";
+                rightDistanceText.color = distanceRight < 0.5f ? Color.red : (distanceRight < 1f ? Color.yellow : Color.green);
             }
         }
-        else if (distanceLine != null)
+        else
         {
-            distanceLine.enabled = false;
+            // Hide when not in placement mode or both anchors placed
+            if (distanceLine != null) distanceLine.enabled = false;
+            if (leftDistanceDisplay != null) leftDistanceDisplay.SetActive(false);
+            if (rightDistanceDisplay != null) rightDistanceDisplay.SetActive(false);
         }
     }
     
@@ -332,62 +422,81 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         }
     }
     
-    private async void PlaceAnchorAtCurrentPosition()
+    private async void PlaceAnchorAtController(int anchorNumber, bool useLeftController)
     {
-        waitingForGripToPlaceAnchor = false;
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig == null) return;
         
-        if (currentStep == AlignmentStep.PlaceAnchor1)
+        // Use specified controller
+        Transform controllerTransform = useLeftController ? cameraRig.leftControllerAnchor : cameraRig.rightControllerAnchor;
+        if (controllerTransform == null) return;
+        
+        // Get position at controller (waist level - no Y manipulation)
+        Vector3 anchorPosition = controllerTransform.position;
+        
+        if (anchorNumber == 1)
         {
-            // Create Anchor 1 at current cursor position
-            autoAlignButton.interactable = false;
-            firstAnchorWorldPosition = GetControllerAnchorPosition();
-            var anchor1 = await CreateAnchor(firstAnchorWorldPosition, Quaternion.identity);
-            autoAlignButton.interactable = true;
+            // Place Anchor 1
+            Log("Creating Anchor 1...");
+            var anchor1 = await CreateAnchor(anchorPosition, Quaternion.identity);
             
             if (anchor1 != null)
             {
-                Log($"✓ Anchor 1 Created! Now move to second position (aim for 1-2m distance)");
+                anchor1Placed = true;
+                firstAnchorWorldPosition = anchorPosition;
                 currentStep = AlignmentStep.PlaceAnchor2;
+                Log($"✓ Anchor 1 placed! Now Grip for Anchor 2");
                 UpdateUIWizard();
             }
             else
             {
                 Log("Failed to create Anchor 1. Try again.", true);
-                waitingForGripToPlaceAnchor = true; // Allow retry
             }
         }
-        else if (currentStep == AlignmentStep.PlaceAnchor2)
+        else if (anchorNumber == 2)
         {
-            // Create Anchor 2 at current cursor position
-            Vector3 anchor2Pos = GetControllerAnchorPosition();
-            float anchorDistance = Vector3.Distance(firstAnchorWorldPosition, anchor2Pos);
-            
-            if (anchorDistance < 0.3f)
+            // Check distance from first anchor
+            float distance = Vector3.Distance(firstAnchorWorldPosition, anchorPosition);
+            if (distance < 0.3f)
             {
-                Log($"⚠️ Too close ({anchorDistance:F2}m)! Move further (at least 0.5m)", true);
-                waitingForGripToPlaceAnchor = true; // Allow retry at better position
+                Log($"⚠️ Too close ({distance:F2}m)! Move further (at least 0.5m)", true);
                 return;
             }
             
-            autoAlignButton.interactable = false;
-            var anchor2 = await CreateAnchor(anchor2Pos, Quaternion.identity);
-            autoAlignButton.interactable = true;
+            Log("Creating Anchor 2...");
+            var anchor2 = await CreateAnchor(anchorPosition, Quaternion.identity);
             
             if (anchor2 != null)
             {
-                Log($"✓ Anchor 2 Created! Distance: {anchorDistance:F2}m - Ready to Share");
-                // Hide cursor and distance line
-                if (anchorCursor != null) anchorCursor.SetActive(false);
-                if (distanceLine != null) distanceLine.enabled = false;
+                anchor2Placed = true;
+                Log($"✓ Anchor 2 placed! Distance: {distance:F2}m");
                 
-                currentStep = AlignmentStep.ReadyToShare;
-                UpdateUIWizard();
+                // Both anchors placed - move to ready state
+                CheckBothAnchorsPlaced();
             }
             else
             {
                 Log("Failed to create Anchor 2. Try again.", true);
-                waitingForGripToPlaceAnchor = true; // Allow retry
             }
+        }
+    }
+    
+    private void CheckBothAnchorsPlaced()
+    {
+        if (anchor1Placed && anchor2Placed)
+        {
+            waitingForGripToPlaceAnchors = false;
+            
+            // Hide all displays
+            if (distanceLine != null) distanceLine.enabled = false;
+            if (leftDistanceDisplay != null) leftDistanceDisplay.SetActive(false);
+            if (rightDistanceDisplay != null) rightDistanceDisplay.SetActive(false);
+            
+            float distance = Vector3.Distance(currentAnchors[0].transform.position, currentAnchors[1].transform.position);
+            Log($"✓ Both anchors placed! Distance: {distance:F2}m - Ready to Share");
+            
+            currentStep = AlignmentStep.ReadyToShare;
+            UpdateUIWizard();
         }
     }
 
@@ -415,8 +524,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (!isHost)
         {
-            Log("Client Mode: Waiting for host...");
-            PrepareColocation(); // Start discovery
+            Log("Client Mode: Restarting discovery...");
+            // Stop any existing discovery first
+            OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
+            OVRColocationSession.StopDiscoveryAsync();
+            _discoveryStarted = false;
+            _lastDiscoveryTime = 0f;
+            // Start fresh discovery
+            PrepareColocation();
             return;
         }
 
@@ -424,23 +539,28 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         switch (currentStep)
         {
             case AlignmentStep.Start:
-                // Start -> Place Anchor 1
-                Log("Step 1: Place Anchor 1 on the FLOOR (Origin)");
+                // Start -> Grip to place anchors
+                Log("Grip to place Anchor 1, then Grip again for Anchor 2");
                 currentStep = AlignmentStep.PlaceAnchor1;
+                waitingForGripToPlaceAnchors = true;
+                anchor1Placed = false;
+                anchor2Placed = false;
                 UpdateUIWizard();
                 break;
 
             case AlignmentStep.PlaceAnchor1:
-                // Enter placement mode - wait for grip press
-                waitingForGripToPlaceAnchor = true;
-                Log("👆 Press GRIP button to place Anchor 1");
+                // Remind user to grip
+                if (!waitingForGripToPlaceAnchors)
+                    waitingForGripToPlaceAnchors = true;
+                Log("👆 Press any Grip to place Anchor 1");
                 UpdateUIWizard();
                 break;
-
+                
             case AlignmentStep.PlaceAnchor2:
-                // Enter placement mode - wait for grip press
-                waitingForGripToPlaceAnchor = true;
-                Log("👆 Press GRIP button to place Anchor 2");
+                // Remind user to grip
+                if (!waitingForGripToPlaceAnchors)
+                    waitingForGripToPlaceAnchors = true;
+                Log("👆 Move and press any Grip for Anchor 2");
                 UpdateUIWizard();
                 break;
 
@@ -477,23 +597,37 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     btnText.text = "Client: Waiting for Host...";
                 break;
             case AlignmentStep.PlaceAnchor1:
-                if (waitingForGripToPlaceAnchor)
-                    btnText.text = "🎯 Press GRIP to place Anchor 1";
+                if (waitingForGripToPlaceAnchors)
+                    btnText.text = "🎯 Grip = Anchor 1";
                 else
-                    btnText.text = "📍 Place Anchor 1 (Floor)";
+                    btnText.text = "📍 Press to start placement";
                 break;
             case AlignmentStep.PlaceAnchor2:
-                if (waitingForGripToPlaceAnchor)
-                    btnText.text = "🎯 Press GRIP to place Anchor 2";
+                if (waitingForGripToPlaceAnchors)
+                    btnText.text = "🎯 Grip = Anchor 2";
                 else
-                    btnText.text = "📍 Place Anchor 2 (Floor)";
+                    btnText.text = "📍 Grip for Anchor 2";
                 break;
             case AlignmentStep.ReadyToShare:
                 btnText.text = "✅ Share & Align";
                 break;
             case AlignmentStep.Done:
-                btnText.text = "✓ Aligned!";
-                autoAlignButton.interactable = false;
+                // Show different text based on sharing vs aligned state
+                if (currentState == SessionState.Sharing)
+                {
+                    btnText.text = "📤 Sharing... Waiting for Client";
+                    autoAlignButton.interactable = false;
+                }
+                else if (currentState == SessionState.ClientAligned || currentState == SessionState.HostAligned)
+                {
+                    btnText.text = "✓ Aligned!";
+                    autoAlignButton.interactable = false;
+                }
+                else
+                {
+                    btnText.text = "✓ Aligned!";
+                    autoAlignButton.interactable = false;
+                }
                 break;
         }
     }
@@ -536,8 +670,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (message.Contains("Advertisement started")) currentState = SessionState.Advertising;
         else if (message.Contains("Discovery started")) currentState = SessionState.Discovering;
-        else if (message.Contains("Host aligned")) currentState = SessionState.HostAligned;
-        else if (message.Contains("Client aligned")) currentState = SessionState.ClientAligned;
+        else if (message.Contains("Sharing anchors") || message.Contains("Saving and sharing")) currentState = SessionState.Sharing;
+        else if (message.Contains("Client aligned")) 
+        {
+            currentState = SessionState.ClientAligned;
+            // Also set host to aligned when client successfully aligns
+            // This means the colocation is complete
+        }
+        else if (message.Contains("Host: Aligning")) currentState = SessionState.Sharing; // Host still sharing until client joins
 
         UpdateStatusIndicator();
     }
@@ -688,6 +828,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             {
                 Log($"✓ Client aligned! Using 2-point alignment with {localizedAnchors.Count} anchors");
                 currentStep = AlignmentStep.Done;
+                _clientLocalizedAnchorCount = localizedAnchors.Count;
 
                 _localizedAnchor = localizedAnchors[0]; // Set primary as main
                 alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1]);
@@ -697,12 +838,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 SecondAnchorPosition = localizedAnchors[1].transform.position;
                 AlignmentCompletedStatic = true;
                 
+                // Disable rediscovery - we have both anchors
+                _discoveryStarted = false; // Prevent auto-retry
+                OVRColocationSession.StopDiscoveryAsync();
+                Log("Client: 2 anchors localized - discovery disabled");
+                
                 UpdateUIWizard();
             }
             else if (localizedAnchors.Count == 1)
             {
                 Log("✓ Client aligned! Using single-point alignment (only 1 anchor found)");
                 currentStep = AlignmentStep.Done;
+                _clientLocalizedAnchorCount = 1;
 
                 _localizedAnchor = localizedAnchors[0];
                 alignmentManager.AlignUserToAnchor(localizedAnchors[0]);
@@ -825,8 +972,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             if (shareResult.Success)
             {
-                Log($"✓ Success! Shared {anchorsToShare.Count} anchors. Group UUID: {_sharedAnchorGroupId}");
+                Log($"✓ Sharing anchors complete! {anchorsToShare.Count} anchors shared. Waiting for client...");
                 currentStep = AlignmentStep.Done;
+                currentState = SessionState.Sharing; // Host is sharing, not aligned until client joins
 
                 // HOST ALIGNMENT
                 if (anchorsToShare.Count >= 2)
@@ -1063,6 +1211,15 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         currentStep = AlignmentStep.Start; // Reset wizard
         _sharedAnchorGroupId = Guid.Empty;
         _localizedAnchor = null;
+        anchor1Placed = false;
+        anchor2Placed = false;
+        waitingForGripToPlaceAnchors = false;
+        firstAnchorWorldPosition = Vector3.zero;
+        
+        // Hide all placement UI
+        if (distanceLine != null) distanceLine.enabled = false;
+        if (leftDistanceDisplay != null) leftDistanceDisplay.SetActive(false);
+        if (rightDistanceDisplay != null) rightDistanceDisplay.SetActive(false);
         
         if (autoAlignButton != null) autoAlignButton.interactable = true; // Re-enable
         
@@ -1081,21 +1238,30 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Check if aligned first
         if (_localizedAnchor == null || !_localizedAnchor.Localized)
         {
-            Log("Please align first before starting game!", true);
+            Log("\u26a0\ufe0f Please complete alignment first!", true);
             return;
         }
 
 #if FUSION2
         if (networkRunner == null || !networkRunner.IsRunning)
         {
-            Log("Network not ready!", true);
+            Log("\u26a0\ufe0f Network not ready! Please wait...", true);
+            return;
+        }
+        
+        // Check if both devices are aligned
+        bool bothDevicesAligned = currentState == SessionState.ClientAligned || currentState == SessionState.HostAligned;
+        if (!bothDevicesAligned)
+        {
+            Log("\u23f3 Waiting for both devices to be aligned...", true);
+            Log("Make sure your partner has completed alignment too!");
             return;
         }
 
         // Either player can initiate - request goes to host, host loads scene
         if (Object.HasStateAuthority)
         {
-            Log("Starting game for all players...");
+            Log("\u25b6\ufe0f Starting game for all players...");
             LoadTableTennisSceneNetworked();
         }
         else
@@ -1203,43 +1369,20 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
     private Vector3 GetControllerAnchorPosition()
     {
-        // // Try to get right controller position for anchor placement
-        // var cameraRig = FindObjectOfType<OVRCameraRig>();
-        // if (cameraRig != null && cameraRig.rightControllerAnchor != null)
-        // {
-        //     Transform rightHand = cameraRig.rightControllerAnchor;
-
-        //     // SIMPLE FIX: Just use Y=0 (Guardian floor level) with controller's XZ position
-        //     // This is more reliable than raycasting which may fail
-        //     Vector3 floorPosition = new Vector3(rightHand.position.x, 0f, rightHand.position.z);
-        //     Debug.Log($"[AnchorGUI] Placing anchor on floor at Y=0, position: {floorPosition}");
-        //     return floorPosition;
-        // }
-
-        // // Fallback to camera position if controller not found
-        // if (cameraTransform != null)
-        // {
-        //     return new Vector3(cameraTransform.position.x, 0f, cameraTransform.position.z) + cameraTransform.forward * 0.3f;
-        // }
-
-        // return Vector3.zero;
-            // Try to get right controller position for anchor placement
+        // Get right controller position at waist level (no Y manipulation)
         var cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
         {
             Transform rightHand = cameraRig.rightControllerAnchor;
-
-            // SIMPLE FIX: Just use Y=0 (Guardian floor level) with controller's XZ position
-            // This is more reliable than raycasting which may fail
-            Vector3 floorPosition = new Vector3(rightHand.position.x, 0f, rightHand.position.z);
-            Debug.Log($"[AnchorGUI] Placing anchor on floor at Y=0, position: {floorPosition}");
-            return floorPosition;
+            // Use actual controller position (waist level) - no Y manipulation
+            Debug.Log($"[AnchorGUI] Placing anchor at waist level, position: {rightHand.position}");
+            return rightHand.position;
         }
 
         // Fallback to camera position if controller not found
         if (cameraTransform != null)
         {
-            return new Vector3(cameraTransform.position.x, 0f, cameraTransform.position.z) + cameraTransform.forward * 0.3f;
+            return cameraTransform.position + cameraTransform.forward * 0.3f;
         }
 
         return Vector3.zero;
@@ -1391,8 +1534,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         
 #if FUSION2
         bool hasNetwork = networkRunner != null && networkRunner.IsRunning;
+        
+        // Check if both host and client are aligned (for Start Game button)
+        bool bothDevicesAligned = isAligned && (currentState == SessionState.ClientAligned || currentState == SessionState.HostAligned);
 #else
         bool hasNetwork = false;
+        bool bothDevicesAligned = false;
 #endif
 
         if (autoAlignButton != null)
@@ -1403,6 +1550,34 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (resetButton != null)
             resetButton.interactable = true; // Always available
+            
+        // Start Game button - only enabled when both devices are aligned
+        if (startGameButton != null)
+        {
+            startGameButton.interactable = hasNetwork && bothDevicesAligned;
+            
+            // Update button text to show status
+            var btnText = startGameButton.GetComponentInChildren<TextMeshProUGUI>();
+            if (btnText != null)
+            {
+                if (!hasNetwork)
+                {
+                    btnText.text = "\u23f3 Connecting...";
+                }
+                else if (!isAligned)
+                {
+                    btnText.text = "\u26a0\ufe0f Align first";
+                }
+                else if (!bothDevicesAligned)
+                {
+                    btnText.text = "\u23f3 Waiting for partner...";
+                }
+                else
+                {
+                    btnText.text = "\u25b6\ufe0f Start Game";
+                }
+            }
+        }
     }
 
     private void UpdateStatusIndicator()
@@ -1433,6 +1608,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 break;
             case SessionState.Discovering:
                 statusIndicator.color = discoveringColor; // Orange while discovering
+                break;
+            case SessionState.Sharing:
+                statusIndicator.color = Color.yellow; // Yellow while sharing anchors, waiting for client
                 break;
             case SessionState.HostAligned:
             case SessionState.ClientAligned:

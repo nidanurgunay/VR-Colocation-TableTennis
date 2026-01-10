@@ -165,33 +165,11 @@ public class GameUIPanel_Simple : MonoBehaviour
     
     private string GetControlsText()
     {
-        // Get current phase from TableTennisManager
-        if (tableTennisManager == null)
-        {
-            return "A = Table Adjust Mode\nGRIP = Start Game\nY/B = Activate Rackets";
-        }
-        
-        switch (tableTennisManager.CurrentPhase)
-        {
-            case TableTennisManager.GamePhase.TableSetup:
-                return "A = Toggle Table Adjust\n" +
-                       "L-Stick Y = Height | R-Stick X = Rotate\n" +
-                       "Y = Left Racket | B = Right Racket\n" +
-                       "GRIP = Spawn Ball";
-                       
-            case TableTennisManager.GamePhase.BallPositioning:
-                return "A = Toggle Ball Adjust\n" +
-                       "L-Stick = Move Ball | R-Stick Y = Height\n" +
-                       "Y = Left Racket | B = Right Racket\n" +
-                       "HIT BALL = Start Play";
-                       
-            case TableTennisManager.GamePhase.Playing:
-                return "Y = Left Racket | B = Right Racket\n" +
-                       "A = Adjust Racket Position";
-                       
-            default:
-                return "Y = Left Racket | B = Right Racket";
-        }
+        // Simplified controls text - TableTennisManager from friend's branch doesn't have phases
+        return "A = Toggle Table Adjust\n" +
+               "L-Stick Y = Height | R-Stick X = Rotate\n" +
+               "Y = Left Racket | B = Right Racket\n" +
+               "GRIP = Spawn Ball";
     }
     
     private string GetStatusText(int p1Score, int p2Score, bool isHost, TableTennisGameManager.GameState state)
