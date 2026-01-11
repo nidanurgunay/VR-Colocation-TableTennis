@@ -286,12 +286,24 @@ public class NetworkedPlayer : NetworkBehaviour
             }
         }
 
-        // Sync racket active states from ControllerRacket
+        // Sync racket active states from ControllerRacket OR passthrough mode rackets
         var controllerRacket = FindObjectOfType<ControllerRacket>();
         if (controllerRacket != null)
         {
             LeftRacketActive = controllerRacket.IsRacketActive(OVRInput.Controller.LTouch);
             RightRacketActive = controllerRacket.IsRacketActive(OVRInput.Controller.RTouch);
+        }
+        else
+        {
+            // In passthrough mode, check if rackets exist and are active in AnchorGUIManager
+            var anchorGUI = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
+            if (anchorGUI != null)
+            {
+                // Check if passthrough rackets are visible
+                bool passthroughRacketsVisible = anchorGUI.ArePassthroughRacketsVisible();
+                LeftRacketActive = passthroughRacketsVisible;
+                RightRacketActive = passthroughRacketsVisible;
+            }
         }
     }
 

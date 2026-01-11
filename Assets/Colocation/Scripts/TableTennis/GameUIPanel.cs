@@ -511,10 +511,10 @@ public class GameUIPanel : MonoBehaviour
         {
             switch (tableTennisManager.CurrentPhase)
             {
-                case TableTennisManager.GamePhase.TableSetup:
-                    return "TABLE SETUP";
+                case TableTennisManager.GamePhase.TableAdjust:
+                    return "TABLE ADJUSTMENT";
                     
-                case TableTennisManager.GamePhase.BallPositioning:
+                case TableTennisManager.GamePhase.BallPosition:
                     return "POSITION THE BALL";
                     
                 case TableTennisManager.GamePhase.Playing:
@@ -539,16 +539,16 @@ public class GameUIPanel : MonoBehaviour
         {
             switch (tableTennisManager.CurrentPhase)
             {
-                case TableTennisManager.GamePhase.TableSetup:
-                    return "Press A for Table Adjust Mode\n" +
-                           "Left Stick Y: Height | Right Stick X: Rotate\n" +
-                           "Press B or Y: Toggle Racket\n" +
-                           "Press GRIP to Start Game";
+                case TableTennisManager.GamePhase.TableAdjust:
+                    return "Right Stick: Rotate (X) / Height (Y)\n" +
+                           "B/Y: Toggle Racket Visibility\n" +
+                           "A/X: Confirm Table Position";
                     
-                case TableTennisManager.GamePhase.BallPositioning:
-                    return "Left Stick: Move Ball (X/Z)\n" +
-                           "Right Stick Y: Ball Height\n" +
-                           "Hit the ball to start playing!";
+                case TableTennisManager.GamePhase.BallPosition:
+                    return "GRIP: Spawn Ball\n" +
+                           "A/X + Right Stick: Adjust Ball\n" +
+                           "B/Y: Toggle Rackets\n" +
+                           "Hit ball with racket to START!";
                     
                 case TableTennisManager.GamePhase.Playing:
                     return "Hit ball with racket | First to 11 wins";

@@ -266,13 +266,14 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
 
     protected virtual void Log(string message, bool isError = false)
     {
+        string formattedMessage = $"[Anchor] {message}";
         if (isError)
         {
-            Debug.LogError(message);
+            Debug.LogError(formattedMessage);
         }
         else
         {
-            Debug.Log(message);
+            Debug.Log(formattedMessage);
         }
     }
 }

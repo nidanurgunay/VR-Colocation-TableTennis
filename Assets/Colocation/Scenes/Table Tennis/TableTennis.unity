@@ -12481,7 +12481,8 @@ PrefabInstance:
       propertyPath: m_TagString
       value: Racket
       objectReference: {fileID: 0}
-    m_RemovedComponents: []
+    m_RemovedComponents:
+    - {fileID: -4331907396841239091, guid: f49f097561511dd499970e7f53740fdd, type: 3}
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []
@@ -20980,27 +20981,28 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c49b1967fc2ce4f78a1b21920db2191d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  sharedConfig: {fileID: 11400000, guid: f9c542244570c42729b05aa64a0bff30, type: 2}
   ballPrefab:
     RawGuidValue: 6a70f6eba9ecc45b7b35b1800b6e3316
-  networkedRacketPrefab:
-    RawGuidValue: 8aa3220211f764bffa9fad76ba8dfd2a
   racketPrefab: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
     type: 3}
   tablePositionOffset: {x: 0, y: 0, z: 0}
-  defaultTableHeight: 0.76
-  tableXRotationOffset: 180
+  defaultTableHeight: 0
+  tableXRotationOffset: 0
   tableYRotationOffset: 0
-  enableTableAdjustment: 1
-  _GameStarted:
-    _value: 0
   moveSpeed: 2
   rotateSpeed: 90
   showAdjustmentInstructions: 1
+  _GameStarted:
+    _value: 0
+  _CurrentPhase: 0
   tableTransform: {fileID: 237327607}
   racket1Position: {x: -0.3, y: 0.8, z: -0.6}
   racket2Position: {x: 0.3, y: 0.8, z: -0.6}
   racketRotation: {x: 0, y: 0, z: 0}
   ballSpawnOffset: {x: 0, y: 0.5, z: 0}
+  mainMenuSceneName: Demo2
+  gameMenuUI: {fileID: 0}
 --- !u!4 &827673575
 Transform:
   m_ObjectHideFlags: 0
@@ -27868,7 +27870,21 @@ MonoBehaviour:
   spawnCubeButton: {fileID: 0}
   resetButton: {fileID: 0}
   startGameButton: {fileID: 0}
+  startPassthroughGameButton: {fileID: 0}
+  buttonPanel: {fileID: 0}
+  instructionPanel: {fileID: 0}
+  instructionText: {fileID: 0}
   tableTennisSceneName: TableTennis
+  sharedConfig: {fileID: 0}
+  tablePrefab: {fileID: 0}
+  racketPrefab: {fileID: 0}
+  ballPrefab:
+    RawGuidValue: 00000000000000000000000000000000
+  tableRotateSpeed: 90
+  tableMoveSpeed: 1
+  tableXRotationOffset: 0
+  tableYRotationOffset: 90
+  defaultTableHeight: 0
   statusText: {fileID: 0}
   anchorText: {fileID: 0}
   statusIndicator: {fileID: 0}
@@ -27886,9 +27902,6 @@ MonoBehaviour:
   sessionName: MyVRSession
   autoStartSession: 0
   autoAlignOnStart: 0
-  tableObject: {fileID: 0}
-  tableTag: Table
-  tableHeightOffset: 0
 --- !u!114 &1131986600
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -36389,6 +36402,9 @@ MonoBehaviour:
   realignmentInterval: 5
   smoothRealignment: 1
   smoothSpeed: 2
+  positionOnlyPeriodicFor2Point: 1
+  positionDriftThreshold: 0.05
+  rotationDriftThreshold: 2
 --- !u!4 &1453752134
 Transform:
   m_ObjectHideFlags: 0
@@ -51752,7 +51768,7 @@ PrefabInstance:
     - target: {fileID: 6114280278614990122, guid: 8aa3220211f764bffa9fad76ba8dfd2a,
         type: 3}
       propertyPath: NetworkedBehaviours.Array.size
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

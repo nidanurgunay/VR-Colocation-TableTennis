@@ -19537,10 +19537,10 @@ RectTransform:
   m_Children: []
   m_Father: {fileID: 325041599}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMin: {x: 1, y: 1}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: 0, y: -10}
-  m_SizeDelta: {x: 0, y: -20}
+  m_AnchoredPosition: {x: -330, y: -40}
+  m_SizeDelta: {x: 660, y: 40}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &880189555
 MonoBehaviour:
@@ -23197,7 +23197,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 160, y: -40}
+  m_AnchoredPosition: {x: 500, y: -40}
   m_SizeDelta: {x: 280, y: 60}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1022472320
@@ -25562,10 +25562,26 @@ MonoBehaviour:
   networkedPlayerPrefab:
     RawGuidValue: 00000000000000000000000000000000
   autoAlignButton: {fileID: 1246328328}
-  spawnCubeButton: {fileID: 1022472320}
+  spawnCubeButton: {fileID: 0}
   resetButton: {fileID: 965380431}
   startGameButton: {fileID: 1211848727}
+  startPassthroughGameButton: {fileID: 1022472320}
+  buttonPanel: {fileID: 0}
+  instructionPanel: {fileID: 0}
+  instructionText: {fileID: 0}
   tableTennisSceneName: TableTennis
+  sharedConfig: {fileID: 11400000, guid: f9c542244570c42729b05aa64a0bff30, type: 2}
+  tablePrefab: {fileID: 1336064221633153689, guid: 0359ed46faed84f4ab2e4be3e7bc88c5,
+    type: 3}
+  racketPrefab: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
+    type: 3}
+  ballPrefab:
+    RawGuidValue: 6a70f6eba9ecc45b7b35b1800b6e3316
+  tableRotateSpeed: 90
+  tableMoveSpeed: 1
+  tableXRotationOffset: 180
+  tableYRotationOffset: 90
+  defaultTableHeight: 0
   statusText: {fileID: 1186972806}
   anchorText: {fileID: 1196130576}
   statusIndicator: {fileID: 1729556576}
@@ -25583,9 +25599,6 @@ MonoBehaviour:
   sessionName: MyVRSession
   autoStartSession: 0
   autoAlignOnStart: 0
-  tableObject: {fileID: 0}
-  tableTag: Table
-  tableHeightOffset: 0
 --- !u!1 &1132596022
 GameObject:
   m_ObjectHideFlags: 0
@@ -29089,7 +29102,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 1}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -160, y: -40}
+  m_AnchoredPosition: {x: -500, y: -40}
   m_SizeDelta: {x: 280, y: 60}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1246328328
@@ -30981,7 +30994,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Spawn Cube
+  m_text: Start Passthrough Game
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
@@ -34610,6 +34623,9 @@ MonoBehaviour:
   realignmentInterval: 5
   smoothRealignment: 1
   smoothSpeed: 2
+  positionOnlyPeriodicFor2Point: 1
+  positionDriftThreshold: 0.05
+  rotationDriftThreshold: 2
 --- !u!4 &1453752134
 Transform:
   m_ObjectHideFlags: 0

@@ -49,8 +49,7 @@ MonoBehaviour:
   ObjectInterest: 1
   Flags: 786433
   NestedObjects: []
-  NetworkedBehaviours:
-  - {fileID: 5143195841908155192}
+  NetworkedBehaviours: []
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &5143195841908155192
 MonoBehaviour:
@@ -70,6 +69,3 @@ MonoBehaviour:
   racketOffset: {x: 0, y: 0.03, z: 0.04}
   racketRotation: {x: -51, y: 184, z: 81}
   racketScale: 10
-  rotationAdjustSpeed: 45
-  showControllersAlways: 1
-  networkUpdateRate: 0.05

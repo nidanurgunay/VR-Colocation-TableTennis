@@ -1,43 +1,21 @@
 using UnityEngine;
-using Fusion;
 
 /// <summary>
 /// Attaches a racket visual to the controller when grip is pressed.
-/// Controllers remain visible. Racket offset/rotation adjustable with thumbsticks when in adjust mode.
-/// Also syncs racket position/visibility to other players via Fusion.
+/// Since controllers are already visible and synced via colocation alignment,
+/// this just swaps the controller visual with a racket.
 /// </summary>
-public class ControllerRacket : NetworkBehaviour
+public class ControllerRacket : MonoBehaviour
 {
     [Header("Racket Prefab (optional - will auto-find if not set)")]
     [SerializeField] private GameObject racketPrefab; // Racket model to show on controller
     
     [Header("Settings")]
-    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller
-    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller
+    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller (Button.Two = B when using RTouch)
+    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller (Button.Two = Y when using LTouch)
     [SerializeField] private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f); // Position offset from controller
-    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 189.0f, 77.4f); // Default rotation for natural grip
+    [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 240f, 43f); // Rotation to align handle with controller grip
     [SerializeField] private float racketScale = 10f; // 10x scale for visibility
-    
-    [Header("Adjustment Settings")]
-    [SerializeField] private float rotationAdjustSpeed = 45f; // Degrees per second
-    
-    [Header("Controller Visibility")]
-    [Tooltip("When enabled, Quest controllers remain visible alongside the rackets")]
-    [SerializeField] private bool showControllersAlways = false; // Set to true to keep controllers visible alongside rackets
-    
-    [Header("Network Settings")]
-    [SerializeField] private float networkUpdateRate = 0.05f; // 20 updates per second
-    
-    // Networked state for other players to see our racket
-    [Networked] private Vector3 NetworkedRightRacketPos { get; set; }
-    [Networked] private Quaternion NetworkedRightRacketRot { get; set; }
-    [Networked] private NetworkBool NetworkedRightRacketVisible { get; set; }
-    [Networked] private Vector3 NetworkedLeftRacketPos { get; set; }
-    [Networked] private Quaternion NetworkedLeftRacketRot { get; set; }
-    [Networked] private NetworkBool NetworkedLeftRacketVisible { get; set; }
-    
-    // Adjust mode - toggle with A button
-    private bool isAdjustMode = false;
     
     // Controller references
     private Transform leftController;
@@ -47,39 +25,9 @@ public class ControllerRacket : NetworkBehaviour
     private GameObject leftControllerVisual;
     private GameObject rightControllerVisual;
     
-    // Racket instances attached to controllers (local player)
+    // Racket instances attached to controllers
     private GameObject leftRacket;
     private GameObject rightRacket;
-    
-    // Rigidbodies for velocity tracking
-    private Rigidbody leftRacketRb;
-    private Rigidbody rightRacketRb;
-    private Vector3 lastLeftPos;
-    private Vector3 lastRightPos;
-    
-    // Public getter for racket velocity (used for ball hit detection)
-    public Vector3 GetRacketVelocity(GameObject racketObject)
-    {
-        if (racketObject == leftRacket && leftRacketRb != null)
-            return leftRacketRb.velocity;
-        if (racketObject == rightRacket && rightRacketRb != null)
-            return rightRacketRb.velocity;
-        // Fallback: try to find rigidbody on the object
-        var rb = racketObject.GetComponent<Rigidbody>();
-        if (rb != null)
-            return rb.velocity;
-        return Vector3.zero;
-    }
-    
-    // Remote player racket representations
-    private GameObject remoteLeftRacket;
-    private GameObject remoteRightRacket;
-    
-    // Rigidbodies for remote rackets (for velocity tracking)
-    private Rigidbody remoteLeftRacketRb;
-    private Rigidbody remoteRightRacketRb;
-    private Vector3 lastRemoteLeftPos;
-    private Vector3 lastRemoteRightPos;
     
     // Toggle states
     private bool leftActive = false;
@@ -87,71 +35,10 @@ public class ControllerRacket : NetworkBehaviour
     private bool leftWasPressed = false;
     private bool rightWasPressed = false;
     
-    // Network sync timing
-    private float lastNetworkUpdate = 0f;
-    private bool isLocalPlayer = false;
-    private bool isInitialized = false;
-    private bool isNetworked = false; // True if spawned via Fusion, false if local-only
-    
-    // Table reference for coordinate conversion (needed for proper sync after alignment)
-    private Transform tableTransform;
-    
-    /// <summary>
-    /// Called when spawned via Fusion network
-    /// </summary>
-    public override void Spawned()
-    {
-        base.Spawned();
-        isNetworked = true;
-        isLocalPlayer = Object.HasInputAuthority;
-        Debug.Log($"[ControllerRacket][SPAWN] Spawned via Fusion - IsLocalPlayer: {isLocalPlayer}, HasStateAuthority: {Object.HasStateAuthority}, HasInputAuthority: {Object.HasInputAuthority}, InputAuthority: {Object.InputAuthority}, LocalPlayer: {Runner.LocalPlayer}");
-        
-        if (isLocalPlayer)
-        {
-            // Request State Authority so we can modify networked properties
-            // Each player needs state authority over their own racket to sync position/visibility
-            if (!Object.HasStateAuthority)
-            {
-                Object.RequestStateAuthority();
-                Debug.Log("[ControllerRacket][SPAWN] Requested State Authority for local player's racket");
-            }
-            
-            // Local player - setup controller tracking
-            InitializeLocalPlayer();
-        }
-        else
-        {
-            // Remote player - create visual representations
-            Debug.Log("[ControllerRacket][SPAWN] This is REMOTE player's racket - creating remote visuals...");
-            StartCoroutine(CreateRemoteRackets());
-        }
-    }
-    
-    /// <summary>
-    /// Called for local-only (non-networked) instances
-    /// </summary>
     private void Start()
     {
-        // If already initialized via Spawned(), skip
-        if (isInitialized) return;
-        
-        // Check if we have a NetworkObject - if not, this is a local-only instance
-        if (Object == null || !Object.IsValid)
-        {
-            Debug.Log("[ControllerRacket] Starting as local-only (no network sync)");
-            isNetworked = false;
-            isLocalPlayer = true; // Local-only always controls itself
-            InitializeLocalPlayer();
-        }
-    }
-    
-    private void InitializeLocalPlayer()
-    {
-        if (isInitialized) return;
-        isInitialized = true;
         Debug.Log($"[RACKET_DEBUG] ControllerRacket Start - Rotation: {racketRotation}, Offset: {racketOffset}, Scale: {racketScale}");
         FindControllers();
-        FindTableReference();
         
         // Try to find racket prefab - if not found, will retry in Update
         TryFindRacketTemplate();
@@ -232,23 +119,6 @@ public class ControllerRacket : NetworkBehaviour
         Debug.LogWarning("[ControllerRacket] Could not find racket template in scene!");
     }
     
-    private void FindTableReference()
-    {
-        if (tableTransform != null) return;
-        
-        var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
-                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
-        if (table != null)
-        {
-            tableTransform = table.transform;
-            Debug.Log($"[ControllerRacket] Found table reference: {table.name} at {tableTransform.position}");
-        }
-        else
-        {
-            Debug.LogWarning("[ControllerRacket] Could not find table for coordinate conversion!");
-        }
-    }
-    
     private void FindControllers()
     {
         var cameraRig = FindObjectOfType<OVRCameraRig>(true);
@@ -309,25 +179,28 @@ public class ControllerRacket : NetworkBehaviour
             return;
         }
         
-        // Hide the original racket template only
+        // Hide the original racket(s) on the table
         racketPrefab.SetActive(false);
         
-        // Find and hide ONLY the original scene template rackets (under pingpong parent)
-        // Do NOT hide any rackets that were dynamically instantiated (controller/remote)
-        var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("PingPongTable");
+        // Also hide any other rackets in the scene
+        var allRackets = GameObject.FindGameObjectsWithTag("Racket");
+        foreach (var r in allRackets)
+        {
+            r.SetActive(false);
+        }
+        
+        // Find and hide rackets by name too
+        var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong");
         if (pingPongParent != null)
         {
             foreach (Transform child in pingPongParent.GetComponentsInChildren<Transform>(true))
             {
-                string nameLower = child.name.ToLower();
-                if (nameLower.Contains("racket") || nameLower.Contains("paddle"))
+                if (child.name.ToLower().Contains("racket") || child.name.ToLower().Contains("paddle"))
                 {
-                    // Only hide if it's a scene object (not instantiated by us)
-                    // Our instantiated rackets have specific names
-                    if (!nameLower.Contains("controller") && !nameLower.Contains("remote") &&
-                        child.gameObject != leftRacket && child.gameObject != rightRacket)
+                    if (child.gameObject != leftRacket && child.gameObject != rightRacket)
                     {
                         child.gameObject.SetActive(false);
+                        Debug.Log($"[ControllerRacket] Hiding scene racket: {child.name}");
                     }
                 }
             }
@@ -360,7 +233,6 @@ public class ControllerRacket : NetworkBehaviour
             
             // Remove any physics/grab components
             CleanupRacketComponents(leftRacket);
-            leftRacketRb = leftRacket.GetComponent<Rigidbody>();
         }
         
         // Create right controller racket
@@ -382,7 +254,6 @@ public class ControllerRacket : NetworkBehaviour
             
             // Remove any physics/grab components
             CleanupRacketComponents(rightRacket);
-            rightRacketRb = rightRacket.GetComponent<Rigidbody>();
         }
         
         Debug.Log("[ControllerRacket] Created racket visuals on controllers (press B/Y to show)");
@@ -390,72 +261,15 @@ public class ControllerRacket : NetworkBehaviour
     
     private void CleanupRacketComponents(GameObject racket)
     {
-        // Remove existing rigidbody - we'll add one for velocity tracking
+        // Remove components that shouldn't be on the controller-attached version
         var rb = racket.GetComponent<Rigidbody>();
         if (rb != null) Destroy(rb);
         
-        // Add a rigidbody for velocity tracking and collision detection
-        rb = racket.AddComponent<Rigidbody>();
-        // For local rackets: kinematic (we control position)
-        // For remote rackets: non-kinematic (needs to collide with ball)
-        // We'll set this based on racket name after creation
-        rb.isKinematic = true; // Default, will be changed for remote rackets
-        rb.useGravity = false;
-        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic; // Better collision detection
-        rb.interpolation = RigidbodyInterpolation.Interpolate; // Smooth movement
-        
-        // Set tag for collision detection
-        racket.tag = "Racket";
-        
-        // Ensure there's a collider
-        var existingCollider = racket.GetComponent<Collider>();
-        if (existingCollider == null)
-        {
-            // Add a box collider if none exists
-            var boxCollider = racket.AddComponent<BoxCollider>();
-            boxCollider.size = new Vector3(0.15f, 0.01f, 0.15f); // Flat paddle shape
-            boxCollider.isTrigger = false; // Use collision, not trigger
-            Debug.Log("[ControllerRacket] Added box collider to racket");
-        }
-        else
-        {
-            // Make sure existing collider is not a trigger
-            existingCollider.isTrigger = false;
-        }
-        
-        // Also tag all child objects that have colliders
-        foreach (var childCollider in racket.GetComponentsInChildren<Collider>())
-        {
-            childCollider.gameObject.tag = "Racket";
-            childCollider.isTrigger = false;
-        }
-        
-        Debug.Log($"[ControllerRacket] Racket setup complete: {racket.name}, tag={racket.tag}");
-    }
-    
-    private void FixedUpdate()
-    {
-        // Update racket velocities for collision detection
-        if (leftRacketRb != null && leftRacket != null && leftRacket.activeSelf)
-        {
-            Vector3 currentPos = leftRacket.transform.position;
-            leftRacketRb.velocity = (currentPos - lastLeftPos) / Time.fixedDeltaTime;
-            lastLeftPos = currentPos;
-        }
-        
-        if (rightRacketRb != null && rightRacket != null && rightRacket.activeSelf)
-        {
-            Vector3 currentPos = rightRacket.transform.position;
-            rightRacketRb.velocity = (currentPos - lastRightPos) / Time.fixedDeltaTime;
-            lastRightPos = currentPos;
-        }
+        // Keep collider for ball hits
     }
     
     private void Update()
     {
-        // Only process input for local player
-        if (!isLocalPlayer) return;
-        
         // Retry finding racket if not found in Start
         if (racketPrefab == null)
         {
@@ -471,199 +285,39 @@ public class ControllerRacket : NetworkBehaviour
         if (leftController == null || rightController == null)
         {
             FindControllers();
-            // If we just found controllers and have racketPrefab but no rackets, create them
-            if (leftController != null && rightController != null && racketPrefab != null)
-            {
-                if (leftRacket == null || rightRacket == null)
-                {
-                    Debug.Log("[ControllerRacket] Controllers found - creating rackets now");
-                    CreateRacketOnController();
-                }
-            }
             return;
         }
         
-        // Ensure rackets are created (they might not exist if controllers were found late)
-        if ((leftRacket == null || rightRacket == null) && racketPrefab != null)
-        {
-            Debug.Log("[ControllerRacket] Rackets missing but have prefab - creating now");
-            CreateRacketOnController();
-        }
-        
-        // Toggle adjust mode with A button (Button.One on right controller)
-        if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch))
-        {
-            isAdjustMode = !isAdjustMode;
-            Debug.Log($"[ControllerRacket] Adjust mode: {(isAdjustMode ? "ON - Use thumbsticks to adjust racket" : "OFF")}");
-            if (isAdjustMode)
-            {
-                Debug.Log("[ControllerRacket] Left stick: Position (X/Y), Right stick X: Rotation Z, Right stick Y: Rotation X");
-            }
-        }
-        
-        // Handle racket adjustment when in adjust mode
-        if (isAdjustMode)
-        {
-            HandleRacketAdjustment();
-        }
-        
-        // Y button (left controller) = toggle LEFT racket (deactivates right)
-        // B button (right controller) = toggle RIGHT racket (deactivates left)
-        // Only ONE racket can be active at a time
+        // Check for toggle on left controller (Y button)
         bool leftPressed = OVRInput.Get(leftActivateButton, OVRInput.Controller.LTouch);
-        bool rightPressed = OVRInput.Get(rightActivateButton, OVRInput.Controller.RTouch);
-        
-        // Toggle LEFT racket with Y button (and deactivate right)
         if (leftPressed && !leftWasPressed)
         {
-            Debug.Log($"[RACKET_DEBUG] Y button pressed! leftRacket={leftRacket}, leftController={leftController}");
-            
             leftActive = !leftActive;
-            
-            // If activating left, deactivate right
-            if (leftActive)
-            {
-                rightActive = false;
-                if (rightRacket != null)
-                {
-                    rightRacket.SetActive(false);
-                    if (!showControllersAlways)
-                    {
-                        SetControllerVisualActive(rightControllerVisual, true, rightController);
-                    }
-                }
-            }
-            
             if (leftRacket != null)
             {
                 leftRacket.SetActive(leftActive);
-                if (!showControllersAlways)
-                {
-                    SetControllerVisualActive(leftControllerVisual, !leftActive, leftController);
-                }
-                Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}, position={leftRacket.transform.position}");
-            }
-            else
-            {
-                Debug.LogError($"[RACKET_DEBUG] leftRacket is NULL! Trying to create now...");
-                // Try to create rackets if they weren't created before
-                if (racketPrefab != null && leftController != null)
-                {
-                    CreateRacketOnController();
-                    if (leftRacket != null)
-                    {
-                        leftRacket.SetActive(leftActive);
-                        Debug.Log($"[RACKET_DEBUG] Left racket created on demand and set to: {leftActive}");
-                    }
-                }
-                else
-                {
-                    Debug.LogError($"[RACKET_DEBUG] Cannot create: racketPrefab={racketPrefab}, leftController={leftController}");
-                }
+                SetControllerVisualActive(leftControllerVisual, !leftActive);
+                Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}");
             }
         }
+        leftWasPressed = leftPressed;
         
-        // Toggle RIGHT racket with B button (and deactivate left)
+        // Check for toggle on right controller (B button)
+        bool rightPressed = OVRInput.Get(rightActivateButton, OVRInput.Controller.RTouch);
         if (rightPressed && !rightWasPressed)
         {
-            Debug.Log($"[RACKET_DEBUG] B button pressed! rightRacket={rightRacket}, rightController={rightController}");
-            
             rightActive = !rightActive;
-            
-            // If activating right, deactivate left
-            if (rightActive)
-            {
-                leftActive = false;
-                if (leftRacket != null)
-                {
-                    leftRacket.SetActive(false);
-                    if (!showControllersAlways)
-                    {
-                        SetControllerVisualActive(leftControllerVisual, true, leftController);
-                    }
-                }
-            }
-            
             if (rightRacket != null)
             {
                 rightRacket.SetActive(rightActive);
-                if (!showControllersAlways)
-                {
-                    SetControllerVisualActive(rightControllerVisual, !rightActive, rightController);
-                }
-                Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}, position={rightRacket.transform.position}");
-            }
-            else
-            {
-                Debug.LogError($"[RACKET_DEBUG] rightRacket is NULL! Trying to create now...");
-                // Try to create rackets if they weren't created before
-                if (racketPrefab != null && rightController != null)
-                {
-                    CreateRacketOnController();
-                    if (rightRacket != null)
-                    {
-                        rightRacket.SetActive(rightActive);
-                        Debug.Log($"[RACKET_DEBUG] Right racket created on demand and set to: {rightActive}");
-                    }
-                }
-                else
-                {
-                    Debug.LogError($"[RACKET_DEBUG] Cannot create: racketPrefab={racketPrefab}, rightController={rightController}");
-                }
+                SetControllerVisualActive(rightControllerVisual, !rightActive);
+                Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}");
             }
         }
-        
-        leftWasPressed = leftPressed;
         rightWasPressed = rightPressed;
     }
     
-    /// <summary>
-    /// Handle racket position/rotation adjustment using thumbsticks
-    /// </summary>
-    private void HandleRacketAdjustment()
-    {
-        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
-        Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch);
-        
-        bool changed = false;
-        
-        // Left stick X: Adjust rotation Y (yaw)
-        if (Mathf.Abs(leftStick.x) > 0.1f)
-        {
-            racketRotation.y += leftStick.x * rotationAdjustSpeed * Time.deltaTime;
-            changed = true;
-        }
-        
-        // Right stick X: Adjust rotation Z (roll)
-        if (Mathf.Abs(rightStick.x) > 0.1f)
-        {
-            racketRotation.z += rightStick.x * rotationAdjustSpeed * Time.deltaTime;
-            changed = true;
-        }
-        
-        // Apply changes to both rackets
-        if (changed)
-        {
-            if (leftRacket != null)
-            {
-                leftRacket.transform.localPosition = racketOffset;
-                leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-            }
-            if (rightRacket != null)
-            {
-                rightRacket.transform.localPosition = racketOffset;
-                rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-            }
-            
-            // Log current values periodically
-            if (Time.frameCount % 30 == 0)
-            {
-                Debug.Log($"[ControllerRacket] Rotation: X={racketRotation.x:F1}, Y={racketRotation.y:F1}, Z={racketRotation.z:F1}");
-            }
-        }
-    }
-    
-    private void SetControllerVisualActive(GameObject controllerVisual, bool active, Transform controllerAnchor = null)
+    private void SetControllerVisualActive(GameObject controllerVisual, bool active)
     {
         if (controllerVisual != null)
         {
@@ -684,46 +338,48 @@ public class ControllerRacket : NetworkBehaviour
             Debug.Log($"[RACKET_DEBUG] Controller visual {(active ? "SHOWN" : "HIDDEN")} - disabled {renderers.Length} renderers");
         }
         
-        // Disable ray/pointer visuals for this specific controller
-        if (controllerAnchor != null)
-        {
-            SetRayVisuals(controllerAnchor, active);
-        }
+        // Disable ray/pointer visuals
+        DisableRayVisuals(!active);
     }
     
-    private void SetRayVisuals(Transform controllerAnchor, bool show)
+    private void DisableRayVisuals(bool hide)
     {
-        if (controllerAnchor == null) return;
+        // Find and disable common ray/pointer components
+        var cameraRig = FindObjectOfType<OVRCameraRig>(true);
+        if (cameraRig == null) return;
         
-        // Disable ray/pointer components on this specific controller
-        var rayHelpers = controllerAnchor.GetComponentsInChildren<OVRRayHelper>(true);
+        // Try to find OVRRayHelper components
+        var rayHelpers = cameraRig.GetComponentsInChildren<OVRRayHelper>(true);
         foreach (var rayHelper in rayHelpers)
         {
-            rayHelper.enabled = show;
-            Debug.Log($"[RACKET_DEBUG] OVRRayHelper on {controllerAnchor.name}: {(show ? "enabled" : "disabled")}");
+            rayHelper.enabled = !hide;
         }
         
-        // Disable LineRenderer components (commonly used for rays)
-        var lineRenderers = controllerAnchor.GetComponentsInChildren<LineRenderer>(true);
+        // Try to find LineRenderer components (commonly used for rays)
+        var lineRenderers = cameraRig.GetComponentsInChildren<LineRenderer>(true);
         foreach (var lr in lineRenderers)
         {
-            lr.enabled = show;
-            Debug.Log($"[RACKET_DEBUG] LineRenderer on {controllerAnchor.name}: {(show ? "enabled" : "disabled")}");
+            lr.enabled = !hide;
         }
         
-        // Find ray/pointer objects by name and disable their renderers
-        foreach (Transform child in controllerAnchor.GetComponentsInChildren<Transform>(true))
+        // Try to find UIRaycastr or similar pointer components by name
+        foreach (Transform child in cameraRig.GetComponentsInChildren<Transform>(true))
         {
             string nameLower = child.name.ToLower();
-            if (nameLower.Contains("ray") || nameLower.Contains("pointer") || nameLower.Contains("laser") || nameLower.Contains("beam"))
+            if (nameLower.Contains("ray") || nameLower.Contains("pointer") || nameLower.Contains("laser"))
             {
-                // Disable the gameobject itself
-                child.gameObject.SetActive(show);
-                Debug.Log($"[RACKET_DEBUG] Ray object '{child.name}': {(show ? "enabled" : "disabled")}");
+                var childRenderers = child.GetComponentsInChildren<Renderer>(true);
+                foreach (var r in childRenderers)
+                {
+                    r.enabled = !hide;
+                }
             }
         }
         
-        Debug.Log($"[RACKET_DEBUG] Ray visuals for {controllerAnchor.name}: {(show ? "SHOWN" : "HIDDEN")}");
+        if (hide)
+        {
+            Debug.Log("[RACKET_DEBUG] Disabled ray/pointer visuals");
+        }
     }
     
     /// <summary>
@@ -747,281 +403,34 @@ public class ControllerRacket : NetworkBehaviour
     }
     
     /// <summary>
-    /// Create visual representations of the remote player's rackets
+    /// Get the velocity of a racket for physics calculations (e.g., ball collision)
     /// </summary>
-    private System.Collections.IEnumerator CreateRemoteRackets()
+    public Vector3 GetRacketVelocity(GameObject racketObject)
     {
-        Debug.Log("[ControllerRacket][REMOTE] Starting to create remote rackets...");
-        
-        int attempts = 0;
-        // Wait for racket template to be available
-        while (racketPrefab == null && attempts < 50)
+        // Try to get velocity from Rigidbody
+        var rb = racketObject.GetComponent<Rigidbody>();
+        if (rb != null)
         {
-            TryFindRacketTemplate();
-            attempts++;
-            yield return new WaitForSeconds(0.2f);
+            return rb.velocity;
         }
         
-        if (racketPrefab == null)
+        // Try from parent
+        rb = racketObject.GetComponentInParent<Rigidbody>();
+        if (rb != null)
         {
-            Debug.LogError("[ControllerRacket][REMOTE] Failed to find racket template after 50 attempts!");
-            yield break;
+            return rb.velocity;
         }
         
-        Debug.Log($"[ControllerRacket][REMOTE] Found racket template: {racketPrefab.name}, creating remote racket visuals...");
-        
-        // Create remote racket visuals (not parented to controllers)
-        remoteRightRacket = Instantiate(racketPrefab);
-        remoteRightRacket.name = "RemoteRightRacket";
-        remoteRightRacket.transform.localScale = Vector3.one * racketScale;
-        remoteRightRacket.SetActive(false);
-        CleanupRacketComponents(remoteRightRacket);
-        remoteRightRacketRb = remoteRightRacket.GetComponent<Rigidbody>();
-        // Make non-kinematic so it can collide with ball (ball physics runs on host)
-        if (remoteRightRacketRb != null)
+        // Fallback: use controller velocity from OVRInput
+        if (racketObject == leftRacket)
         {
-            remoteRightRacketRb.isKinematic = false;
-            Debug.Log("[ControllerRacket][REMOTE] Remote right racket rigidbody set to non-kinematic for collisions");
+            return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+        }
+        if (racketObject == rightRacket)
+        {
+            return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
         }
         
-        remoteLeftRacket = Instantiate(racketPrefab);
-        remoteLeftRacket.name = "RemoteLeftRacket";
-        remoteLeftRacket.transform.localScale = Vector3.one * racketScale;
-        remoteLeftRacket.SetActive(false);
-        CleanupRacketComponents(remoteLeftRacket);
-        remoteLeftRacketRb = remoteLeftRacket.GetComponent<Rigidbody>();
-        // Make non-kinematic so it can collide with ball (ball physics runs on host)
-        if (remoteLeftRacketRb != null)
-        {
-            remoteLeftRacketRb.isKinematic = false;
-            Debug.Log("[ControllerRacket][REMOTE] Remote left racket rigidbody set to non-kinematic for collisions");
-        }
-        
-        Debug.Log("[ControllerRacket][REMOTE] Created remote player racket visuals successfully!");
-    }
-    
-    /// <summary>
-    /// Sync local racket state to network (called in FixedUpdateNetwork)
-    /// </summary>
-    public override void FixedUpdateNetwork()
-    {
-        if (!isLocalPlayer) return;
-        
-        // Need State Authority to modify networked properties
-        if (!Object.HasStateAuthority)
-        {
-            // Keep requesting until we get it
-            if (Time.frameCount % 100 == 0) // Log occasionally
-            {
-                Debug.Log("[ControllerRacket][SYNC] Still waiting for State Authority...");
-            }
-            Object.RequestStateAuthority();
-            return;
-        }
-        
-        // Find table if not found yet
-        if (tableTransform == null)
-        {
-            FindTableReference();
-        }
-        
-        // Sync right racket - use table-relative coordinates for proper alignment
-        if (rightRacket != null && rightActive)
-        {
-            // Convert world position to table-relative for sync
-            if (tableTransform != null)
-            {
-                NetworkedRightRacketPos = tableTransform.InverseTransformPoint(rightRacket.transform.position);
-                // Store rotation relative to table
-                NetworkedRightRacketRot = Quaternion.Inverse(tableTransform.rotation) * rightRacket.transform.rotation;
-            }
-            else
-            {
-                NetworkedRightRacketPos = rightRacket.transform.position;
-                NetworkedRightRacketRot = rightRacket.transform.rotation;
-            }
-            NetworkedRightRacketVisible = true;
-            
-            // Log occasionally
-            if (Time.frameCount % 300 == 0)
-            {
-                Debug.Log($"[ControllerRacket][SYNC] Syncing RIGHT racket: tableRelPos={NetworkedRightRacketPos}, worldPos={rightRacket.transform.position}");
-            }
-        }
-        else
-        {
-            if (NetworkedRightRacketVisible) // Log when visibility changes
-            {
-                Debug.Log("[ControllerRacket][SYNC] RIGHT racket now hidden");
-            }
-            NetworkedRightRacketVisible = false;
-        }
-        
-        // Sync left racket - use table-relative coordinates for proper alignment
-        if (leftRacket != null && leftActive)
-        {
-            // Convert world position to table-relative for sync
-            if (tableTransform != null)
-            {
-                NetworkedLeftRacketPos = tableTransform.InverseTransformPoint(leftRacket.transform.position);
-                // Store rotation relative to table
-                NetworkedLeftRacketRot = Quaternion.Inverse(tableTransform.rotation) * leftRacket.transform.rotation;
-            }
-            else
-            {
-                NetworkedLeftRacketPos = leftRacket.transform.position;
-                NetworkedLeftRacketRot = leftRacket.transform.rotation;
-            }
-            NetworkedLeftRacketVisible = true;
-            
-            // Log occasionally
-            if (Time.frameCount % 300 == 0)
-            {
-                Debug.Log($"[ControllerRacket][SYNC] Syncing LEFT racket: tableRelPos={NetworkedLeftRacketPos}, worldPos={leftRacket.transform.position}");
-            }
-        }
-        else
-        {
-            if (NetworkedLeftRacketVisible) // Log when visibility changes
-            {
-                Debug.Log("[ControllerRacket][SYNC] LEFT racket now hidden");
-            }
-            NetworkedLeftRacketVisible = false;
-        }
-    }
-    
-    /// <summary>
-    /// Update remote racket positions (called in Render for smooth interpolation)
-    /// </summary>
-    public override void Render()
-    {
-        if (isLocalPlayer) return;
-        
-        // Find table if not found yet
-        if (tableTransform == null)
-        {
-            FindTableReference();
-        }
-        
-        // Debug log every few seconds to see what's happening
-        if (Time.frameCount % 180 == 0)
-        {
-            Debug.Log($"[ControllerRacket][REMOTE_RENDER] Right: visible={NetworkedRightRacketVisible}, tableRelPos={NetworkedRightRacketPos}, remoteRacket={remoteRightRacket != null}, table={tableTransform != null}");
-            Debug.Log($"[ControllerRacket][REMOTE_RENDER] Left: visible={NetworkedLeftRacketVisible}, tableRelPos={NetworkedLeftRacketPos}, remoteRacket={remoteLeftRacket != null}");
-        }
-        
-        // Update remote right racket
-        if (remoteRightRacket != null)
-        {
-            bool shouldBeVisible = NetworkedRightRacketVisible;
-            if (remoteRightRacket.activeSelf != shouldBeVisible)
-            {
-                remoteRightRacket.SetActive(shouldBeVisible);
-                Debug.Log($"[ControllerRacket][REMOTE] Right racket visibility changed to: {shouldBeVisible}");
-            }
-            
-            if (shouldBeVisible)
-            {
-                // Convert table-relative position back to world position
-                Vector3 targetPos;
-                Quaternion targetRot;
-                if (tableTransform != null)
-                {
-                    targetPos = tableTransform.TransformPoint(NetworkedRightRacketPos);
-                    targetRot = tableTransform.rotation * NetworkedRightRacketRot;
-                }
-                else
-                {
-                    targetPos = NetworkedRightRacketPos;
-                    targetRot = NetworkedRightRacketRot;
-                }
-                
-                // Use Rigidbody.MovePosition for physics-based movement (allows collisions)
-                if (remoteRightRacketRb != null)
-                {
-                    remoteRightRacketRb.MovePosition(Vector3.Lerp(
-                        remoteRightRacket.transform.position, 
-                        targetPos, 
-                        Time.deltaTime * 20f));
-                    remoteRightRacketRb.MoveRotation(Quaternion.Slerp(
-                        remoteRightRacket.transform.rotation, 
-                        targetRot, 
-                        Time.deltaTime * 20f));
-                    
-                    // Manually calculate velocity for collision detection
-                    remoteRightRacketRb.velocity = (targetPos - lastRemoteRightPos) / Time.deltaTime;
-                    lastRemoteRightPos = remoteRightRacket.transform.position;
-                }
-                else
-                {
-                    // Fallback if no rigidbody
-                    remoteRightRacket.transform.position = Vector3.Lerp(
-                        remoteRightRacket.transform.position, 
-                        targetPos, 
-                        Time.deltaTime * 20f);
-                    remoteRightRacket.transform.rotation = Quaternion.Slerp(
-                        remoteRightRacket.transform.rotation, 
-                        targetRot, 
-                        Time.deltaTime * 20f);
-                }
-            }
-        }
-        
-        // Update remote left racket
-        if (remoteLeftRacket != null)
-        {
-            bool shouldBeVisible = NetworkedLeftRacketVisible;
-            if (remoteLeftRacket.activeSelf != shouldBeVisible)
-            {
-                remoteLeftRacket.SetActive(shouldBeVisible);
-                Debug.Log($"[ControllerRacket][REMOTE] Left racket visibility changed to: {shouldBeVisible}");
-            }
-            
-            if (shouldBeVisible)
-            {
-                // Convert table-relative position back to world position
-                Vector3 targetPos;
-                Quaternion targetRot;
-                if (tableTransform != null)
-                {
-                    targetPos = tableTransform.TransformPoint(NetworkedLeftRacketPos);
-                    targetRot = tableTransform.rotation * NetworkedLeftRacketRot;
-                }
-                else
-                {
-                    targetPos = NetworkedLeftRacketPos;
-                    targetRot = NetworkedLeftRacketRot;
-                }
-                
-                // Use Rigidbody.MovePosition for physics-based movement (allows collisions)
-                if (remoteLeftRacketRb != null)
-                {
-                    remoteLeftRacketRb.MovePosition(Vector3.Lerp(
-                        remoteLeftRacket.transform.position, 
-                        targetPos, 
-                        Time.deltaTime * 20f));
-                    remoteLeftRacketRb.MoveRotation(Quaternion.Slerp(
-                        remoteLeftRacket.transform.rotation, 
-                        targetRot, 
-                        Time.deltaTime * 20f));
-                    
-                    // Manually calculate velocity for collision detection
-                    remoteLeftRacketRb.velocity = (targetPos - lastRemoteLeftPos) / Time.deltaTime;
-                    lastRemoteLeftPos = remoteLeftRacket.transform.position;
-                }
-                else
-                {
-                    // Fallback if no rigidbody
-                    remoteLeftRacket.transform.position = Vector3.Lerp(
-                        remoteLeftRacket.transform.position, 
-                        targetPos, 
-                        Time.deltaTime * 20f);
-                    remoteLeftRacket.transform.rotation = Quaternion.Slerp(
-                        remoteLeftRacket.transform.rotation, 
-                        targetRot, 
-                        Time.deltaTime * 20f);
-                }
-            }
-        }
+        return Vector3.zero;
     }
 }
