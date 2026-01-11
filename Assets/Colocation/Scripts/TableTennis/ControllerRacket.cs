@@ -178,9 +178,11 @@ public class ControllerRacket : MonoBehaviour
     
     private void CreateControllerRackets()
     {
+        // If no racket prefab found, create a placeholder
         if (racketPrefab == null)
         {
-            Debug.LogError("[ControllerRacket] Racket prefab not assigned and couldn't be found!");
+            Debug.LogWarning("[ControllerRacket] No racket prefab found - creating placeholder rackets");
+            CreatePlaceholderRackets();
             return;
         }
         
@@ -501,4 +503,116 @@ public class ControllerRacket : MonoBehaviour
     /// Check if racket is on right hand
     /// </summary>
     public bool IsRacketOnRight => isRacketOnRightHand;
+    
+    /// <summary>
+    /// Set the racket prefab externally (for passthrough mode)
+    /// </summary>
+    public void SetRacketPrefab(GameObject prefab)
+    {
+        if (prefab != null && racketPrefab == null)
+        {
+            racketPrefab = prefab;
+            Debug.Log($"[ControllerRacket] Racket prefab set externally: {prefab.name}");
+            
+            // If we already have controllers, create the rackets now
+            if (leftController != null && rightController != null && leftRacket == null && rightRacket == null)
+            {
+                CreateControllerRackets();
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Force initialization (for when added dynamically)
+    /// </summary>
+    public void ForceInit()
+    {
+        if (leftController == null || rightController == null)
+        {
+            FindControllers();
+        }
+        
+        if (racketPrefab == null)
+        {
+            TryFindRacketTemplate();
+        }
+        
+        // Create rackets - will use placeholder if no prefab found
+        if (leftRacket == null && rightRacket == null)
+        {
+            CreateControllerRackets();
+        }
+    }
+    
+    /// <summary>
+    /// Create placeholder rackets when no prefab is available
+    /// </summary>
+    private void CreatePlaceholderRackets()
+    {
+        Debug.Log("[ControllerRacket] Creating placeholder rackets...");
+        
+        // Create left racket
+        if (leftController != null && leftRacket == null)
+        {
+            leftRacket = CreateSinglePlaceholderRacket("LeftControllerRacket");
+            leftRacket.transform.SetParent(leftController, false);
+            leftRacket.transform.localPosition = racketOffset;
+            leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
+            leftRacket.transform.localScale = Vector3.one * 0.15f; // Smaller scale for placeholder
+            leftRacket.SetActive(false);
+            CleanupRacketComponents(leftRacket);
+            Debug.Log("[ControllerRacket] Created placeholder left racket");
+        }
+        
+        // Create right racket
+        if (rightController != null && rightRacket == null)
+        {
+            rightRacket = CreateSinglePlaceholderRacket("RightControllerRacket");
+            rightRacket.transform.SetParent(rightController, false);
+            rightRacket.transform.localPosition = racketOffset;
+            rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
+            rightRacket.transform.localScale = Vector3.one * 0.15f; // Smaller scale for placeholder
+            rightRacket.SetActive(false);
+            CleanupRacketComponents(rightRacket);
+            Debug.Log("[ControllerRacket] Created placeholder right racket");
+        }
+        
+        // Show one racket by default (right hand)
+        UpdateRacketVisibility();
+        
+        Debug.Log("[ControllerRacket] Placeholder rackets created - B/Y to switch hands");
+    }
+    
+    /// <summary>
+    /// Create a single placeholder racket (handle + paddle)
+    /// </summary>
+    private GameObject CreateSinglePlaceholderRacket(string name)
+    {
+        var racket = new GameObject(name);
+        racket.tag = "Racket";
+        
+        // Handle (cylinder)
+        var handle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        handle.name = "Handle";
+        handle.transform.SetParent(racket.transform);
+        handle.transform.localPosition = new Vector3(0, -0.08f, 0);
+        handle.transform.localScale = new Vector3(0.03f, 0.08f, 0.03f);
+        handle.GetComponent<Renderer>().material.color = new Color(0.5f, 0.3f, 0.1f); // Brown wood
+        var handleCol = handle.GetComponent<Collider>();
+        if (handleCol != null) Destroy(handleCol);
+        
+        // Paddle head (flattened cylinder for better shape)
+        var paddle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        paddle.name = "Paddle";
+        paddle.transform.SetParent(racket.transform);
+        paddle.transform.localPosition = new Vector3(0, 0.06f, 0);
+        paddle.transform.localScale = new Vector3(0.12f, 0.01f, 0.12f);
+        paddle.GetComponent<Renderer>().material.color = Color.red; // Red paddle
+        paddle.tag = "Racket";
+        
+        // The collider on paddle will be used for ball collision
+        // CleanupRacketComponents will add proper rigidbody
+        
+        return racket;
+    }
 }

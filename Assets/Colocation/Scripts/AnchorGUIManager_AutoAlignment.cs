@@ -64,16 +64,16 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
     private PassthroughGamePhase passthroughPhase = PassthroughGamePhase.Idle;
     
-    // Racket references
+    // Racket references (synced from ControllerRacket)
     private GameObject leftRacket;
     private GameObject rightRacket;
     private bool racketsVisible = true; // Track if rackets should be visible
-    private bool isRacketOnRightHand = true; // B/Y switches which hand has the racket
+    private bool isRacketOnRightHand = true; // Synced from ControllerRacket
     
-    // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
-    private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
-    private Vector3 racketRotation = new Vector3(-51f, 240f, 43f);
-    private float racketScale = 10f;
+    // Remote racket display constants (must match ControllerRacket settings)
+    private static readonly Vector3 RemoteRacketOffset = new Vector3(0f, 0.03f, 0.04f);
+    private static readonly Vector3 RemoteRacketRotation = new Vector3(-51f, 240f, 43f);
+    private const float RemoteRacketScale = 10f;
     
     // Remote racket smoothing and periodic alignment
     private float remoteRacketLerpSpeed = 15f; // How fast remote racket follows synced position
@@ -761,8 +761,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 Vector3 targetWorldPos = anchor.TransformPoint(remoteLeftPos);
                 Quaternion targetWorldRot = anchor.rotation * remoteLeftRot;
                 // Apply offset in the hand's local space
-                Vector3 targetPos = targetWorldPos + targetWorldRot * racketOffset;
-                Quaternion targetRot = targetWorldRot * Quaternion.Euler(racketRotation);
+                Vector3 targetPos = targetWorldPos + targetWorldRot * RemoteRacketOffset;
+                Quaternion targetRot = targetWorldRot * Quaternion.Euler(RemoteRacketRotation);
                 
                 // Lerp for smooth movement, snap on periodic alignment
                 remoteLeftRacket.transform.position = Vector3.Lerp(remoteLeftRacket.transform.position, targetPos, lerpFactor);
@@ -780,8 +780,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 Vector3 targetWorldPos = anchor.TransformPoint(remoteRightPos);
                 Quaternion targetWorldRot = anchor.rotation * remoteRightRot;
                 // Apply offset in the hand's local space
-                Vector3 targetPos = targetWorldPos + targetWorldRot * racketOffset;
-                Quaternion targetRot = targetWorldRot * Quaternion.Euler(racketRotation);
+                Vector3 targetPos = targetWorldPos + targetWorldRot * RemoteRacketOffset;
+                Quaternion targetRot = targetWorldRot * Quaternion.Euler(RemoteRacketRotation);
                 
                 // Lerp for smooth movement, snap on periodic alignment
                 remoteRightRacket.transform.position = Vector3.Lerp(remoteRightRacket.transform.position, targetPos, lerpFactor);
@@ -807,8 +807,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             {
                 remoteLeftRacket = Instantiate(template);
                 remoteLeftRacket.name = "RemoteLeftRacket";
-                remoteLeftRacket.transform.localScale = Vector3.one * 10f;
-                CleanupRacketPhysics(remoteLeftRacket);
+                remoteLeftRacket.transform.localScale = Vector3.one * RemoteRacketScale;
+                CleanupRemoteRacketPhysics(remoteLeftRacket);
                 remoteLeftRacket.SetActive(false);
                 Debug.Log("[Passthrough] Created remote left racket");
             }
@@ -817,25 +817,68 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             {
                 remoteRightRacket = Instantiate(template);
                 remoteRightRacket.name = "RemoteRightRacket";
-                remoteRightRacket.transform.localScale = Vector3.one * 10f;
-                CleanupRacketPhysics(remoteRightRacket);
+                remoteRightRacket.transform.localScale = Vector3.one * RemoteRacketScale;
+                CleanupRemoteRacketPhysics(remoteRightRacket);
                 remoteRightRacket.SetActive(false);
                 Debug.Log("[Passthrough] Created remote right racket");
             }
         }
         else
         {
-            // Create placeholder rackets
+            // Create simple placeholder rackets for remote player
             if (remoteLeftRacket == null)
             {
-                remoteLeftRacket = CreatePlaceholderRacket("RemoteLeftRacket");
+                remoteLeftRacket = CreateSimpleRemoteRacket("RemoteLeftRacket");
                 remoteLeftRacket.SetActive(false);
             }
             if (remoteRightRacket == null)
             {
-                remoteRightRacket = CreatePlaceholderRacket("RemoteRightRacket");
+                remoteRightRacket = CreateSimpleRemoteRacket("RemoteRightRacket");
                 remoteRightRacket.SetActive(false);
             }
+        }
+    }
+    
+    /// <summary>
+    /// Create a simple visual-only racket for remote player display
+    /// </summary>
+    private GameObject CreateSimpleRemoteRacket(string name)
+    {
+        var racket = new GameObject(name);
+        
+        // Handle (cylinder)
+        var handle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        handle.transform.SetParent(racket.transform);
+        handle.transform.localPosition = new Vector3(0, -0.08f, 0);
+        handle.transform.localScale = new Vector3(0.025f, 0.06f, 0.025f);
+        handle.GetComponent<Renderer>().material.color = new Color(0.4f, 0.2f, 0.1f);
+        var handleCol = handle.GetComponent<Collider>();
+        if (handleCol != null) Destroy(handleCol);
+        
+        // Paddle head
+        var paddle = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        paddle.transform.SetParent(racket.transform);
+        paddle.transform.localPosition = new Vector3(0, 0.04f, 0);
+        paddle.transform.localScale = new Vector3(0.12f, 0.01f, 0.14f);
+        paddle.GetComponent<Renderer>().material.color = Color.blue; // Blue for remote
+        var paddleCol = paddle.GetComponent<Collider>();
+        if (paddleCol != null) Destroy(paddleCol);
+        
+        return racket;
+    }
+    
+    /// <summary>
+    /// Remove physics from remote rackets (they're just visuals)
+    /// </summary>
+    private void CleanupRemoteRacketPhysics(GameObject racket)
+    {
+        var rb = racket.GetComponent<Rigidbody>();
+        if (rb != null) Destroy(rb);
+        
+        var colliders = racket.GetComponentsInChildren<Collider>();
+        foreach (var col in colliders)
+        {
+            Destroy(col);
         }
     }
     
@@ -844,13 +887,25 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     /// </summary>
     private GameObject FindRacketTemplate()
     {
-        // Search by tag first
+        // First try the configured RacketPrefab
+        if (RacketPrefab != null)
+        {
+            // Check if it has visible meshes
+            if (RacketPrefab.GetComponent<MeshFilter>() != null || RacketPrefab.GetComponentInChildren<MeshFilter>() != null)
+            {
+                Debug.Log($"[Passthrough] Using configured RacketPrefab: {RacketPrefab.name}");
+                return RacketPrefab;
+            }
+        }
+        
+        // Search by tag
         var taggedRackets = GameObject.FindGameObjectsWithTag("Racket");
         foreach (var r in taggedRackets)
         {
-            if (r.name.Contains("Remote") || r == leftRacket || r == rightRacket) continue;
+            if (r.name.Contains("Remote") || r.name.Contains("Controller") || r == leftRacket || r == rightRacket) continue;
             if (r.GetComponent<MeshFilter>() != null || r.GetComponentInChildren<MeshFilter>() != null)
             {
+                Debug.Log($"[Passthrough] Found racket by tag: {r.name}");
                 return r;
             }
         }
@@ -861,31 +916,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             foreach (Transform child in spawnedPassthroughTable.GetComponentsInChildren<Transform>(true))
             {
                 string nameLower = child.name.ToLower();
-                if (nameLower.Contains("remote") || child.gameObject == leftRacket || child.gameObject == rightRacket) continue;
+                if (nameLower.Contains("remote") || nameLower.Contains("controller") || child.gameObject == leftRacket || child.gameObject == rightRacket) continue;
                 
                 if ((nameLower.Contains("racket") || nameLower.Contains("paddle")) && child.GetComponent<MeshFilter>() != null)
                 {
+                    Debug.Log($"[Passthrough] Found racket under table: {child.name}");
                     return child.gameObject;
                 }
             }
         }
         
+        Debug.LogWarning("[Passthrough] No racket template found!");
         return null;
-    }
-    
-    /// <summary>
-    /// Remove physics from remote rackets (they're just visuals)
-    /// </summary>
-    private void CleanupRacketPhysics(GameObject racket)
-    {
-        var rb = racket.GetComponent<Rigidbody>();
-        if (rb != null) Destroy(rb);
-        
-        var colliders = racket.GetComponentsInChildren<Collider>();
-        foreach (var col in colliders)
-        {
-            Destroy(col);
-        }
     }
 #endif
 
@@ -1681,37 +1723,28 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             if (anchorsToShare.Count == 0)
             {
-                Log("No valid anchors to share after save attempt.", true);
-                Log("TROUBLESHOOTING: Make sure cloud storage is enabled in Meta Quest settings.", true);
+                Log("Sharing Error!", true);
                 return;
             }
 
-            Log($"Sharing {anchorsToShare.Count} anchors to group {_sharedAnchorGroupId}...");
-            Log($"Anchor UUIDs being shared:");
-            foreach (var anchor in anchorsToShare)
-            {
-                Log($"  - {anchor.Uuid} at {anchor.transform.position}");
-            }
+            Log("Sharing...");
             
             var shareResult = await OVRSpatialAnchor.ShareAsync(anchorsToShare, _sharedAnchorGroupId);
-            Log($"ShareAsync completed. Success={shareResult.Success}, Status={shareResult.Status}");
 
             if (shareResult.Success)
             {
-                Log($"Sharing complete. {anchorsToShare.Count} anchors shared. Waiting for client...");
+                Log("Sharing Success!");
                 currentStep = AlignmentStep.Done;
                 currentState = SessionState.Sharing; // Host is sharing, not aligned until client joins
                 
                 // IMPORTANT: Set networked flag so client knows anchors are ready
                 HostAnchorsShared = true;
                 SharedAnchorGroupUuidString = _sharedAnchorGroupId.ToString();
-                Log($"Networked anchor state set: HostAnchorsShared=true, UUID={_sharedAnchorGroupId.ToString().Substring(0, 8)}");
 
                 // HOST ALIGNMENT
                 if (anchorsToShare.Count >= 2)
                 {
                     // Host aligns to its own anchors
-                    Log("Host: Aligning to 2 anchors...");
                     _localizedAnchor = anchorsToShare[0];
                     
                     // Log anchor positions BEFORE alignment
@@ -1741,29 +1774,22 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             }
             else
             {
-                Log($"Failed to share anchors. Status: {shareResult.Status}", true);
-                Log("TROUBLESHOOTING:", true);
-                Log("1. Check Meta Quest Settings > Privacy > Spatial Data > Allow apps to share", true);
-                Log("2. Make sure both devices are signed into Meta accounts", true);
-                Log("3. Ensure internet connection is active", true);
-                Log($"4. Group UUID: {_sharedAnchorGroupId}", true);
+                Log("Sharing Error!", true);
                 
                 // Reset state to allow retry
                 currentStep = AlignmentStep.ShareFailed;
                 currentState = SessionState.Advertising; // Keep advertising so client can still discover
                 UpdateUIWizard();
-                
-                // Show error in status text
-                if (statusText != null)
-                {
-                    statusText.text = $"Sharing FAILED!\n{shareResult.Status}\n\nPress button to RETRY";
-                }
             }
         }
         catch (Exception e)
         {
-            Log($"Error in ShareAnchors: {e.Message}", true);
-            Log($"Stack trace: {e.StackTrace}", true);
+            Log("Sharing Error!", true);
+            Debug.LogError($"ShareAnchors exception: {e.Message}\n{e.StackTrace}");
+            
+            // Allow retry
+            currentStep = AlignmentStep.ShareFailed;
+            UpdateUIWizard();
         }
     }
 
@@ -2466,52 +2492,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         }
 #endif
         
-        // Spawn rackets for passthrough mode (hidden initially, will be attached to controllers by EnableRackets)
-        SpawnPassthroughRackets();
-        
         // Create game UI panel 2m away from table
         CreatePassthroughGameUIPanel();
-    }
-    
-    // Spawned racket templates for passthrough (hidden, used as source for controller rackets)
-    private GameObject passthroughRacketTemplate;
-    
-    /// <summary>
-    /// Spawn racket templates for passthrough mode. These are hidden and used as templates
-    /// for the rackets that get attached to controllers.
-    /// </summary>
-    private void SpawnPassthroughRackets()
-    {
-        // Don't spawn if already exists
-        if (passthroughRacketTemplate != null) return;
-        
-        // Create a racket template (will be cloned for left/right hands)
-        if (RacketPrefab != null)
-        {
-            // Use prefab if available
-            passthroughRacketTemplate = Instantiate(RacketPrefab);
-            passthroughRacketTemplate.name = "PassthroughRacketTemplate";
-            Debug.Log("[Passthrough] Spawned racket template from prefab");
-        }
-        else
-        {
-            // Create a simple placeholder racket
-            passthroughRacketTemplate = CreatePlaceholderRacket("PassthroughRacketTemplate");
-            Debug.Log("[Passthrough] Created placeholder racket template");
-        }
-        
-        // Tag it so EnableRackets can find it
-        passthroughRacketTemplate.tag = "Racket";
-        
-        // Parent to table and hide it (it's just a template)
-        if (spawnedPassthroughTable != null)
-        {
-            passthroughRacketTemplate.transform.SetParent(spawnedPassthroughTable.transform);
-        }
-        passthroughRacketTemplate.transform.localPosition = new Vector3(0, 0.5f, 0); // Above table
-        passthroughRacketTemplate.SetActive(false); // Hidden - just a template
-        
-        Debug.Log("[Passthrough] Racket template created and hidden (will be cloned for controllers)");
     }
     
     /// <summary>
@@ -2762,15 +2744,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
         
-        // B/Y button - switch which hand holds the racket (except during Playing phase)
-        bool bButtonPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
-        bool yButtonPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
-        
-        if ((bButtonPressed || yButtonPressed) && passthroughPhase != PassthroughGamePhase.Playing)
-        {
-            SwitchRacketHand();
-            return;
-        }
+        // Sync racket state from ControllerRacket (it handles B/Y input internally)
+        SyncWithControllerRacket();
         
         // A/X button detection for phase-specific handling
         bool aButtonPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
@@ -3144,13 +3119,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             remoteRightRacket = null;
         }
         
-        // Destroy passthrough template
-        if (passthroughRacketTemplate != null)
-        {
-            Destroy(passthroughRacketTemplate);
-            passthroughRacketTemplate = null;
-        }
-        
         // Destroy passthrough UI panel
         if (passthroughGameUIPanel != null)
         {
@@ -3166,27 +3134,20 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
     
     /// <summary>
-    /// Switch which hand holds the racket (B/Y button)
-    /// Only one local racket is visible at a time
+    /// Sync racket state from ControllerRacket (called in Update)
     /// </summary>
-    private void SwitchRacketHand()
+    private void SyncWithControllerRacket()
     {
-        isRacketOnRightHand = !isRacketOnRightHand;
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig == null) return;
         
-        // Show only the racket on the active hand
-        if (leftRacket != null) leftRacket.SetActive(!isRacketOnRightHand);
-        if (rightRacket != null) rightRacket.SetActive(isRacketOnRightHand);
-        
-        Log($"Racket switched to {(isRacketOnRightHand ? "RIGHT" : "LEFT")} hand");
-    }
-    
-    /// <summary>
-    /// Apply racket visibility based on which hand is active
-    /// </summary>
-    private void ApplyRacketVisibility()
-    {
-        if (leftRacket != null) leftRacket.SetActive(racketsVisible && !isRacketOnRightHand);
-        if (rightRacket != null) rightRacket.SetActive(racketsVisible && isRacketOnRightHand);
+        var controllerRacket = cameraRig.GetComponentInChildren<ControllerRacket>(true);
+        if (controllerRacket != null && controllerRacket.enabled)
+        {
+            isRacketOnRightHand = controllerRacket.IsRacketOnRight;
+            leftRacket = controllerRacket.GetRacket(OVRInput.Controller.LTouch);
+            rightRacket = controllerRacket.GetRacket(OVRInput.Controller.RTouch);
+        }
     }
     
     /// <summary>
@@ -3434,18 +3395,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
     
     /// <summary>
-    /// Enable rackets on both controllers (uses controller anchors for stability, not hand anchors)
+    /// Enable rackets by using the ControllerRacket script (same as VR mode)
     /// </summary>
     private void EnableRackets()
     {
-        Debug.Log("[Passthrough] EnableRackets called - using controller anchors for stability");
-        
-        // Disable any existing ControllerRacket scripts to prevent conflicts
-        var existingControllerRackets = FindObjectsOfType<ControllerRacket>();
-        foreach (var cr in existingControllerRackets)
-        {
-            cr.enabled = false;
-        }
+        Debug.Log("[Passthrough] EnableRackets called - using ControllerRacket script");
         
         var cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig == null)
@@ -3454,338 +3408,63 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
         
-        // Use CONTROLLER anchors (stable) instead of hand anchors (can drift)
-        Transform leftController = cameraRig.leftControllerAnchor;
-        Transform rightController = cameraRig.rightControllerAnchor;
-        
-        if (leftController == null || rightController == null)
-        {
-            Debug.LogWarning("[Passthrough] Controller anchors not found!");
-            return;
-        }
-        
-        Debug.Log($"[Passthrough] Found controller anchors. Left: {leftController.name}, Right: {rightController.name}");
-        Debug.Log($"[Passthrough] RacketPrefab is {(RacketPrefab != null ? RacketPrefab.name : "NULL")}");
-        
         DisableRayInteractors();
         racketsVisible = true;
         
-        bool racketsCreated = false;
-        
-        // Method 1: Spawn from prefab (but verify it has visible meshes)
-        if (RacketPrefab != null)
+        // Find or create ControllerRacket component on camera rig
+        var controllerRacket = cameraRig.GetComponentInChildren<ControllerRacket>(true);
+        if (controllerRacket == null)
         {
-            Debug.Log("[Passthrough] Creating rackets from prefab...");
-            
-            // First check if the prefab has any visible meshes
-            bool prefabHasMesh = RacketPrefab.GetComponent<MeshRenderer>() != null ||
-                                  RacketPrefab.GetComponent<SkinnedMeshRenderer>() != null ||
-                                  RacketPrefab.GetComponentInChildren<MeshRenderer>() != null ||
-                                  RacketPrefab.GetComponentInChildren<SkinnedMeshRenderer>() != null;
-            
-            if (!prefabHasMesh)
+            // Add ControllerRacket to camera rig - it will handle everything
+            controllerRacket = cameraRig.gameObject.AddComponent<ControllerRacket>();
+            Debug.Log("[Passthrough] Added ControllerRacket component to OVRCameraRig");
+        }
+        
+        // Try to find a racket template from the passthrough table and set it
+        GameObject racketTemplate = FindRacketTemplate();
+        if (racketTemplate != null)
+        {
+            controllerRacket.SetRacketPrefab(racketTemplate);
+            Debug.Log($"[Passthrough] Set racket prefab to: {racketTemplate.name}");
+        }
+        
+        // Enable the script
+        controllerRacket.enabled = true;
+        
+        // Force initialization in case it was added dynamically
+        controllerRacket.ForceInit();
+        
+        // Store references to the rackets created by ControllerRacket for syncing
+        StartCoroutine(CaptureControllerRacketReferences(controllerRacket));
+        
+        Debug.Log("[Passthrough] ControllerRacket enabled - B/Y to switch hands");
+    }
+    
+    /// <summary>
+    /// Capture racket references from ControllerRacket after it initializes
+    /// </summary>
+    private System.Collections.IEnumerator CaptureControllerRacketReferences(ControllerRacket controllerRacket)
+    {
+        // Wait for ControllerRacket to initialize
+        yield return new WaitForSeconds(0.5f);
+        
+        // Get references from ControllerRacket for network syncing
+        var activeRacket = controllerRacket.GetActiveRacket();
+        if (activeRacket != null)
+        {
+            if (controllerRacket.IsRacketOnRight)
             {
-                Debug.LogWarning($"[Passthrough] RacketPrefab '{RacketPrefab.name}' has no visible meshes! Searching scene for racket models...");
+                rightRacket = activeRacket;
+                leftRacket = controllerRacket.GetRacket(OVRInput.Controller.LTouch);
             }
             else
             {
-                if (leftRacket == null)
-                {
-                    // Instantiate without parent first to avoid inheriting rotations (matching ControllerRacket)
-                    leftRacket = Instantiate(RacketPrefab);
-                    leftRacket.name = "LeftRacket";
-                    
-                    // Set parent with worldPositionStays=false
-                    leftRacket.transform.SetParent(leftController, false);
-                    
-                    // Reset to identity first, then apply our offset/rotation
-                    leftRacket.transform.localPosition = racketOffset;
-                    leftRacket.transform.localRotation = Quaternion.identity;
-                    leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-                    leftRacket.transform.localScale = Vector3.one * racketScale;
-                    
-                    // Remove ControllerRacket component if it exists (we handle it manually)
-                    var controllerRacket = leftRacket.GetComponent<ControllerRacket>();
-                    if (controllerRacket != null) Destroy(controllerRacket);
-                    
-                    // Setup physics for ball collision (not remove!)
-                    SetupRacketPhysics(leftRacket);
-                    
-                    Debug.Log($"[Passthrough] Created left racket: {leftRacket.name} with offset {racketOffset}, rotation {racketRotation}");
-                }
-                // Only show left racket if racket is on left hand
-                leftRacket.SetActive(!isRacketOnRightHand);
-                
-                if (rightRacket == null)
-                {
-                    // Instantiate without parent first to avoid inheriting rotations (matching ControllerRacket)
-                    rightRacket = Instantiate(RacketPrefab);
-                    rightRacket.name = "RightRacket";
-                    
-                    // Set parent with worldPositionStays=false
-                    rightRacket.transform.SetParent(rightController, false);
-                    
-                    // Reset to identity first, then apply our offset/rotation
-                    rightRacket.transform.localPosition = racketOffset;
-                    rightRacket.transform.localRotation = Quaternion.identity;
-                    rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-                    rightRacket.transform.localScale = Vector3.one * racketScale;
-                    
-                    // Remove ControllerRacket component if it exists (we handle it manually)
-                    var controllerRacket = rightRacket.GetComponent<ControllerRacket>();
-                    if (controllerRacket != null) Destroy(controllerRacket);
-                    
-                    // Setup physics for ball collision (not remove!)
-                    SetupRacketPhysics(rightRacket);
-                    
-                    Debug.Log($"[Passthrough] Created right racket: {rightRacket.name} with offset {racketOffset}, rotation {racketRotation}");
-                }
-                // Only show right racket if racket is on right hand
-                rightRacket.SetActive(isRacketOnRightHand);
-                
-                racketsCreated = true;
+                leftRacket = activeRacket;
+                rightRacket = controllerRacket.GetRacket(OVRInput.Controller.RTouch);
             }
+            isRacketOnRightHand = controllerRacket.IsRacketOnRight;
+            Debug.Log($"[Passthrough] Captured racket references from ControllerRacket. Active on {(isRacketOnRightHand ? "RIGHT" : "LEFT")}");
         }
-        
-        // Method 2: Search scene for racket models (if prefab didn't work or had no mesh)
-        if (!racketsCreated)
-        {
-            Debug.Log("[Passthrough] Searching scene for racket models...");
-            
-            // Method 2a: Search by tag (active objects only)
-            GameObject foundRacket = null;
-            var taggedRackets = GameObject.FindGameObjectsWithTag("Racket");
-            foreach (var r in taggedRackets)
-            {
-                if (r.name.Contains("Controller") || r.name.Contains("Left") || r.name.Contains("Right")) continue;
-                // Must have mesh
-                if (r.GetComponent<MeshFilter>() != null || r.GetComponentInChildren<MeshFilter>() != null)
-                {
-                    foundRacket = r;
-                    Debug.Log($"[Passthrough] Found racket by tag: {foundRacket.name}");
-                    break;
-                }
-            }
-            
-            // Method 2b: Search under spawned passthrough table
-            if (foundRacket == null && spawnedPassthroughTable != null)
-            {
-                Debug.Log($"[Passthrough] Searching passthrough table '{spawnedPassthroughTable.name}' with {spawnedPassthroughTable.GetComponentsInChildren<Transform>(true).Length} children");
-                foreach (Transform child in spawnedPassthroughTable.GetComponentsInChildren<Transform>(true))
-                {
-                    string nameLower = child.name.ToLower();
-                    // Log all mesh-containing children for debugging
-                    if (child.GetComponent<MeshFilter>() != null)
-                    {
-                        Debug.Log($"[Passthrough] Table child with mesh: {child.name}");
-                    }
-                    if (nameLower.Contains("controller") || nameLower.Contains("left") || nameLower.Contains("right")) continue;
-                    
-                    if ((nameLower.Contains("racket") || nameLower.Contains("paddle") || nameLower.Contains("bat"))
-                        && child.GetComponent<MeshFilter>() != null)
-                    {
-                        foundRacket = child.gameObject;
-                        Debug.Log($"[Passthrough] Found racket under passthrough table: {foundRacket.name}");
-                        break;
-                    }
-                }
-            }
-            
-            // Method 2c: Search ALL objects including inactive using Resources
-            if (foundRacket == null)
-            {
-                var allObjects = Resources.FindObjectsOfTypeAll<Transform>();
-                foreach (var t in allObjects)
-                {
-                    if (!t.gameObject.scene.isLoaded) continue; // Skip prefabs
-                    
-                    string nameLower = t.name.ToLower();
-                    if (nameLower.Contains("controller") || nameLower.Contains("left") || nameLower.Contains("right")) continue;
-                    
-                    if ((nameLower == "racket" || nameLower == "racket2" || nameLower.Contains("paddle") || nameLower.Contains("bat"))
-                        && t.GetComponent<MeshFilter>() != null)
-                    {
-                        foundRacket = t.gameObject;
-                        Debug.Log($"[Passthrough] Found racket in scene (may be inactive): {foundRacket.name}");
-                        break;
-                    }
-                }
-            }
-            
-            // Method 2d: Search under pingpong parent
-            if (foundRacket == null)
-            {
-                var pingPongParent = GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("PingPongTable");
-                if (pingPongParent != null)
-                {
-                    foreach (Transform child in pingPongParent.GetComponentsInChildren<Transform>(true))
-                    {
-                        string nameLower = child.name.ToLower();
-                        if (nameLower.Contains("controller") || nameLower.Contains("left") || nameLower.Contains("right")) continue;
-                        
-                        if (nameLower.Contains("racket") || nameLower.Contains("paddle") || nameLower.Contains("bat"))
-                        {
-                            foundRacket = child.gameObject;
-                            Debug.Log($"[Passthrough] Found racket under pingpong: {foundRacket.name}");
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            // Create rackets from found template
-            if (foundRacket != null)
-            {
-                Debug.Log($"[Passthrough] Creating rackets from scene template: {foundRacket.name}");
-                
-                // Hide the original
-                foundRacket.SetActive(false);
-                
-                if (leftRacket == null)
-                {
-                    // Instantiate without parent first (matching ControllerRacket)
-                    leftRacket = Instantiate(foundRacket);
-                    leftRacket.name = "LeftRacket";
-                    leftRacket.transform.SetParent(leftController, false);
-                    leftRacket.transform.localPosition = racketOffset;
-                    leftRacket.transform.localRotation = Quaternion.identity;
-                    leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-                    leftRacket.transform.localScale = Vector3.one * racketScale;
-                    var cr = leftRacket.GetComponent<ControllerRacket>();
-                    if (cr != null) Destroy(cr);
-                    SetupRacketPhysics(leftRacket);
-                }
-                // Only show left racket if racket is on left hand
-                leftRacket.SetActive(!isRacketOnRightHand);
-                
-                if (rightRacket == null)
-                {
-                    // Instantiate without parent first (matching ControllerRacket)
-                    rightRacket = Instantiate(foundRacket);
-                    rightRacket.name = "RightRacket";
-                    rightRacket.transform.SetParent(rightController, false);
-                    rightRacket.transform.localPosition = racketOffset;
-                    rightRacket.transform.localRotation = Quaternion.identity;
-                    rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-                    rightRacket.transform.localScale = Vector3.one * racketScale;
-                    var cr = rightRacket.GetComponent<ControllerRacket>();
-                    if (cr != null) Destroy(cr);
-                    SetupRacketPhysics(rightRacket);
-                }
-                // Only show right racket if racket is on right hand
-                rightRacket.SetActive(isRacketOnRightHand);
-                
-                racketsCreated = true;
-            }
-        }
-        
-        // Method 3: Create placeholder rackets (last resort)
-        if (!racketsCreated)
-        {
-            Debug.Log("[Passthrough] No rackets found in scene, creating placeholder rackets...");
-            leftRacket = CreatePlaceholderRacket("LeftRacket");
-            leftRacket.transform.SetParent(leftController, false);
-            leftRacket.transform.localPosition = racketOffset;
-            leftRacket.transform.localRotation = Quaternion.identity;
-            leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-            SetupRacketPhysics(leftRacket);
-            
-            rightRacket = CreatePlaceholderRacket("RightRacket");
-            rightRacket.transform.SetParent(rightController, false);
-            rightRacket.transform.localPosition = racketOffset;
-            rightRacket.transform.localRotation = Quaternion.identity;
-            rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
-            SetupRacketPhysics(rightRacket);
-            
-            racketsCreated = true;
-            Log("Using placeholder rackets - assign RacketPrefab for better visuals");
-        }
-        
-        // Ensure only the active hand's racket is visible
-        if (leftRacket != null)
-        {
-            leftRacket.SetActive(!isRacketOnRightHand);
-            Debug.Log($"[Passthrough] Left racket active: {leftRacket.activeSelf}, parent: {leftRacket.transform.parent?.name}");
-        }
-        if (rightRacket != null)
-        {
-            rightRacket.SetActive(isRacketOnRightHand);
-            Debug.Log($"[Passthrough] Right racket active: {rightRacket.activeSelf}, parent: {rightRacket.transform.parent?.name}");
-        }
-        
-        Debug.Log($"[Passthrough] Rackets enabled: {racketsCreated}, leftRacket={leftRacket != null}, rightRacket={rightRacket != null}");
-    }
-    
-    /// <summary>
-    /// Setup physics components on a racket for collision detection
-    /// </summary>
-    private void SetupRacketPhysics(GameObject racket)
-    {
-        // Ensure racket has proper tag
-        racket.tag = "Racket";
-        
-        // Reuse existing Rigidbody or add one
-        var rb = racket.GetComponent<Rigidbody>();
-        if (rb == null)
-        {
-            rb = racket.AddComponent<Rigidbody>();
-        }
-        rb.isKinematic = true;
-        rb.useGravity = false;
-        rb.interpolation = RigidbodyInterpolation.Interpolate;
-        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-        
-        // Ensure there's a collider (check children too)
-        var colliders = racket.GetComponentsInChildren<Collider>();
-        if (colliders.Length == 0)
-        {
-            // Add a box collider for paddle shape
-            var boxCollider = racket.AddComponent<BoxCollider>();
-            boxCollider.size = new Vector3(0.15f, 0.01f, 0.15f);
-            boxCollider.isTrigger = false;
-        }
-        else
-        {
-            // Ensure existing colliders are not triggers
-            foreach (var col in colliders)
-            {
-                col.isTrigger = false;
-                col.gameObject.tag = "Racket";
-            }
-        }
-        
-        Debug.Log($"[Passthrough] Setup physics for racket: {racket.name}");
-    }
-    
-    /// <summary>
-    /// Create a simple placeholder racket (cylinder + flat disc)
-    /// </summary>
-    private GameObject CreatePlaceholderRacket(string name)
-    {
-        var racket = new GameObject(name);
-        
-        // Handle (cylinder)
-        var handle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        handle.transform.SetParent(racket.transform);
-        handle.transform.localPosition = new Vector3(0, -0.08f, 0);
-        handle.transform.localScale = new Vector3(0.025f, 0.06f, 0.025f);
-        handle.GetComponent<Renderer>().material.color = new Color(0.4f, 0.2f, 0.1f); // Brown
-        Destroy(handle.GetComponent<Collider>()); // Remove collider from handle
-        
-        // Paddle head (flattened sphere)
-        var paddle = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        paddle.transform.SetParent(racket.transform);
-        paddle.transform.localPosition = new Vector3(0, 0.04f, 0);
-        paddle.transform.localScale = new Vector3(0.12f, 0.01f, 0.14f);
-        paddle.GetComponent<Renderer>().material.color = Color.red;
-        paddle.tag = "Racket";
-        
-        // Add rigidbody for collision detection
-        var rb = paddle.AddComponent<Rigidbody>();
-        rb.isKinematic = true;
-        rb.useGravity = false;
-        
-        return racket;
     }
     
     /// <summary>
