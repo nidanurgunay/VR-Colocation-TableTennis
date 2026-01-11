@@ -3890,7 +3890,30 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         Debug.Log("[Passthrough] Host received ball spawn request");
         if (BallPrefab != default && networkRunner != null)
         {
-            var ballObj = networkRunner.Spawn(BallPrefab, position, Quaternion.identity);
+            // IMPORTANT: Use TABLE position for spawn, not client's suggested position
+            // This ensures ball spawns at same location relative to table for both players
+            Vector3 spawnPos = position; // Default to requested position
+            
+            // Try to find table if not set
+            if (spawnedPassthroughTable == null)
+            {
+                spawnedPassthroughTable = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
+                Debug.Log($"[Passthrough] RPC_RequestSpawnBall: Searched for table, found: {(spawnedPassthroughTable != null ? spawnedPassthroughTable.name : "NULL")}");
+            }
+            
+            if (spawnedPassthroughTable != null)
+            {
+                // Spawn above table center
+                Vector3 tableWorldPos = spawnedPassthroughTable.transform.position;
+                spawnPos = new Vector3(tableWorldPos.x, tableWorldPos.y + 0.5f, tableWorldPos.z);
+                Debug.Log($"[Passthrough] Host: Table world pos: {tableWorldPos}, Ball spawn pos: {spawnPos}");
+            }
+            else
+            {
+                Debug.LogWarning($"[Passthrough] Host: spawnedPassthroughTable is NULL! Using client position: {position}");
+            }
+            
+            var ballObj = networkRunner.Spawn(BallPrefab, spawnPos, Quaternion.identity);
             if (ballObj != null)
             {
                 // Set ball to positioning mode (stable in air)
@@ -3898,8 +3921,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 if (networkedBall != null)
                 {
                     networkedBall.EnterPositioningMode();
-                    Debug.Log($"[Passthrough] Ball spawned in positioning mode at {position}");
+                    Debug.Log($"[Passthrough] Ball spawned in positioning mode at {spawnPos}");
                 }
+                
+                spawnedBall = ballObj.gameObject;
                 
                 // Notify all clients to find the ball
                 RPC_NotifyBallSpawned();

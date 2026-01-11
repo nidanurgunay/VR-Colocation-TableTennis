@@ -476,8 +476,15 @@ public class NetworkedBall : NetworkBehaviour
         // Use table as reference frame - table is aligned to same world position on both devices
         if (tableTransform != null)
         {
+            Vector3 oldRelPos = TableRelativePosition;
             TableRelativePosition = tableTransform.InverseTransformPoint(transform.position);
             TableRelativeVelocity = tableTransform.InverseTransformDirection(rb.velocity);
+            
+            // Log when position changes significantly (every sync)
+            if (Vector3.Distance(oldRelPos, TableRelativePosition) > 0.01f)
+            {
+                Debug.Log($"[NetworkedBall][HOST] SyncToNetwork: WorldPos={transform.position}, TablePos={tableTransform.position}, TableRelPos={TableRelativePosition}");
+            }
         }
     }
     
