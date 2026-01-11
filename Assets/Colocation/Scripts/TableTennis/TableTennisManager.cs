@@ -23,7 +23,7 @@ public class TableTennisManager : NetworkBehaviour
     [Header("Table Placement (relative to anchor)")]
     [SerializeField] private Vector3 tablePositionOffset = Vector3.zero; // Position offset from anchor
     [SerializeField] private float defaultTableHeight = 0.76f; // Standard ping pong table height
-    [SerializeField] private float tableXRotationOffset = 180f; // X rotation offset in degrees (180 to match passthrough mode)
+    [SerializeField] private float tableXRotationOffset = 0f; // X rotation offset in degrees (try 0 or 180 if table is upside down)
     [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset in degrees
     
     // Ensure table X rotation is set correctly (in case serialized value was different)
@@ -1303,23 +1303,26 @@ public class TableTennisManager : NetworkBehaviour
         
         Vector3 spawnPosition = Vector3.zero;
         
-        // Try to find table position for ball spawn
-        if (tableRoot != null)
+        // BEST: Use anchor + networked local position (most reliable)
+        if (sharedAnchor != null)
+        {
+            // Calculate table world position from anchor + networked local position
+            Vector3 tableLocalPos = NetworkedTableLocalPosition;
+            Vector3 tableWorldPos = sharedAnchor.TransformPoint(tableLocalPos);
+            spawnPosition = tableWorldPos + Vector3.up * 0.5f;
+            Debug.Log($"[TableTennisManager] SpawnBall: Using anchor + local pos. Anchor: {sharedAnchor.position}, TableLocal: {tableLocalPos}, TableWorld: {tableWorldPos}, BallSpawn: {spawnPosition}");
+        }
+        // FALLBACK: Use tableRoot if anchor not available
+        else if (tableRoot != null)
         {
             // Spawn 50cm above the table center
             spawnPosition = tableRoot.transform.position + Vector3.up * 0.5f;
-            Debug.Log($"[TableTennisManager] SpawnBall: Using tableRoot position: {tableRoot.transform.position}");
+            Debug.Log($"[TableTennisManager] SpawnBall: Using tableRoot position: {tableRoot.transform.position}, parent: {tableRoot.transform.parent?.name ?? "null"}");
         }
         else if (tableTransform != null)
         {
             spawnPosition = tableTransform.TransformPoint(ballSpawnOffset);
             Debug.Log($"[TableTennisManager] SpawnBall: Using tableTransform: {tableTransform.position}");
-        }
-        else if (sharedAnchor != null)
-        {
-            // 1.2m above anchor (table height + ball offset)
-            spawnPosition = sharedAnchor.position + Vector3.up * 1.2f;
-            Debug.Log($"[TableTennisManager] SpawnBall: Using sharedAnchor: {sharedAnchor.position}");
         }
         else
         {
