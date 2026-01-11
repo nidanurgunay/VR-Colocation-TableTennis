@@ -29,11 +29,16 @@ public class ControllerRacket : MonoBehaviour
     private GameObject leftRacket;
     private GameObject rightRacket;
     
-    // Toggle states
-    private bool leftActive = false;
-    private bool rightActive = false;
-    private bool leftWasPressed = false;
-    private bool rightWasPressed = false;
+    // Toggle states - now single racket mode
+    private bool isRacketOnRightHand = true; // Which hand has the racket
+    private bool wasButtonPressed = false;
+    
+    // Velocity tracking for ball collision
+    private Vector3 lastRacketPosition;
+    private Vector3 racketVelocity;
+    
+    // Rigidbody for collision detection
+    private Rigidbody activeRb;
     
     private void Start()
     {
@@ -248,7 +253,7 @@ public class ControllerRacket : MonoBehaviour
             rightRacket.transform.localRotation = Quaternion.identity; // Reset first
             rightRacket.transform.localRotation = Quaternion.Euler(racketRotation); // Then apply our rotation
             rightRacket.transform.localScale = Vector3.one * racketScale;
-            rightRacket.SetActive(false); // Hidden until activated
+            rightRacket.SetActive(false); // Will be activated by UpdateRacketVisibility
             
             Debug.Log($"[RACKET_DEBUG] Right racket created with rotation: {rightRacket.transform.localEulerAngles}");
             
@@ -256,16 +261,49 @@ public class ControllerRacket : MonoBehaviour
             CleanupRacketComponents(rightRacket);
         }
         
-        Debug.Log("[ControllerRacket] Created racket visuals on controllers (press B/Y to show)");
+        // Show one racket by default (right hand)
+        UpdateRacketVisibility();
+        
+        Debug.Log("[ControllerRacket] Created racket on controller - B/Y to switch hands");
     }
     
     private void CleanupRacketComponents(GameObject racket)
     {
-        // Remove components that shouldn't be on the controller-attached version
-        var rb = racket.GetComponent<Rigidbody>();
-        if (rb != null) Destroy(rb);
+        // Remove existing rigidbody first
+        var existingRb = racket.GetComponent<Rigidbody>();
+        if (existingRb != null) Destroy(existingRb);
         
-        // Keep collider for ball hits
+        // Add kinematic rigidbody for collision detection
+        // Kinematic = follows transform exactly, no physics forces
+        var rb = racket.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        
+        // Ensure proper tag for ball collision detection
+        racket.tag = "Racket";
+        
+        // Ensure collider exists for ball collision
+        var colliders = racket.GetComponentsInChildren<Collider>();
+        if (colliders.Length == 0)
+        {
+            var boxCol = racket.AddComponent<BoxCollider>();
+            boxCol.isTrigger = false;
+            boxCol.size = new Vector3(0.15f, 0.02f, 0.18f);
+            boxCol.center = new Vector3(0, 0, 0.1f);
+            Debug.Log($"[ControllerRacket] Added BoxCollider to {racket.name}");
+        }
+        else
+        {
+            foreach (var col in colliders)
+            {
+                col.isTrigger = false;
+                col.gameObject.tag = "Racket";
+            }
+        }
+        
+        Debug.Log($"[ControllerRacket] Cleaned up {racket.name} - no physics, direct controller attachment");
     }
     
     private void Update()
@@ -288,33 +326,33 @@ public class ControllerRacket : MonoBehaviour
             return;
         }
         
-        // Check for toggle on left controller (Y button)
-        bool leftPressed = OVRInput.Get(leftActivateButton, OVRInput.Controller.LTouch);
-        if (leftPressed && !leftWasPressed)
-        {
-            leftActive = !leftActive;
-            if (leftRacket != null)
-            {
-                leftRacket.SetActive(leftActive);
-                SetControllerVisualActive(leftControllerVisual, !leftActive);
-                Debug.Log($"[RACKET_DEBUG] Left racket: {(leftActive ? "SHOWN" : "HIDDEN")}");
-            }
-        }
-        leftWasPressed = leftPressed;
+        // B/Y button switches which hand has the racket (only ONE racket at a time)
+        bool bPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
+        bool yPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.LTouch);
         
-        // Check for toggle on right controller (B button)
-        bool rightPressed = OVRInput.Get(rightActivateButton, OVRInput.Controller.RTouch);
-        if (rightPressed && !rightWasPressed)
+        if (bPressed || yPressed)
         {
-            rightActive = !rightActive;
-            if (rightRacket != null)
-            {
-                rightRacket.SetActive(rightActive);
-                SetControllerVisualActive(rightControllerVisual, !rightActive);
-                Debug.Log($"[RACKET_DEBUG] Right racket: {(rightActive ? "SHOWN" : "HIDDEN")}");
-            }
+            isRacketOnRightHand = !isRacketOnRightHand;
+            UpdateRacketVisibility();
+            Debug.Log($"[ControllerRacket] Switched racket to {(isRacketOnRightHand ? "RIGHT" : "LEFT")} hand");
         }
-        rightWasPressed = rightPressed;
+    }
+    
+    /// <summary>
+    /// Update which racket is visible based on isRacketOnRightHand
+    /// </summary>
+    private void UpdateRacketVisibility()
+    {
+        if (leftRacket != null)
+        {
+            leftRacket.SetActive(!isRacketOnRightHand);
+            SetControllerVisualActive(leftControllerVisual, isRacketOnRightHand); // Show controller when racket hidden
+        }
+        if (rightRacket != null)
+        {
+            rightRacket.SetActive(isRacketOnRightHand);
+            SetControllerVisualActive(rightControllerVisual, !isRacketOnRightHand); // Show controller when racket hidden
+        }
     }
     
     private void SetControllerVisualActive(GameObject controllerVisual, bool active)
@@ -382,14 +420,44 @@ public class ControllerRacket : MonoBehaviour
         }
     }
     
+    private void FixedUpdate()
+    {
+        // Track velocity of the active racket for ball collision
+        float dt = Time.fixedDeltaTime;
+        if (dt <= 0) return;
+        
+        GameObject activeRacket = isRacketOnRightHand ? rightRacket : leftRacket;
+        if (activeRacket != null && activeRacket.activeInHierarchy)
+        {
+            Vector3 currentPos = activeRacket.transform.position;
+            racketVelocity = (currentPos - lastRacketPosition) / dt;
+            lastRacketPosition = currentPos;
+            
+            // Update rigidbody velocity for collision detection
+            var rb = activeRacket.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.velocity = racketVelocity;
+            }
+        }
+    }
+    
     /// <summary>
     /// Check if a controller has an active racket (for ball collision)
     /// </summary>
     public bool IsRacketActive(OVRInput.Controller controller)
     {
-        if (controller == OVRInput.Controller.LTouch) return leftActive;
-        if (controller == OVRInput.Controller.RTouch) return rightActive;
+        if (controller == OVRInput.Controller.LTouch) return !isRacketOnRightHand;
+        if (controller == OVRInput.Controller.RTouch) return isRacketOnRightHand;
         return false;
+    }
+    
+    /// <summary>
+    /// Get the active racket GameObject
+    /// </summary>
+    public GameObject GetActiveRacket()
+    {
+        return isRacketOnRightHand ? rightRacket : leftRacket;
     }
     
     /// <summary>
@@ -407,18 +475,13 @@ public class ControllerRacket : MonoBehaviour
     /// </summary>
     public Vector3 GetRacketVelocity(GameObject racketObject)
     {
-        // Try to get velocity from Rigidbody
-        var rb = racketObject.GetComponent<Rigidbody>();
-        if (rb != null)
+        // Use tracked velocity if this is our active racket
+        if (racketObject == leftRacket || racketObject == rightRacket)
         {
-            return rb.velocity;
-        }
-        
-        // Try from parent
-        rb = racketObject.GetComponentInParent<Rigidbody>();
-        if (rb != null)
-        {
-            return rb.velocity;
+            if (racketVelocity.magnitude > 0.1f)
+            {
+                return racketVelocity;
+            }
         }
         
         // Fallback: use controller velocity from OVRInput
@@ -431,6 +494,11 @@ public class ControllerRacket : MonoBehaviour
             return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
         }
         
-        return Vector3.zero;
+        return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
     }
+    
+    /// <summary>
+    /// Check if racket is on right hand
+    /// </summary>
+    public bool IsRacketOnRight => isRacketOnRightHand;
 }

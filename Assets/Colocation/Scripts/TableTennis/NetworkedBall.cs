@@ -318,6 +318,12 @@ public class NetworkedBall : NetworkBehaviour
             HandlePositioningMode();
         }
         
+        // Proximity-based racket hit detection (as fallback for collision issues)
+        if (Object.HasStateAuthority)
+        {
+            CheckProximityRacketHit();
+        }
+        
         // Note: Client interpolation is handled in Render() for smoother updates
     }
     
@@ -693,6 +699,80 @@ public class NetworkedBall : NetworkBehaviour
                 tableObject = obj;
                 Debug.Log($"[NetworkedBall] Found table by name: {tableObject.name}");
                 return;
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Proximity-based racket hit detection (fallback for collision issues with kinematic rigidbodies)
+    /// </summary>
+    private void CheckProximityRacketHit()
+    {
+        // Don't check if we just hit or haven't been spawned long enough
+        if (Time.time - lastHitTime < 0.3f) return;
+        
+        float hitDistance = 0.12f; // 12cm proximity threshold
+        float minRacketSpeed = 0.5f; // Minimum racket speed to register hit
+        
+        // Find all rackets by tag
+        GameObject[] rackets = GameObject.FindGameObjectsWithTag("Racket");
+        foreach (var racket in rackets)
+        {
+            if (racket == null || !racket.activeInHierarchy) continue;
+            
+            float distance = Vector3.Distance(transform.position, racket.transform.position);
+            if (distance < hitDistance)
+            {
+                // Get racket velocity
+                Vector3 racketVelocity = Vector3.zero;
+                
+                // Try ControllerRacket first
+                var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
+                if (controllerRacket != null)
+                {
+                    racketVelocity = controllerRacket.GetRacketVelocity(racket);
+                }
+                else
+                {
+                    // Try Rigidbody
+                    var racketRb = racket.GetComponent<Rigidbody>();
+                    if (racketRb != null)
+                    {
+                        racketVelocity = racketRb.velocity;
+                    }
+                    else
+                    {
+                        // Fallback: use controller velocity
+                        racketVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+                        if (racketVelocity.magnitude < minRacketSpeed)
+                        {
+                            racketVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+                        }
+                    }
+                }
+                
+                // Check if racket is moving fast enough
+                if (racketVelocity.magnitude > minRacketSpeed)
+                {
+                    Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, RacketVel: {racketVelocity.magnitude:F2}");
+                    
+                    // Calculate hit velocity
+                    Vector3 racketToBall = (transform.position - racket.transform.position).normalized;
+                    Vector3 swingDir = racketVelocity.normalized;
+                    Vector3 hitDir = (swingDir * 0.7f + racketToBall * 0.3f).normalized;
+                    
+                    float hitSpeed = Mathf.Clamp(racketVelocity.magnitude * 2f, 2f, 12f);
+                    Vector3 hitVelocity = hitDir * hitSpeed;
+                    
+                    // Add slight upward arc
+                    if (hitVelocity.y < 0.5f && hitVelocity.y > -3f)
+                    {
+                        hitVelocity.y += 1f;
+                    }
+                    
+                    OnRacketHit(hitVelocity, transform.position, 0);
+                    return;
+                }
             }
         }
     }

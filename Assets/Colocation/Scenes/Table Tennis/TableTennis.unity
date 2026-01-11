@@ -27882,7 +27882,7 @@ MonoBehaviour:
     RawGuidValue: 00000000000000000000000000000000
   tableRotateSpeed: 90
   tableMoveSpeed: 1
-  tableXRotationOffset: 0
+  tableXRotationOffset: 180
   tableYRotationOffset: 90
   defaultTableHeight: 0
   statusText: {fileID: 0}
@@ -27902,6 +27902,8 @@ MonoBehaviour:
   sessionName: MyVRSession
   autoStartSession: 0
   autoAlignOnStart: 0
+  skipAlignmentForDebug: 0
+  debugTablePosition: {x: 0, y: 0.76, z: 2}
 --- !u!114 &1131986600
 MonoBehaviour:
   m_ObjectHideFlags: 0

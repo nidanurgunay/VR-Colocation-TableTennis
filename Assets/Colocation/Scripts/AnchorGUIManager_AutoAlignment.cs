@@ -67,12 +67,19 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     // Racket references
     private GameObject leftRacket;
     private GameObject rightRacket;
-    private bool racketsVisible = true; // B/Y toggles visibility
+    private bool racketsVisible = true; // Track if rackets should be visible
+    private bool isRacketOnRightHand = true; // B/Y switches which hand has the racket
     
     // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
     private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
     private Vector3 racketRotation = new Vector3(-51f, 240f, 43f);
     private float racketScale = 10f;
+    
+    // Remote racket smoothing and periodic alignment
+    private float remoteRacketLerpSpeed = 15f; // How fast remote racket follows synced position
+    private float periodicAlignmentInterval = 2f; // Re-align every 2 seconds
+    private float lastPeriodicAlignmentTime = 0f;
+    
     private GameObject spawnedBall;
     private bool wasGripPressed = false; // Debounce for grip input
     private bool ballSpawnPending = false; // Prevent multiple spawn requests
@@ -116,12 +123,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Networked] private Vector3 HostRightHandPos { get; set; }
     [Networked] private Quaternion HostRightHandRot { get; set; }
     [Networked] private NetworkBool HostRacketsVisible { get; set; }
+    [Networked] private NetworkBool HostRacketOnRight { get; set; } // Which hand has the racket
     
     [Networked] private Vector3 ClientLeftHandPos { get; set; }
     [Networked] private Quaternion ClientLeftHandRot { get; set; }
     [Networked] private Vector3 ClientRightHandPos { get; set; }
     [Networked] private Quaternion ClientRightHandRot { get; set; }
     [Networked] private NetworkBool ClientRacketsVisible { get; set; }
+    [Networked] private NetworkBool ClientRacketOnRight { get; set; } // Which hand has the racket
 #endif
 
     // Remote player racket visuals (created for the other player)
@@ -601,10 +610,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             {
                 spawnedPassthroughTable = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
                 
-                if (spawnedPassthroughTable != null && currentAnchors != null && currentAnchors.Count > 0 && 
-                    spawnedPassthroughTable.transform.parent != currentAnchors[0].transform)
+                // Parent to localized anchor (consistent with ApplyPassthroughTableState)
+                if (spawnedPassthroughTable != null && _localizedAnchor != null && 
+                    spawnedPassthroughTable.transform.parent != _localizedAnchor.transform)
                 {
-                    spawnedPassthroughTable.transform.SetParent(currentAnchors[0].transform, worldPositionStays: false);
+                    spawnedPassthroughTable.transform.SetParent(_localizedAnchor.transform, worldPositionStays: false);
+                    Debug.Log($"[Passthrough] Table parented to localized anchor in FixedUpdateNetwork");
                 }
             }
             
@@ -663,22 +674,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             HostRightHandPos = rightPos;
             HostRightHandRot = rightRot;
             HostRacketsVisible = racketsVisible;
+            HostRacketOnRight = isRacketOnRightHand;
         }
         else
         {
             // Client sends hand positions via RPC
-            RPC_SyncClientHands(leftPos, leftRot, rightPos, rightRot, racketsVisible);
+            RPC_SyncClientHands(leftPos, leftRot, rightPos, rightRot, racketsVisible, isRacketOnRightHand);
         }
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_SyncClientHands(Vector3 leftPos, Quaternion leftRot, Vector3 rightPos, Quaternion rightRot, NetworkBool visible)
+    private void RPC_SyncClientHands(Vector3 leftPos, Quaternion leftRot, Vector3 rightPos, Quaternion rightRot, NetworkBool visible, NetworkBool racketOnRight)
     {
         ClientLeftHandPos = leftPos;
         ClientLeftHandRot = leftRot;
         ClientRightHandPos = rightPos;
         ClientRightHandRot = rightRot;
         ClientRacketsVisible = visible;
+        ClientRacketOnRight = racketOnRight;
     }
     
     /// <summary>
@@ -704,6 +717,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     
     /// <summary>
     /// Update remote player's racket visuals based on their synced hand positions
+    /// Uses lerp for smooth following and periodic snap alignment to correct drift
     /// </summary>
     private void UpdateRemoteRackets()
     {
@@ -715,6 +729,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         if (_localizedAnchor == null) return;
         Transform anchor = _localizedAnchor.transform;
         
+        // Periodic alignment - snap to correct position every few seconds to fix drift
+        bool doSnapAlignment = (Time.time - lastPeriodicAlignmentTime) > periodicAlignmentInterval;
+        if (doSnapAlignment)
+        {
+            lastPeriodicAlignmentTime = Time.time;
+        }
+        
         // Determine which player's data to use for remote rackets
         // If we're host, show client's rackets. If we're client, show host's rackets.
         bool isHost = Object.HasStateAuthority;
@@ -724,30 +745,47 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         Vector3 remoteRightPos = isHost ? ClientRightHandPos : HostRightHandPos;
         Quaternion remoteRightRot = isHost ? ClientRightHandRot : HostRightHandRot;
         bool showRemoteRackets = isHost ? ClientRacketsVisible : HostRacketsVisible;
+        bool remoteRacketOnRight = isHost ? ClientRacketOnRight : HostRacketOnRight;
         
+        float deltaTime = Time.deltaTime;
+        float lerpFactor = doSnapAlignment ? 1f : Mathf.Clamp01(remoteRacketLerpSpeed * deltaTime);
+        
+        // Only show ONE remote racket - on whichever hand the remote player has it
         if (remoteLeftRacket != null)
         {
-            remoteLeftRacket.SetActive(showRemoteRackets);
-            if (showRemoteRackets)
+            // Show left racket only if remote has racket on LEFT hand
+            bool showLeft = showRemoteRackets && !remoteRacketOnRight;
+            remoteLeftRacket.SetActive(showLeft);
+            if (showLeft)
             {
-                Vector3 worldPos = anchor.TransformPoint(remoteLeftPos);
-                Quaternion worldRot = anchor.rotation * remoteLeftRot;
-                // Apply offset in the hand's local space, then set world position
-                remoteLeftRacket.transform.position = worldPos + worldRot * racketOffset;
-                remoteLeftRacket.transform.rotation = worldRot * Quaternion.Euler(racketRotation);
+                Vector3 targetWorldPos = anchor.TransformPoint(remoteLeftPos);
+                Quaternion targetWorldRot = anchor.rotation * remoteLeftRot;
+                // Apply offset in the hand's local space
+                Vector3 targetPos = targetWorldPos + targetWorldRot * racketOffset;
+                Quaternion targetRot = targetWorldRot * Quaternion.Euler(racketRotation);
+                
+                // Lerp for smooth movement, snap on periodic alignment
+                remoteLeftRacket.transform.position = Vector3.Lerp(remoteLeftRacket.transform.position, targetPos, lerpFactor);
+                remoteLeftRacket.transform.rotation = Quaternion.Slerp(remoteLeftRacket.transform.rotation, targetRot, lerpFactor);
             }
         }
         
         if (remoteRightRacket != null)
         {
-            remoteRightRacket.SetActive(showRemoteRackets);
-            if (showRemoteRackets)
+            // Show right racket only if remote has racket on RIGHT hand
+            bool showRight = showRemoteRackets && remoteRacketOnRight;
+            remoteRightRacket.SetActive(showRight);
+            if (showRight)
             {
-                Vector3 worldPos = anchor.TransformPoint(remoteRightPos);
-                Quaternion worldRot = anchor.rotation * remoteRightRot;
-                // Apply offset in the hand's local space, then set world position
-                remoteRightRacket.transform.position = worldPos + worldRot * racketOffset;
-                remoteRightRacket.transform.rotation = worldRot * Quaternion.Euler(racketRotation);
+                Vector3 targetWorldPos = anchor.TransformPoint(remoteRightPos);
+                Quaternion targetWorldRot = anchor.rotation * remoteRightRot;
+                // Apply offset in the hand's local space
+                Vector3 targetPos = targetWorldPos + targetWorldRot * racketOffset;
+                Quaternion targetRot = targetWorldRot * Quaternion.Euler(racketRotation);
+                
+                // Lerp for smooth movement, snap on periodic alignment
+                remoteRightRacket.transform.position = Vector3.Lerp(remoteRightRacket.transform.position, targetPos, lerpFactor);
+                remoteRightRacket.transform.rotation = Quaternion.Slerp(remoteRightRacket.transform.rotation, targetRot, lerpFactor);
             }
         }
     }
@@ -1951,14 +1989,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Check if aligned first
         if (_localizedAnchor == null || !_localizedAnchor.Localized)
         {
-            Log("\u26a0\ufe0f Please complete alignment first!", true);
+            Log("Please complete alignment first!", true);
             return;
         }
 
 #if FUSION2
         if (networkRunner == null || !networkRunner.IsRunning)
         {
-            Log("\u26a0\ufe0f Network not ready! Please wait...", true);
+            Log("Network not ready! Please wait...", true);
             return;
         }
         
@@ -1966,7 +2004,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         bool bothDevicesAligned = currentState == SessionState.ClientAligned || currentState == SessionState.HostAligned;
         if (!bothDevicesAligned)
         {
-            Log("\u23f3 Waiting for both devices to be aligned...", true);
+            Log("Waiting for both devices to be aligned...", true);
             Log("Make sure your partner has completed alignment too!");
             return;
         }
@@ -1974,7 +2012,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Either player can initiate - request goes to host, host loads scene
         if (Object.HasStateAuthority)
         {
-            Log("\u25b6\ufe0f Starting game for all players...");
+            Log("Starting game for all players...");
             HideMainGUIPanel(); // Hide UI before loading scene
             LoadTableTennisSceneNetworked();
         }
@@ -2724,13 +2762,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
         
-        // B/Y button - toggle racket visibility (except during Playing phase)
+        // B/Y button - switch which hand holds the racket (except during Playing phase)
         bool bButtonPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
         bool yButtonPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
         
         if ((bButtonPressed || yButtonPressed) && passthroughPhase != PassthroughGamePhase.Playing)
         {
-            ToggleRacketVisibility();
+            SwitchRacketHand();
             return;
         }
         
@@ -2746,29 +2784,21 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         switch (passthroughPhase)
         {
             case PassthroughGamePhase.TableAdjust:
-                if (aButtonPressed || xButtonPressed)
                 {
-                    AdvancePassthroughPhase();
-                }
-                else
-                {
-                    HandleTableAdjustInput();
+                    // Check for GRIP press
+                    float leftGrip = OVRInput.Get(OVRInput.Axis1D.PrimaryHandTrigger);
+                    float rightGrip = OVRInput.Get(OVRInput.Axis1D.SecondaryHandTrigger);
+                    bool gripPressed = leftGrip > 0.5f || rightGrip > 0.5f;
                     
-                    // Allow GRIP to spawn ball directly from TableAdjust phase (auto-advance)
-                    if (spawnedBall == null && !ballSpawnPending)
+                    // A/X OR GRIP confirms table position and advances to BallPosition
+                    if (aButtonPressed || xButtonPressed || (gripPressed && !wasGripPressed))
                     {
-                        float leftGrip = OVRInput.Get(OVRInput.Axis1D.PrimaryHandTrigger);
-                        float rightGrip = OVRInput.Get(OVRInput.Axis1D.SecondaryHandTrigger);
-                        bool gripPressed = leftGrip > 0.5f || rightGrip > 0.5f;
-                        
-                        if (gripPressed && !wasGripPressed)
-                        {
-                            Debug.Log($"[Passthrough] Grip in TableAdjust - auto-advancing to BallPosition and spawning ball");
-                            ballSpawnPending = true;
-                            passthroughPhase = PassthroughGamePhase.BallPosition;
-                            SpawnPassthroughBall();
-                            UpdatePassthroughInstructions();
-                        }
+                        AdvancePassthroughPhase();
+                        wasGripPressed = gripPressed;
+                    }
+                    else
+                    {
+                        HandleTableAdjustInput();
                         wasGripPressed = gripPressed;
                     }
                 }
@@ -3136,40 +3166,47 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
     
     /// <summary>
-    /// Toggle racket visibility (B/Y button)
+    /// Switch which hand holds the racket (B/Y button)
+    /// Only one local racket is visible at a time
     /// </summary>
-    private void ToggleRacketVisibility()
+    private void SwitchRacketHand()
     {
-        racketsVisible = !racketsVisible;
+        isRacketOnRightHand = !isRacketOnRightHand;
         
-        if (leftRacket != null) leftRacket.SetActive(racketsVisible);
-        if (rightRacket != null) rightRacket.SetActive(racketsVisible);
+        // Show only the racket on the active hand
+        if (leftRacket != null) leftRacket.SetActive(!isRacketOnRightHand);
+        if (rightRacket != null) rightRacket.SetActive(isRacketOnRightHand);
         
-        if (racketsVisible)
-        {
-            DisableRayInteractors();
-        }
-        else
-        {
-            EnableRayInteractors();
-        }
-        
-        Log($"🎾 Rackets {(racketsVisible ? "visible" : "hidden")}");
+        Log($"Racket switched to {(isRacketOnRightHand ? "RIGHT" : "LEFT")} hand");
     }
     
     /// <summary>
-    /// Handle table adjustment input (rotation and height) - NETWORKED
-    /// BOTH host and client can adjust in any phase (TableAdjust or BallPosition)
+    /// Apply racket visibility based on which hand is active
+    /// </summary>
+    private void ApplyRacketVisibility()
+    {
+        if (leftRacket != null) leftRacket.SetActive(racketsVisible && !isRacketOnRightHand);
+        if (rightRacket != null) rightRacket.SetActive(racketsVisible && isRacketOnRightHand);
+    }
+    
+    /// <summary>
+    /// Handle table adjustment input (rotation and height only) - NETWORKED
+    /// RIGHT STICK X: Rotate table
+    /// LEFT STICK Y: Adjust height
     /// </summary>
     private void HandleTableAdjustInput()
     {
         if (spawnedPassthroughTable == null) return;
         
-        // Read right thumbstick for rotation/height (matches VR TableTennisManager)
+        // Right stick X for rotation, Left stick Y for height
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
+        
+        bool hasRotationInput = Mathf.Abs(rightStick.x) > 0.1f;
+        bool hasHeightInput = Mathf.Abs(leftStick.y) > 0.1f;
         
         // Early exit if no input
-        if (Mathf.Abs(rightStick.x) < 0.1f && Mathf.Abs(rightStick.y) < 0.1f)
+        if (!hasRotationInput && !hasHeightInput)
         {
             return;
         }
@@ -3179,14 +3216,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         if (Object != null && Object.HasStateAuthority)
         {
             // Host: directly adjust networked values
-            if (Mathf.Abs(rightStick.x) > 0.1f)
+            if (hasRotationInput)
             {
                 float rotation = rightStick.x * TableRotateSpeed * Time.deltaTime;
                 NetworkedPassthroughTableYRotation += rotation;
             }
-            if (Mathf.Abs(rightStick.y) > 0.1f)
+            if (hasHeightInput)
             {
-                float verticalMove = rightStick.y * TableMoveSpeed * Time.deltaTime;
+                float verticalMove = leftStick.y * TableMoveSpeed * Time.deltaTime;
                 NetworkedPassthroughTableHeight += verticalMove;
             }
             ApplyPassthroughTableState();
@@ -3194,14 +3231,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         else if (Runner != null)
         {
             // Client: send adjustment requests to host via RPC
-            if (Mathf.Abs(rightStick.x) > 0.1f)
+            if (hasRotationInput)
             {
                 float rotation = rightStick.x * TableRotateSpeed * Time.deltaTime;
                 RPC_RequestPassthroughTableRotate(rotation);
             }
-            if (Mathf.Abs(rightStick.y) > 0.1f)
+            if (hasHeightInput)
             {
-                float verticalMove = rightStick.y * TableMoveSpeed * Time.deltaTime;
+                float verticalMove = leftStick.y * TableMoveSpeed * Time.deltaTime;
                 RPC_RequestPassthroughFloorAdjust(verticalMove);
             }
         }
@@ -3209,13 +3246,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Non-networked: local adjustment only
         float rotationDelta = 0f;
         float heightDelta = 0f;
-        if (Mathf.Abs(rightStick.x) > 0.1f)
+        if (hasRotationInput)
         {
             rotationDelta = rightStick.x * TableRotateSpeed * Time.deltaTime;
         }
-        if (Mathf.Abs(rightStick.y) > 0.1f)
+        if (hasHeightInput)
         {
-            heightDelta = rightStick.y * TableMoveSpeed * Time.deltaTime;
+            heightDelta = leftStick.y * TableMoveSpeed * Time.deltaTime;
         }
         ApplyLocalTableAdjustment(rotationDelta, heightDelta);
 #endif
@@ -3245,10 +3282,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 #if FUSION2
     /// <summary>
     /// Apply networked passthrough table state - uses LOCAL coordinates since parented to anchor
+    /// Ensures table is properly parented to anchor first
     /// </summary>
     private void ApplyPassthroughTableState()
     {
         if (spawnedPassthroughTable == null) return;
+        
+        // Ensure table is parented to anchor (use _localizedAnchor for consistency)
+        if (_localizedAnchor != null && spawnedPassthroughTable.transform.parent != _localizedAnchor.transform)
+        {
+            spawnedPassthroughTable.transform.SetParent(_localizedAnchor.transform, worldPositionStays: false);
+            Debug.Log($"[Passthrough] Re-parented table to localized anchor: {_localizedAnchor.name}");
+        }
         
         // Apply local rotation (keep X rotation for upside-down fix)
         spawnedPassthroughTable.transform.localRotation = Quaternion.Euler(
@@ -3279,16 +3324,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 #endif
     
     /// <summary>
-    /// Handle ball position phase input (GRIP to spawn, thumbstick to adjust table, A/X + thumbstick to adjust ball)
-    /// In this phase, BOTH host and client can adjust the table
+    /// Handle ball position phase input (GRIP to spawn, A/X + thumbstick to adjust ball)
+    /// NO table adjustment in this phase - table is locked
     /// </summary>
     private void HandleBallPositionInput(bool axButtonPressed, bool axButtonHeld)
     {
-        // Allow table adjustment in this phase (both host and client)
-        if (!axButtonHeld)
-        {
-            HandleTableAdjustInput();
-        }
+        // NO table adjustment in BallPosition phase - table is locked
         
         // GRIP spawns ball if not yet spawned
         if (spawnedBall == null && !ballSpawnPending)
@@ -3322,17 +3363,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     
     /// <summary>
     /// Handle ball position adjustment with A/X held + thumbstick
+    /// RIGHT STICK: X/Y movement
+    /// LEFT STICK Y: Z movement (forward/back)
     /// </summary>
     private void HandleBallPositionAdjust()
     {
         if (spawnedBall == null) return;
         
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
         
-        // Only adjust if thumbstick is moved
-        if (Mathf.Abs(rightStick.x) > 0.1f || Mathf.Abs(rightStick.y) > 0.1f)
+        // Right stick: X/Y, Left stick Y: Z
+        float xMove = Mathf.Abs(rightStick.x) > 0.1f ? rightStick.x : 0f;
+        float yMove = Mathf.Abs(rightStick.y) > 0.1f ? rightStick.y : 0f;
+        float zMove = Mathf.Abs(leftStick.y) > 0.1f ? leftStick.y : 0f;
+        
+        if (Mathf.Abs(xMove) > 0.01f || Mathf.Abs(yMove) > 0.01f || Mathf.Abs(zMove) > 0.01f)
         {
-            Vector3 movement = new Vector3(rightStick.x, rightStick.y, 0) * TableMoveSpeed * Time.deltaTime;
+            Vector3 movement = new Vector3(xMove, yMove, zMove) * TableMoveSpeed * Time.deltaTime;
             
 #if FUSION2
             if (Object != null && Object.HasStateAuthority)
@@ -3460,12 +3508,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     var controllerRacket = leftRacket.GetComponent<ControllerRacket>();
                     if (controllerRacket != null) Destroy(controllerRacket);
                     
-                    // Remove physics components - racket follows controller rigidly
-                    CleanupRacketPhysics(leftRacket);
+                    // Setup physics for ball collision (not remove!)
+                    SetupRacketPhysics(leftRacket);
                     
                     Debug.Log($"[Passthrough] Created left racket: {leftRacket.name} with offset {racketOffset}, rotation {racketRotation}");
                 }
-                leftRacket.SetActive(true);
+                // Only show left racket if racket is on left hand
+                leftRacket.SetActive(!isRacketOnRightHand);
                 
                 if (rightRacket == null)
                 {
@@ -3486,12 +3535,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     var controllerRacket = rightRacket.GetComponent<ControllerRacket>();
                     if (controllerRacket != null) Destroy(controllerRacket);
                     
-                    // Remove physics components - racket follows controller rigidly
-                    CleanupRacketPhysics(rightRacket);
+                    // Setup physics for ball collision (not remove!)
+                    SetupRacketPhysics(rightRacket);
                     
                     Debug.Log($"[Passthrough] Created right racket: {rightRacket.name} with offset {racketOffset}, rotation {racketRotation}");
                 }
-                rightRacket.SetActive(true);
+                // Only show right racket if racket is on right hand
+                rightRacket.SetActive(isRacketOnRightHand);
                 
                 racketsCreated = true;
             }
@@ -3603,9 +3653,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     leftRacket.transform.localScale = Vector3.one * racketScale;
                     var cr = leftRacket.GetComponent<ControllerRacket>();
                     if (cr != null) Destroy(cr);
-                    CleanupRacketPhysics(leftRacket);
+                    SetupRacketPhysics(leftRacket);
                 }
-                leftRacket.SetActive(true);
+                // Only show left racket if racket is on left hand
+                leftRacket.SetActive(!isRacketOnRightHand);
                 
                 if (rightRacket == null)
                 {
@@ -3619,9 +3670,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     rightRacket.transform.localScale = Vector3.one * racketScale;
                     var cr = rightRacket.GetComponent<ControllerRacket>();
                     if (cr != null) Destroy(cr);
-                    CleanupRacketPhysics(rightRacket);
+                    SetupRacketPhysics(rightRacket);
                 }
-                rightRacket.SetActive(true);
+                // Only show right racket if racket is on right hand
+                rightRacket.SetActive(isRacketOnRightHand);
                 
                 racketsCreated = true;
             }
@@ -3636,26 +3688,28 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             leftRacket.transform.localPosition = racketOffset;
             leftRacket.transform.localRotation = Quaternion.identity;
             leftRacket.transform.localRotation = Quaternion.Euler(racketRotation);
+            SetupRacketPhysics(leftRacket);
             
             rightRacket = CreatePlaceholderRacket("RightRacket");
             rightRacket.transform.SetParent(rightController, false);
             rightRacket.transform.localPosition = racketOffset;
             rightRacket.transform.localRotation = Quaternion.identity;
             rightRacket.transform.localRotation = Quaternion.Euler(racketRotation);
+            SetupRacketPhysics(rightRacket);
             
             racketsCreated = true;
             Log("Using placeholder rackets - assign RacketPrefab for better visuals");
         }
         
-        // Ensure rackets are visible
+        // Ensure only the active hand's racket is visible
         if (leftRacket != null)
         {
-            leftRacket.SetActive(true);
+            leftRacket.SetActive(!isRacketOnRightHand);
             Debug.Log($"[Passthrough] Left racket active: {leftRacket.activeSelf}, parent: {leftRacket.transform.parent?.name}");
         }
         if (rightRacket != null)
         {
-            rightRacket.SetActive(true);
+            rightRacket.SetActive(isRacketOnRightHand);
             Debug.Log($"[Passthrough] Right racket active: {rightRacket.activeSelf}, parent: {rightRacket.transform.parent?.name}");
         }
         
@@ -4324,19 +4378,19 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             {
                 if (!hasNetwork)
                 {
-                    btnText.text = "\u23f3 Connecting...";
+                    btnText.text = "Connecting...";
                 }
                 else if (!isAligned)
                 {
-                    btnText.text = "\u26a0\ufe0f Align first";
+                    btnText.text = "Align first";
                 }
                 else if (!bothDevicesAligned)
                 {
-                    btnText.text = "\u23f3 Waiting for partner...";
+                    btnText.text = "Waiting for partner...";
                 }
                 else
                 {
-                    btnText.text = "\u25b6\ufe0f Start Game";
+                    btnText.text = "Start VR Game";
                 }
             }
         }
@@ -4364,7 +4418,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 }
                 else
                 {
-                    btnText.text = "▶️ Start Passthrough";
+                    btnText.text = "Start Passthrough";
                 }
             }
         }

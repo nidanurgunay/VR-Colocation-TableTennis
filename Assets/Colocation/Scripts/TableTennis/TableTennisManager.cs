@@ -23,7 +23,7 @@ public class TableTennisManager : NetworkBehaviour
     [Header("Table Placement (relative to anchor)")]
     [SerializeField] private Vector3 tablePositionOffset = Vector3.zero; // Position offset from anchor
     [SerializeField] private float defaultTableHeight = 0.76f; // Standard ping pong table height
-    [SerializeField] private float tableXRotationOffset = 0f; // X rotation offset in degrees (try 0 or 180 if table is upside down)
+    [SerializeField] private float tableXRotationOffset = 180f; // X rotation offset in degrees (180 to fix upside-down table)
     [SerializeField] private float tableYRotationOffset = 0f; // Y rotation offset in degrees
     
     // Ensure table X rotation is set correctly (in case serialized value was different)
@@ -115,6 +115,14 @@ public class TableTennisManager : NetworkBehaviour
     public override void Spawned()
     {
         Debug.Log($"[TableTennisManager] Spawned. HasStateAuthority: {Object.HasStateAuthority}");
+        
+        // Force tableXRotationOffset to 180 (in case Unity serialized an old value of 0)
+        // This fixes upside-down table issue
+        if (tableXRotationOffset == 0f)
+        {
+            tableXRotationOffset = 180f;
+            Debug.Log("[TableTennisManager] Forcing tableXRotationOffset to 180 to fix upside-down table");
+        }
         
         StartCoroutine(InitializeGame());
         
@@ -226,38 +234,22 @@ public class TableTennisManager : NetworkBehaviour
         // Racket visibility is now managed by ControllerRacket component
         // This prevents dual-handling conflicts
         
-        // GRIP button - switch racket between hands (during TableAdjust or BallPosition)
+        // GRIP button - only spawns ball in BallPosition phase (not TableAdjust, not after spawned)
         // Use grip axis (squeeze with middle fingers) - threshold of 0.8 (high to avoid accidental triggers)
         float leftGrip = OVRInput.Get(OVRInput.Axis1D.PrimaryHandTrigger);
         float rightGrip = OVRInput.Get(OVRInput.Axis1D.SecondaryHandTrigger);
         bool gripPressed = leftGrip > 0.8f || rightGrip > 0.8f;
         
-        if (gripPressed && !wasGripPressed && CurrentPhase != GamePhase.Playing && !isGameMenuOpen)
+        if (gripPressed && !wasGripPressed && CurrentPhase == GamePhase.BallPosition && !isGameMenuOpen)
         {
             Debug.Log($"[TableTennisManager] Grip detected! Left: {leftGrip}, Right: {rightGrip}");
-            // GRIP spawns ball if not yet spawned (in TableAdjust or BallPosition phase)
+            // GRIP spawns ball only in BallPosition phase (not after spawned)
             if (!GameStarted && !ballSpawnPending)
             {
                 ballSpawnPending = true; // Prevent multiple spawn requests
-                // Auto-advance to BallPosition phase if in TableAdjust
-                if (CurrentPhase == GamePhase.TableAdjust)
-                {
-                    if (Object.HasStateAuthority)
-                    {
-                        CurrentPhase = GamePhase.BallPosition;
-                    }
-                    else
-                    {
-                        RPC_RequestAdvancePhase();
-                    }
-                    Debug.Log("[TableTennisManager] Auto-advancing to BallPosition phase for ball spawn");
-                }
                 SpawnBallForPositioning();
             }
-            else if (GameStarted)
-            {
-                SwitchRacketHand();
-            }
+            // No hand switching - B/Y handles racket visibility via ControllerRacket
         }
         wasGripPressed = gripPressed;
         
@@ -271,8 +263,8 @@ public class TableTennisManager : NetworkBehaviour
         switch (CurrentPhase)
         {
             case GamePhase.TableAdjust:
-                // A/X confirms table position and advances to BallPosition
-                if (aButtonPressed || xButtonPressed)
+                // A/X OR GRIP confirms table position and advances to BallPosition
+                if (aButtonPressed || xButtonPressed || (gripPressed && !wasGripPressed))
                 {
                     AdvancePhase();
                 }
@@ -610,10 +602,9 @@ public class TableTennisManager : NetworkBehaviour
     }
     
     /// <summary>
-    /// Handle table adjustment input (position, rotation and height)
-    /// LEFT STICK: Move table X/Z
+    /// Handle table adjustment input (rotation and height only)
     /// RIGHT STICK X: Rotate table
-    /// RIGHT STICK Y: Adjust height
+    /// LEFT STICK Y: Adjust height
     /// </summary>
     private void HandleTableAdjustInput()
     {
@@ -628,11 +619,11 @@ public class TableTennisManager : NetworkBehaviour
         Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
         
-        // Early exit if no significant input on either stick
-        bool hasLeftInput = leftStick.magnitude > 0.1f;
-        bool hasRightInput = Mathf.Abs(rightStick.x) > 0.1f || Mathf.Abs(rightStick.y) > 0.1f;
+        // Right stick X for rotation, Left stick Y for height
+        bool hasRotationInput = Mathf.Abs(rightStick.x) > 0.1f;
+        bool hasHeightInput = Mathf.Abs(leftStick.y) > 0.1f;
         
-        if (!hasLeftInput && !hasRightInput)
+        if (!hasRotationInput && !hasHeightInput)
         {
             return;
         }
@@ -640,59 +631,46 @@ public class TableTennisManager : NetworkBehaviour
         // Client sends adjustment requests to host via RPC
         if (!Object.HasStateAuthority)
         {
-            // Left stick: X/Z movement
-            if (hasLeftInput)
-            {
-                Vector3 movement = new Vector3(leftStick.x, 0, leftStick.y) * moveSpeed * Time.deltaTime;
-                RPC_RequestTableMove(movement);
-            }
             // Right stick X: rotation
-            if (Mathf.Abs(rightStick.x) > 0.1f)
+            if (hasRotationInput)
             {
                 float rotation = rightStick.x * rotateSpeed * Time.deltaTime;
                 RPC_RequestTableRotate(rotation);
             }
-            // Right stick Y: height
-            if (Mathf.Abs(rightStick.y) > 0.1f)
+            // Left stick Y: height
+            if (hasHeightInput)
             {
-                float verticalMove = rightStick.y * moveSpeed * Time.deltaTime;
+                float verticalMove = leftStick.y * moveSpeed * Time.deltaTime;
                 RPC_RequestFloorAdjust(verticalMove);
             }
             return;
         }
         
         // Host: directly adjust networked values
-        // Left stick: Move table in X/Z
-        if (hasLeftInput)
-        {
-            Vector3 movement = new Vector3(leftStick.x, 0, leftStick.y) * moveSpeed * Time.deltaTime;
-            // Apply rotation to movement so it's relative to table orientation
-            movement = Quaternion.Euler(0, NetworkedTableYRotation, 0) * movement;
-            NetworkedTableLocalPosition += movement;
-        }
-        
         // Right stick X: Rotate table
-        if (Mathf.Abs(rightStick.x) > 0.1f)
+        if (hasRotationInput)
         {
             float rotation = rightStick.x * rotateSpeed * Time.deltaTime;
             NetworkedTableYRotation += rotation;
         }
         
-        // Right stick Y: Adjust height
-        if (Mathf.Abs(rightStick.y) > 0.1f)
+        // Left stick Y: Adjust height
+        if (hasHeightInput)
         {
-            float verticalMove = rightStick.y * moveSpeed * Time.deltaTime;
+            float verticalMove = leftStick.y * moveSpeed * Time.deltaTime;
             NetworkedFloorOffset += verticalMove;
         }
     }
     
     /// <summary>
-    /// Handle ball position phase input (A/X held + thumbstick to adjust position)
-    /// Note: GRIP to spawn ball is handled in HandlePhaseInput
+    /// Handle ball position phase input (GRIP to spawn, A/X held + thumbstick to adjust ball position)
+    /// NO table adjustment in this phase
     /// </summary>
     private void HandleBallPositionInput(bool axButtonPressed, bool axButtonHeld)
     {
-        // Ball is spawned - A/X HELD + thumbstick adjusts position
+        // NO table adjustment in BallPosition phase - table is locked
+        
+        // Ball is spawned - A/X HELD + thumbstick adjusts ball position
         if (GameStarted && axButtonHeld)
         {
             HandleBallPositionAdjust();
@@ -702,17 +680,24 @@ public class TableTennisManager : NetworkBehaviour
     
     /// <summary>
     /// Handle ball position adjustment with A/X held + thumbstick
+    /// RIGHT STICK: X/Y movement
+    /// LEFT STICK Y: Z movement (forward/back)
     /// </summary>
     private void HandleBallPositionAdjust()
     {
         if (spawnedBall == null) return;
         
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
         
-        // Only adjust if thumbstick is moved
-        if (Mathf.Abs(rightStick.x) > 0.1f || Mathf.Abs(rightStick.y) > 0.1f)
+        // Right stick: X/Y, Left stick Y: Z
+        float xMove = Mathf.Abs(rightStick.x) > 0.1f ? rightStick.x : 0f;
+        float yMove = Mathf.Abs(rightStick.y) > 0.1f ? rightStick.y : 0f;
+        float zMove = Mathf.Abs(leftStick.y) > 0.1f ? leftStick.y : 0f;
+        
+        if (Mathf.Abs(xMove) > 0.01f || Mathf.Abs(yMove) > 0.01f || Mathf.Abs(zMove) > 0.01f)
         {
-            Vector3 movement = new Vector3(rightStick.x, rightStick.y, 0) * moveSpeed * Time.deltaTime;
+            Vector3 movement = new Vector3(xMove, yMove, zMove) * moveSpeed * Time.deltaTime;
             
             if (Object.HasStateAuthority)
             {
