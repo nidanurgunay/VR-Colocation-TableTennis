@@ -161,7 +161,6 @@ GameObject:
   - component: {fileID: 2739793316835083242}
   - component: {fileID: 3729394695308357750}
   - component: {fileID: 5946609058726932039}
-  - component: {fileID: 807617962203589201}
   - component: {fileID: 1257929526935170946}
   m_Layer: 0
   m_Name: NetworkedGrabbableBall 1
@@ -364,7 +363,7 @@ SphereCollider:
     serializedVersion: 2
     m_Bits: 0
   m_LayerOverridePriority: 0
-  m_IsTrigger: 1
+  m_IsTrigger: 0
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
@@ -394,6 +393,8 @@ MonoBehaviour:
   syncRate: 30
   resetBelowY: -1
   resetAfterSeconds: 5
+  positionMoveSpeed: 1.5
+  positionHeightSpeed: 0.8
   ballRadius: 0.04
   ballColor: {r: 1, g: 0.5, b: 0, a: 1}
 --- !u!114 &5946609058726932039
@@ -420,22 +421,10 @@ MonoBehaviour:
   syncRate: 30
   resetBelowY: -1
   resetAfterSeconds: 5
+  positionMoveSpeed: 1.5
+  positionHeightSpeed: 0.8
   ballRadius: 0.04
   ballColor: {r: 1, g: 0.5, b: 0, a: 1}
---- !u!114 &807617962203589201
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7092780974933990305}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 1541381998, guid: e725a070cec140c4caffb81624c8c787, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  Guid:
-    RawGuidValue: 19202626625a64c80a63f3c9191b8d53
 --- !u!114 &1257929526935170946
 MonoBehaviour:
   m_ObjectHideFlags: 0

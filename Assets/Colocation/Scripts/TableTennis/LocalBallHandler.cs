@@ -194,6 +194,7 @@ public class LocalBallHandler : MonoBehaviour
     
     private void OnCollisionEnter(Collision collision)
     {
+        Debug.Log($"[BALL_COLLISION] Ball collided with: {collision.gameObject.name}, Tag: {collision.gameObject.tag}, Layer: {collision.gameObject.layer}");
         // Check if hit floor - respawn ball
         if (collision.gameObject.CompareTag("Floor") || 
             collision.gameObject.name.ToLower().Contains("floor") ||
@@ -217,6 +218,7 @@ public class LocalBallHandler : MonoBehaviour
     
     private void OnTriggerEnter(Collider other)
     {
+        Debug.Log($"[BALL_TRIGGER] Ball triggered by: {other.gameObject.name}, Tag: {other.gameObject.tag}, Layer: {other.gameObject.layer}");
         // Check if hit floor trigger
         if (other.CompareTag("Floor") || 
             other.gameObject.name.ToLower().Contains("floor") ||

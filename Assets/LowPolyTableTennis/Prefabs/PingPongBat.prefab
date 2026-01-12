@@ -13,7 +13,6 @@ GameObject:
   - component: {fileID: 6993727638598655233}
   - component: {fileID: 726079139407410118}
   - component: {fileID: 726079139407410117}
-  - component: {fileID: -4331907396841239091}
   m_Layer: 0
   m_Name: PingPongBat
   m_TagString: Untagged
@@ -113,7 +112,7 @@ Rigidbody:
   m_ImplicitCom: 1
   m_ImplicitTensor: 1
   m_UseGravity: 1
-  m_IsKinematic: 0
+  m_IsKinematic: 1
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 0
@@ -127,7 +126,7 @@ MeshCollider:
   m_Material: {fileID: 0}
   m_IncludeLayers:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 4294967295
   m_ExcludeLayers:
     serializedVersion: 2
     m_Bits: 0
@@ -137,23 +136,5 @@ MeshCollider:
   m_Enabled: 1
   serializedVersion: 5
   m_Convex: 1
-  m_CookingOptions: 30
+  m_CookingOptions: 0
   m_Mesh: {fileID: -3758573805739257388, guid: c724c2cfb7e6cb247b2e89d44ad42631, type: 3}
---- !u!114 &-4331907396841239091
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8733148417151412701}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8b9e146e865f347a7bbdc66541006fe2, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  grabRadius: 0.1
-  grabButton: 16384
-  normalMaterial: {fileID: 0}
-  highlightMaterial: {fileID: 0}
-  grabSound: {fileID: 8300000, guid: 9c5b3aa73301a421d8339ae77f99fe06, type: 3}
-  releaseSound: {fileID: 8300000, guid: cf9d5130d3f474747839b0e17ccfc78a, type: 3}

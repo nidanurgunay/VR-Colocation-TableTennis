@@ -590,7 +590,9 @@ public class ControllerRacket : MonoBehaviour
     {
         var racket = new GameObject(name);
         racket.tag = "Racket";
-        
+        // Set to default layer (0) or "Racket" layer if you have one
+        racket.layer = LayerMask.NameToLayer("Racket") >= 0 ? LayerMask.NameToLayer("Racket") : 0;
+
         // Handle (cylinder)
         var handle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         handle.name = "Handle";
@@ -599,20 +601,34 @@ public class ControllerRacket : MonoBehaviour
         handle.transform.localScale = new Vector3(0.03f, 0.08f, 0.03f);
         handle.GetComponent<Renderer>().material.color = new Color(0.5f, 0.3f, 0.1f); // Brown wood
         var handleCol = handle.GetComponent<Collider>();
-        if (handleCol != null) Destroy(handleCol);
-        
-        // Paddle head (flattened cylinder for better shape)
-        var paddle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        if (handleCol != null) Object.Destroy(handleCol); // Remove handle collider
+        handle.layer = racket.layer;
+
+        // Paddle head (flattened sphere for reliable collision)
+        var paddle = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         paddle.name = "Paddle";
         paddle.transform.SetParent(racket.transform);
-        paddle.transform.localPosition = new Vector3(0, 0.06f, 0);
-        paddle.transform.localScale = new Vector3(0.12f, 0.01f, 0.12f);
-        paddle.GetComponent<Renderer>().material.color = Color.red; // Red paddle
+        paddle.transform.localPosition = new Vector3(0, 0.04f, 0);
+        paddle.transform.localScale = new Vector3(0.12f, 0.01f, 0.14f);
+        paddle.GetComponent<Renderer>().material.color = Color.red;
         paddle.tag = "Racket";
-        
-        // The collider on paddle will be used for ball collision
-        // CleanupRacketComponents will add proper rigidbody
-        
+        paddle.layer = racket.layer;
+
+        // Add Rigidbody directly to paddle for collision detection
+        var rb = paddle.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+
+        // Ensure collider is not a trigger
+        var paddleCol = paddle.GetComponent<Collider>();
+        if (paddleCol != null)
+        {
+            paddleCol.isTrigger = false;
+        }
+
+        // Add debug collision logger to paddle
+        paddle.AddComponent<DebugRacketCollisionLogger>();
+
         return racket;
     }
 }

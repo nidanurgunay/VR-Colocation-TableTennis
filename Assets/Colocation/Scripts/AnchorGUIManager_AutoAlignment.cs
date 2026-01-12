@@ -1218,7 +1218,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 break;
                 
             case AlignmentStep.Done:
-                Log("Already aligned!");
+                Log("Anchors already shared!");
                 break;
         }
 #else
@@ -3866,8 +3866,16 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
     private Vector3 GetControllerSpawnPosition()
     {
+        // If both anchors are available, spawn above their midpoint
+        if (currentAnchors != null && currentAnchors.Count >= 2 && currentAnchors[0] != null && currentAnchors[1] != null)
+        {
+            Vector3 anchorMid = (currentAnchors[0].transform.position + currentAnchors[1].transform.position) * 0.5f;
+            Vector3 aboveAnchors = anchorMid + Vector3.up * 0.5f; // 0.5m above midpoint
+            if (aboveAnchors.y < 0.5f) aboveAnchors.y = 0.5f;
+            return aboveAnchors;
+        }
+
         Vector3 worldPos;
-        
         // Try to get right controller position
         var cameraRig = FindObjectOfType<OVRCameraRig>();
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
@@ -3885,13 +3893,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             worldPos = new Vector3(0, 1.0f, 0);
         }
-        
         // Ensure minimum height above ground
         if (worldPos.y < 0.5f)
         {
             worldPos.y = 0.5f;
         }
-        
         return worldPos;
     }
 
