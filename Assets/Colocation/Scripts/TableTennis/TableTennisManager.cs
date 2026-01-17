@@ -52,10 +52,11 @@ public class TableTennisManager : NetworkBehaviour
     private bool _tableParented = false; // Track if table is parented to anchor
     
     // Game phase tracking
-    public enum GamePhase { 
+    public enum GamePhase {
         TableAdjust,     // Adjusting table position/rotation with thumbsticks
         BallPosition,    // Ball spawned, A/X + thumbsticks to adjust. Hit ball to start.
-        Playing          // Game in progress - racket switching locked
+        Playing,         // Game in progress - racket switching locked
+        BallGrounded     // Ball hit ground, waiting for respawn
     }
     [Networked] public GamePhase CurrentPhase { get; private set; } = GamePhase.TableAdjust;
     
@@ -81,6 +82,29 @@ public class TableTennisManager : NetworkBehaviour
                 RPC_RequestStartPlaying();
             }
         }
+    }
+
+    /// <summary>
+    /// Called by NetworkedBall when ball hits ground - triggers round end
+    /// </summary>
+    public void OnBallGroundHit()
+    {
+        if (Object.HasStateAuthority)
+        {
+            CurrentPhase = GamePhase.BallGrounded;
+            Debug.Log($"{LOG_TAG} OnBallGroundHit Ball hit ground - round ended. Press GRIP to respawn.");
+        }
+        else
+        {
+            RPC_RequestGroundHit();
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestGroundHit()
+    {
+        CurrentPhase = GamePhase.BallGrounded;
+        Debug.Log($"{LOG_TAG} Client notified ground hit - round ended");
     }
     
     // Runtime adjustment state
@@ -279,13 +303,22 @@ public class TableTennisManager : NetworkBehaviour
                     HandleTableAdjustInput();
                 }
                 break;
-                
+
             case GamePhase.BallPosition:
                 HandleBallPositionInput(aButtonPressed || xButtonPressed, axButtonHeld);
                 break;
-                
+
             case GamePhase.Playing:
                 // Playing phase - racket switching locked
+                break;
+
+            case GamePhase.BallGrounded:
+                // GRIP respawns ball
+                if (gripPressed && !wasGripPressed)
+                {
+                    Debug.Log($"{LOG_TAG} GRIP pressed in BallGrounded - respawning ball");
+                    RespawnBall();
+                }
                 break;
         }
     }
@@ -1438,12 +1471,45 @@ public class TableTennisManager : NetworkBehaviour
     }
     
     /// <summary>
+    /// Respawn ball at serve position after ground hit
+    /// </summary>
+    private void RespawnBall()
+    {
+        if (spawnedBall != null)
+        {
+            // NetworkedBall's ResetToServePosition will use CurrentAuthority to determine position
+            // Authority was already set by OnGroundHit based on who won the round
+            spawnedBall.ResetToServePosition(spawnedBall.CurrentAuthority);
+            CurrentPhase = GamePhase.BallPosition;
+            Debug.Log($"{LOG_TAG} Ball respawned for Player {spawnedBall.CurrentAuthority}'s serve");
+        }
+        else if (Object.HasStateAuthority)
+        {
+            // If ball was somehow destroyed, spawn a new one
+            SpawnBall();
+            CurrentPhase = GamePhase.BallPosition;
+        }
+        else
+        {
+            // Client requests host to respawn
+            RPC_RequestRespawnBall();
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestRespawnBall()
+    {
+        Debug.Log($"{LOG_TAG} Host: Client requested ball respawn");
+        RespawnBall();
+    }
+
+    /// <summary>
     /// Reset the game - respawn ball, reset rackets
     /// </summary>
     public void ResetGame()
     {
         // Rackets are now attached to controllers via ControllerRacket, no need to reset
-        
+
         // Reset ball (handled by NetworkedBall)
         if (spawnedBall != null)
         {

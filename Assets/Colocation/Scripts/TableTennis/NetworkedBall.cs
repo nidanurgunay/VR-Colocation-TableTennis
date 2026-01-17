@@ -41,6 +41,9 @@ public class NetworkedBall : NetworkBehaviour
     [Networked] private Vector3 TableRelativeVelocity { get; set; }
     [Networked] private NetworkBool IsInPlay { get; set; }
     [Networked] private NetworkBool IsInPositioningMode { get; set; } // Ball can be moved with thumbsticks
+    [Networked] public int CurrentAuthority { get; set; } // 1 or 2 - which player has ball authority (service)
+    [Networked] public int ScorePlayer1 { get; set; }
+    [Networked] public int ScorePlayer2 { get; set; }
     
     // Legacy - kept for compatibility but unused
     [Networked] private Vector3 AnchorRelativePosition { get; set; }
@@ -98,6 +101,12 @@ public class NetworkedBall : NetworkBehaviour
         if (Object.HasStateAuthority)
         {
             rb.isKinematic = false;
+            // Initialize authority to Player 1 for first serve
+            if (CurrentAuthority == 0)
+            {
+                CurrentAuthority = 1;
+                Debug.Log("[NetworkedBall] First serve - Player 1 gets initial authority");
+            }
             StartCoroutine(TryFindAnchorAndInitialize());
         }
         else
@@ -105,7 +114,7 @@ public class NetworkedBall : NetworkBehaviour
             rb.isKinematic = true;
             StartCoroutine(TryFindAnchorAndInitialize());
         }
-        
+
         Debug.Log($"[NetworkedBall] Spawned. HasStateAuthority: {Object.HasStateAuthority}, Position: {transform.position}");
     }
     
@@ -592,20 +601,26 @@ public class NetworkedBall : NetworkBehaviour
     
     private void ResetToServePosition(int serverPlayerNumber = 1)
     {
+        // Use current authority if available, otherwise use provided parameter
+        if (CurrentAuthority != 0)
+        {
+            serverPlayerNumber = CurrentAuthority;
+        }
+
         // Find table if not assigned
         if (tableObject == null)
         {
             FindTableObject();
         }
-        
+
         // Also ensure tableTransform is set (for network sync)
         if (tableTransform == null && tableObject != null)
         {
             tableTransform = tableObject;
         }
-        
+
         Vector3 worldServePos;
-        
+
         if (tableObject != null)
         {
             // Position relative to table
@@ -625,25 +640,25 @@ public class NetworkedBall : NetworkBehaviour
         {
             worldServePos = new Vector3(0, 1.2f, serverPlayerNumber == 1 ? -1f : 1f);
         }
-        
+
         transform.position = worldServePos;
         rb.velocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
         localVelocity = Vector3.zero;
-        
+
         // Enter positioning mode - player adjusts with thumbsticks, hit to start
         EnterPositioningMode();
-        
+
         lastHitTime = Time.time;
-        
+
         // Update table-relative position for sync
         if (tableTransform != null)
         {
             TableRelativePosition = tableTransform.InverseTransformPoint(worldServePos);
         }
         TableRelativeVelocity = Vector3.zero;
-        
-        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos} - IN POSITIONING MODE");
+
+        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber} (Authority: {CurrentAuthority}): {worldServePos} - IN POSITIONING MODE");
     }
     
     /// <summary>
@@ -944,7 +959,7 @@ public class NetworkedBall : NetworkBehaviour
     }
 
     /// <summary>
-    /// Called when ball hits the ground - shows message and waits for GRIP to respawn
+    /// Called when ball hits the ground - triggers round end and authority switch
     /// </summary>
     private void OnGroundHit()
     {
@@ -956,14 +971,62 @@ public class NetworkedBall : NetworkBehaviour
         rb.isKinematic = true;
         IsInPlay = false;
 
-        Debug.Log($"[NetworkedBall] Ground hit - Ball stopped. Press GRIP to respawn.");
+        // Determine which side the ball hit (winner is opposite side)
+        int loserSide = DetermineHitSide();
+        int winnerSide = loserSide == 1 ? 2 : 1;
 
-        // Notify PassthroughGameManager to show respawn message
+        // Award point to winner
+        if (winnerSide == 1)
+        {
+            ScorePlayer1++;
+            Debug.Log($"[NetworkedBall] Ground hit on Player 2 side - Player 1 wins point! Score: {ScorePlayer1}-{ScorePlayer2}");
+        }
+        else
+        {
+            ScorePlayer2++;
+            Debug.Log($"[NetworkedBall] Ground hit on Player 1 side - Player 2 wins point! Score: {ScorePlayer1}-{ScorePlayer2}");
+        }
+
+        // Winner gets ball authority (service)
+        CurrentAuthority = winnerSide;
+        Debug.Log($"[NetworkedBall] SERVICE RULE: Player {winnerSide} gets ball authority");
+
+        // Notify game managers
         var passthroughManager = FindObjectOfType<PassthroughGameManager>();
         if (passthroughManager != null)
         {
             passthroughManager.OnBallGroundHit();
         }
+
+        var tableTennisManager = FindObjectOfType<TableTennisManager>();
+        if (tableTennisManager != null)
+        {
+            tableTennisManager.OnBallGroundHit();
+        }
+
+        // Notify via RPC for UI updates
+        RPC_NotifyRoundEnd(winnerSide, ScorePlayer1, ScorePlayer2);
+    }
+
+    /// <summary>
+    /// Determine which side (1 or 2) the ball hit on
+    /// Side 1 is -Z, Side 2 is +Z (relative to table)
+    /// </summary>
+    private int DetermineHitSide()
+    {
+        if (tableTransform == null) return 1; // Default to side 1
+
+        // Get ball position relative to table
+        Vector3 localPos = tableTransform.InverseTransformPoint(transform.position);
+
+        // Check which side based on Z coordinate
+        return localPos.z < 0 ? 1 : 2;
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyRoundEnd(int winnerSide, int score1, int score2)
+    {
+        Debug.Log($"[NetworkedBall] Round end - Winner: Player {winnerSide}, Score: {score1}-{score2}");
     }
     
     private void OnTriggerEnter(Collider other)

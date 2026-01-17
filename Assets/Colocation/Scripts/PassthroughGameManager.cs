@@ -705,8 +705,24 @@ public class PassthroughGameManager : NetworkBehaviour
         Debug.Log($"{LOG_TAG} OnBallGroundHit called - setting phase to BallGrounded");
         ballNeedsRespawn = true;
         currentPhase = GamePhase.BallGrounded;
+        UpdateScoreDisplay();
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ballNeedsRespawn: {ballNeedsRespawn} - Press GRIP to respawn");
+    }
+
+    /// <summary>
+    /// Update score display from NetworkedBall
+    /// </summary>
+    private void UpdateScoreDisplay()
+    {
+        if (scoreText == null || spawnedBall == null) return;
+
+        var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
+        if (networkedBall != null)
+        {
+            scoreText.text = $"{networkedBall.ScorePlayer1} - {networkedBall.ScorePlayer2}";
+            Debug.Log($"{LOG_TAG} Score updated: {scoreText.text}, Authority: Player {networkedBall.CurrentAuthority}");
+        }
     }
 
     /// <summary>
@@ -988,7 +1004,7 @@ public class PassthroughGameManager : NetworkBehaviour
     private void UpdateInstructions()
     {
         if (statusText == null) return;
-        
+
         switch (currentPhase)
         {
             case GamePhase.TableAdjust:
@@ -1004,7 +1020,17 @@ public class PassthroughGameManager : NetworkBehaviour
                 if (controlsText) controlsText.text = ballNeedsRespawn ? "GRIP: Respawn Ball\nMENU: Pause" : "MENU: Pause";
                 break;
             case GamePhase.BallGrounded:
-                statusText.text = "BALL OUT OF BOUNDS";
+                // Show who gets the ball
+                string authorityMsg = "";
+                if (spawnedBall != null)
+                {
+                    var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
+                    if (networkedBall != null)
+                    {
+                        authorityMsg = $"\nPlayer {networkedBall.CurrentAuthority}'s serve";
+                    }
+                }
+                statusText.text = $"ROUND END{authorityMsg}";
                 if (controlsText) controlsText.text = "GRIP: Respawn Ball\nMENU: Pause";
                 break;
         }
