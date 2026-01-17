@@ -18,6 +18,7 @@ using Fusion;
 /// Inherits from ColocationManager to reuse alignment logic.
 public class AnchorGUIManager_AutoAlignment : ColocationManager
 {
+    private const string LOG_TAG = "[AnchorGUIManager]";
     // ===================== SERIALIZED FIELDS =====================
     [Header("UI Buttons")]
     [SerializeField] private Button autoAlignButton;
@@ -108,7 +109,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         cameraTransform = Camera.main?.transform;
         if (cameraTransform == null)
         {
-            Log("No main camera found!");
+            Debug.LogError($"{LOG_TAG} Start No main camera found");
             return;
         }
 
@@ -117,7 +118,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         string currentScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
         if (currentScene.ToLower().Contains("tabletennis"))
         {
-            Debug.Log("[AnchorGUIManager Start (alignment)] VR Scene detected, disabling AnchorGUIManager");
+            Debug.Log($"{LOG_TAG} Start VR scene detected, disabling component");
             isSwitchedToVRMode = true;
 
             // Disable this component - TableTennisManager handles VR game
@@ -128,7 +129,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         guiAnchorMarkerPrefab = Resources.Load<GameObject>("AnchorMarker");
         if (guiAnchorMarkerPrefab == null)
         {
-            Debug.LogWarning("[AnchorGUIManager Start (alignment)] AnchorMarker prefab not found, trying AnchorCursorSphere...");
+            Debug.LogWarning($"{LOG_TAG} Start AnchorMarker not found, trying AnchorCursorSphere");
             guiAnchorMarkerPrefab = Resources.Load<GameObject>("AnchorCursorSphere");
         }
 
@@ -137,11 +138,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (guiAnchorMarkerPrefab != null)
         {
-            Debug.Log($"[AnchorGUIManager Start (alignment)] Anchor prefab loaded: {guiAnchorMarkerPrefab.name}");
+            Debug.Log($"{LOG_TAG} Start Anchor prefab loaded: {guiAnchorMarkerPrefab.name}");
         }
         else
         {
-            Debug.LogError("[AnchorGUIManager Start (alignment)] NO ANCHOR PREFAB FOUND! Anchors will have no visual.");
+            Debug.LogError($"{LOG_TAG} Start NO ANCHOR PREFAB FOUND! Anchors will have no visual");
         }
 
         if (alignmentManager == null)
@@ -162,7 +163,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         UpdateAllUI();
         UpdateUIWizard(); // Init text
-        Log("Ready - Grip button to place anchors");
+        Debug.Log($"{LOG_TAG} Start Ready - Grip button to place anchors");
 
         // Create distance displays and line for anchor placement
         CreateDistanceDisplays();
@@ -273,7 +274,19 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         bool hasNetwork = networkRunner != null && networkRunner.IsRunning;
 
         // Check if both host and client are aligned (for Start Game button)
-        bool bothDevicesAligned = (currentState == ColocationState.HostAligned || currentState == ColocationState.ClientAligned|| currentState == ColocationState.Done) && ClientAlignedToAnchors;
+        // CLIENT: Enable when local client is aligned (ClientAligned state)
+        // HOST: Enable when host aligned AND client has aligned too (ClientAlignedToAnchors)
+        bool bothDevicesAligned;
+        if (!isHost)
+        {
+            // Client: enable when client state shows aligned
+            bothDevicesAligned = (currentState == ColocationState.ClientAligned || currentState == ColocationState.Done);
+        }
+        else
+        {
+            // Host: enable when host is aligned AND client has notified that it's aligned
+            bothDevicesAligned = (currentState == ColocationState.HostAligned || currentState == ColocationState.Done) && ClientAlignedToAnchors;
+        }
 
         // Check if host has local anchors for debug mode
         bool hasLocalAnchors = currentAnchors != null && currentAnchors.Count >= 2;
@@ -619,25 +632,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             if (networkRunner != null && networkRunner.IsRunning)
             {
-                // Update role variable
+                // Update role variable - ALWAYS update based on actual network role
                 bool localIsHost = networkRunner.IsServer || networkRunner.IsSharedModeMasterClient;
+
+                // Update isHost if it doesn't match the actual network role
+                if (isHost != localIsHost)
+                {
+                    isHost = localIsHost;
+                    Log(isHost ? "Host Mode Detected" : "Client Mode Detected");
+                    UpdateUIWizard();
+                }
 
                 // If we are a client and NOT aligned yet, handle discovery
                 if (!localIsHost && currentState != ColocationState.Done && currentState != ColocationState.ClientAligned)
                 {
-                    // Auto-switch UI to show Client state
-                    if (isHost) // If we previously thought we were host (default)
+                    // Client-specific UI updates
+                    if (guiStatusText != null && !guiStatusText.text.Contains("Client Mode"))
                     {
-                        isHost = false;
-                        Log("Client Mode Detected");
-
-                        // Update UI immediately for client
-                        if (guiStatusText != null)
-                        {
-                            guiStatusText.text = "Client Mode\nSearching for host session...";
-                        }
-
-                        UpdateUIWizard();
+                        guiStatusText.text = "Client Mode\nSearching for host session...";
                     }
 
                     // Auto-start or retry discovery if not aligned
@@ -682,17 +694,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                         }
                     }
                 }
-                else if (localIsHost)
-                {
-                    if (!isHost)
-                    {
-                        isHost = true;
-                        Log("Host Mode: Click 'Create Anchor' to start");
-                        UpdateUIWizard();
-                    }
-
-                  
-                }
+                // No need for explicit host handling here - isHost is updated above for both host and client
             }
             else if (networkRunner == null)
             {
@@ -1406,6 +1408,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         firstAnchorWorldPosition = Vector3.zero;
         isPlacingAnchor = false; // Reset placement lock
         hostAutoStarted = false; // Allow auto-start again
+
+        // Reset client-specific discovery state
+        guiDiscoveryStarted = false;
+        guiLastDiscoveryTime = 0f;
+        guiClientLocalizedAnchorCount = 0;
 
         // Hide all placement UI
         if (distanceLine != null) distanceLine.enabled = false;

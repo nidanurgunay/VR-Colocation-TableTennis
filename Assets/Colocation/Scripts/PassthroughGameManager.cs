@@ -25,7 +25,7 @@ public class PassthroughGameManager : NetworkBehaviour
     [SerializeField] private float tableMoveSpeed = 1f;
     [SerializeField] private float tableXRotationOffset = 180f;
     [SerializeField] private float tableYRotationOffset = 90f;
-    [SerializeField] private float defaultTableHeight = 0f; // 0 for passthrough (touch ground), 0.76f for VR scene
+    [SerializeField] private float defaultTableHeight = 0.8f; // AR table height for comfortable viewing/playing
     
     [Header("Debug Settings")]
     [Tooltip("Skip anchor alignment for quick testing. Table will spawn in front of player.")]
@@ -40,18 +40,20 @@ public class PassthroughGameManager : NetworkBehaviour
     private float TableMoveSpeed => sharedConfig != null ? sharedConfig.tableMoveSpeed : tableMoveSpeed;
     
     // Game phases
-    public enum GamePhase { 
+    public enum GamePhase {
         Idle,           // Not in passthrough mode
         TableAdjust,    // Adjusting table position/rotation
         BallPosition,   // Ball spawned, adjusting position
-        Playing         // Game in progress
+        Playing,        // Game in progress
+        BallGrounded    // Ball hit ground, waiting for respawn
     }
-    
+
     // State
     private GamePhase currentPhase = GamePhase.Idle;
     private bool isActive = false;
     private bool isGameMenuOpen = false;
     private bool racketsVisible = true;
+    private bool ballNeedsRespawn = false;
     
     // // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
     // private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
@@ -103,67 +105,74 @@ public class PassthroughGameManager : NetworkBehaviour
     /// Start passthrough table tennis - spawns table at anchor midpoint without loading new scene
     public void OnStartPassthroughGameClicked()
     {
-        Debug.Log($"{LOG_TAG} Start Passthrough Game clicked");
-        
+        Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Start");
+
         // Get current state from main manager
         if (mainManager != null)
         {
             _localizedAnchor = mainManager.GetLocalizedAnchor();
-            Debug.Log($"{LOG_TAG} Start Passthrough _localizedAnchor: {_localizedAnchor}");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked GetLocalizedAnchor: {_localizedAnchor}");
         }
-        
+        else
+        {
+            Debug.LogError($"{LOG_TAG} OnStartPassthroughGameClicked mainManager is null!");
+            return;
+        }
+
         // DEBUG MODE: Skip alignment checks but still require anchors to exist
         if (skipAlignmentForDebug)
         {
-            Debug.Log($"{LOG_TAG} DEBUG MODE: Skipping client alignment check but requiring anchors!");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked DebugMode enabled");
         }
-        
+
         // Check if aligned first (skip this check in debug mode)
         if (!skipAlignmentForDebug && (_localizedAnchor == null || !_localizedAnchor.Localized))
         {
-            Debug.Log($"{LOG_TAG} Please complete alignment first");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Alignment required");
             return;
         }
-        
+
         // Check if we have both anchors (skip this check in debug mode)
         var currentAnchors = mainManager?.GetCurrentAnchors();
+        Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Current anchors: {currentAnchors?.Count ?? 0}");
         if (!skipAlignmentForDebug && (currentAnchors == null || currentAnchors.Count < 2))
         {
-            Debug.Log($"{LOG_TAG} Need 2 anchors for passthrough mode");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Need 2 anchors");
             return;
         }
 
 #if FUSION2
         if (Runner == null || !Runner.IsRunning)
         {
-            Debug.Log($"{LOG_TAG} Network not ready. Please wait...");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Network not ready");
             return;
         }
-        
+
         // Check if both devices are aligned (skip in debug mode)
         var currentState = mainManager.GetCurrentState();
-        bool bothDevicesAligned = currentState == AnchorGUIManager_AutoAlignment.ColocationState.ClientAligned || 
+        bool bothDevicesAligned = currentState == AnchorGUIManager_AutoAlignment.ColocationState.ClientAligned ||
                                   currentState == AnchorGUIManager_AutoAlignment.ColocationState.HostAligned ||
                                   currentState == AnchorGUIManager_AutoAlignment.ColocationState.Done;
         if (!skipAlignmentForDebug && !bothDevicesAligned)
         {
-            Debug.Log($"{LOG_TAG} Waiting for both devices to be aligned...");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Waiting for both devices aligned");
             return;
         }
 
         // Either player can initiate
         if (Object.HasStateAuthority)
         {
-            Debug.Log($"{LOG_TAG} Starting passthrough game...");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Starting passthrough game as host");
             StartPassthroughGame();
             RPC_StartPassthroughGame();
         }
         else
         {
-            Debug.Log($"{LOG_TAG} Requesting passthrough game...");
+            Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Requesting passthrough game as client");
             RPC_RequestPassthroughGame();
         }
 #else
+        Debug.Log($"{LOG_TAG} OnStartPassthroughGameClicked Starting passthrough game (non-networked)");
         StartPassthroughGame();
 #endif
     }
@@ -239,32 +248,22 @@ public class PassthroughGameManager : NetworkBehaviour
     private void Update()
     {
         if (!isActive) return;
-        
+
         HandleInput();
     }
-    
-// #if FUSION2
-//     public override void FixedUpdateNetwork()
-//     {
-//         if (!NetworkedGameActive) return;
-        
-//         // Find table if not set
-//         if (spawnedTable == null)
-//         {
-//             spawnedTable = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
-//             var currentAnchors = mainManager?.GetCurrentAnchors();
-//             if (spawnedTable != null && currentAnchors != null && currentAnchors.Count > 0)
-//             {
-//                 spawnedTable.transform.SetParent(currentAnchors[0].transform, worldPositionStays: false);
-//             }
-//         }
-        
-//         if (spawnedTable != null)
-//         {
-//             ApplyTableState();
-//         }
-//     }
-// #endif
+
+#if FUSION2
+    public override void FixedUpdateNetwork()
+    {
+        if (!NetworkedGameActive) return;
+
+        // Client: Apply networked table state every frame to see host's adjustments
+        if (!Object.HasStateAuthority && spawnedTable != null)
+        {
+            ApplyTableState();
+        }
+    }
+#endif
     
     // ==================== INPUT HANDLING ====================
     
@@ -308,9 +307,29 @@ public class PassthroughGameManager : NetworkBehaviour
             case GamePhase.BallPosition:
                 HandleBallPosition(aPressed || xPressed);
                 break;
-                
+
             case GamePhase.Playing:
-                // Game in progress
+                // Check for GRIP to respawn if ball is grounded
+                if (ballNeedsRespawn)
+                {
+                    bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
+                                      OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
+                    if (gripPressed)
+                    {
+                        RespawnBall();
+                    }
+                }
+                break;
+
+            case GamePhase.BallGrounded:
+                // Wait for GRIP to respawn
+                bool gripPressedGrounded = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
+                                          OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
+                if (gripPressedGrounded)
+                {
+                    Debug.Log($"{LOG_TAG} GRIP pressed in BallGrounded phase - respawning ball");
+                    RespawnBall();
+                }
                 break;
         }
     }
@@ -318,14 +337,16 @@ public class PassthroughGameManager : NetworkBehaviour
     private void HandleTableAdjust()
     {
         if (spawnedTable == null) return;
-        
+
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
-        
-        bool hasInput = Mathf.Abs(rightStick.x) > 0.05f || Mathf.Abs(rightStick.y) > 0.05f;
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
+
+        bool hasInput = Mathf.Abs(rightStick.x) > 0.05f || Mathf.Abs(leftStick.y) > 0.05f;
         if (!hasInput) return;
-        
+
+        // Right stick X = Rotation, Left stick Y = Height
         float rotationDelta = rightStick.x * TableRotateSpeed * Time.deltaTime;
-        float heightDelta = rightStick.y * TableMoveSpeed * Time.deltaTime;
+        float heightDelta = leftStick.y * TableMoveSpeed * Time.deltaTime;
         
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
@@ -348,36 +369,15 @@ public class PassthroughGameManager : NetworkBehaviour
         // GRIP spawns ball if not spawned
         bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
                           OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
-        
+
         if (gripPressed && spawnedBall == null)
         {
+            Debug.Log($"{LOG_TAG} HandleBallPosition Grip pressed - spawning ball");
             SpawnBall();
         }
-        
-        // A/X held + thumbstick adjusts ball position
-        bool axHeld = OVRInput.Get(OVRInput.Button.One, OVRInput.Controller.RTouch) ||
-                     OVRInput.Get(OVRInput.Button.Three, OVRInput.Controller.LTouch);
-        
-        if (spawnedBall != null && axHeld)
-        {
-            Vector2 stick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
-            if (Mathf.Abs(stick.x) > 0.1f || Mathf.Abs(stick.y) > 0.1f)
-            {
-                Vector3 movement = new Vector3(stick.x, stick.y, 0) * TableMoveSpeed * Time.deltaTime;
-#if FUSION2
-                if (Object.HasStateAuthority)
-                {
-                    spawnedBall.transform.position += movement;
-                }
-                else
-                {
-                    RPC_RequestBallMove(movement);
-                }
-#else
-                spawnedBall.transform.position += movement;
-#endif
-            }
-        }
+
+        // Ball positioning is now handled by NetworkedBall component
+        // No need for additional logic here - NetworkedBall handles thumbstick input directly
     }
     
     private void HandleMenuInput()
@@ -419,13 +419,21 @@ public class PassthroughGameManager : NetworkBehaviour
     
     private void SpawnTable()
     {
+        Debug.Log($"{LOG_TAG} SpawnTable START");
+
         var anchors = mainManager?.GetCurrentAnchors();
-        if (anchors == null || anchors.Count < 2) return;
-        Debug.Log($"{LOG_TAG} Table spawned anchors {anchors}");
+        if (anchors == null || anchors.Count < 2)
+        {
+            Debug.LogError($"{LOG_TAG} SpawnTable FAILED - Not enough anchors! Count: {anchors?.Count ?? 0}");
+            return;
+        }
+
+        Debug.Log($"{LOG_TAG} SpawnTable Anchors OK - Count: {anchors.Count}");
         Transform primary = anchors[0].transform;
         Transform secondary = anchors[1].transform;
 
         // CLEANUP: Remove any old tables that were children of preserved anchors from VR scene
+        int cleanedCount = 0;
         foreach (var anchor in anchors)
         {
             foreach (Transform child in anchor.transform)
@@ -434,98 +442,83 @@ public class PassthroughGameManager : NetworkBehaviour
                     child.name.Contains("pingpong") || child.name.Contains("PingPong") ||
                     child.name.Contains("TableTennis"))
                 {
-                    Debug.Log($"{LOG_TAG} Removing old table '{child.name}' from preserved anchor");
+                    Debug.Log($"{LOG_TAG} SpawnTable Cleaning up old table: {child.name}");
                     Destroy(child.gameObject);
+                    cleanedCount++;
                 }
             }
         }
+        Debug.Log($"{LOG_TAG} SpawnTable Cleaned {cleanedCount} old tables");
 
         // Find or spawn table
         if (spawnedTable == null)
         {
             spawnedTable = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable");
+            if (spawnedTable != null)
+            {
+                Debug.Log($"{LOG_TAG} SpawnTable Found existing table: {spawnedTable.name}");
+            }
         }
 
         if (spawnedTable == null && TablePrefab != null)
         {
+            Debug.Log($"{LOG_TAG} SpawnTable Instantiating table from prefab");
             spawnedTable = Instantiate(TablePrefab);
+            Debug.Log($"{LOG_TAG} SpawnTable Instantiated table: {spawnedTable?.name ?? "NULL"}");
         }
-
-        float yRot = 0f;
+        else if (spawnedTable == null && TablePrefab == null)
+        {
+            Debug.LogError($"{LOG_TAG} SpawnTable FAILED - TablePrefab is NULL! Check sharedConfig and tablePrefab assignments");
+        }
 
         if (spawnedTable != null)
         {
-            // USE SAME LOGIC AS VR TableTennisManager for consistent table placement
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Table found/instantiated: {spawnedTable.name}");
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Initial table world pos: {spawnedTable.transform.position}, local pos: {spawnedTable.transform.localPosition}");
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Primary anchor world pos: {primary.position}, Secondary anchor world pos: {secondary.position}");
-
-            // Parent table to primary anchor - this is critical for colocation!
-            // When parented, the table will automatically stay in correct position
-            // even if the camera rig is adjusted
+            // Parent table to primary anchor for colocation
             spawnedTable.transform.SetParent(primary, worldPositionStays: false);
 
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) After parenting - table local pos: {spawnedTable.transform.localPosition}, world pos: {spawnedTable.transform.position}");
-
-            // Calculate LOCAL position (relative to primary anchor)
+            // Calculate position between anchors
             Vector3 secondaryLocalPos = primary.InverseTransformPoint(secondary.position);
             Vector3 midpoint = secondaryLocalPos / 2f;
 
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Secondary local pos (relative to primary): {secondaryLocalPos}");
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Calculated midpoint: {midpoint}");
-
-            // Calculate rotation to face from primary to secondary (table long axis)
+            // Calculate rotation
             Vector3 directionToSecondary = secondaryLocalPos;
-            directionToSecondary.y = 0; // Keep horizontal
+            directionToSecondary.y = 0;
+            float yRot = 0f;
 
             if (directionToSecondary.sqrMagnitude > 0.01f)
             {
-                // Table Y rotation: face perpendicular to the anchor line (so players stand at each anchor)
-                yRot = Mathf.Atan2(directionToSecondary.x, directionToSecondary.z) * Mathf.Rad2Deg;
-                // Add 90° so table's LONG EDGE is along anchor line (players face each other across table)
-                yRot += 90f;
-            }
-            else
-            {
-                yRot = tableYRotationOffset;
+                yRot = Mathf.Atan2(directionToSecondary.x, directionToSecondary.z) * Mathf.Rad2Deg + 90f;
             }
 
-            // RESTORED: Use original working logic - local Y relative to anchor (not world Y = 0)
-            // This matches the VR TableTennisManager approach and the original PassthroughGameManager
-            // For passthrough, defaultTableHeight should be 0 to touch ground
+            // Position table
             Vector3 localTablePos = new Vector3(midpoint.x, defaultTableHeight, midpoint.z);
-
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Using defaultTableHeight: {defaultTableHeight}");
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) Final calculated local pos: {localTablePos}, Y rotation: {yRot}°");
-
-            // Apply LOCAL position and rotation relative to anchor
             spawnedTable.transform.localPosition = localTablePos;
             spawnedTable.transform.localRotation = Quaternion.Euler(tableXRotationOffset, yRot, 0);
 
-            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) FINAL POSITION - LocalPos: {spawnedTable.transform.localPosition}, LocalRot: {spawnedTable.transform.localEulerAngles}, WorldPos: {spawnedTable.transform.position}");
-
             spawnedTable.SetActive(true);
-        }
-        else
-        {
-            Debug.LogWarning($"{LOG_TAG} No table prefab!");
-            return;
-        }
 
 #if FUSION2
-        if (Object != null && Object.HasStateAuthority)
-        {
-            NetworkedTableYRotation = yRot;
-            NetworkedTableHeight = defaultTableHeight;
-            NetworkedGameActive = true;
-        }
+            // Initialize networked values for both host and client
+            // Host: Sets the initial values that will sync to clients
+            // Client: Initializes local copy to match initial placement (will be overwritten when host's values sync)
+            if (Object != null && Object.HasStateAuthority)
+            {
+                NetworkedTableYRotation = yRot;
+                NetworkedTableHeight = defaultTableHeight;
+                NetworkedGameActive = true;
+                Debug.Log($"{LOG_TAG} SpawnTable HOST initialized networked values: Rotation={yRot}, Height={defaultTableHeight}");
+            }
+            else
+            {
+                // Client: Initialize local tracking of table state to match spawn position
+                // This prevents ApplyTableState from using default(0) values before host's values arrive
+                Debug.Log($"{LOG_TAG} SpawnTable CLIENT spawned with initial values: Rotation={yRot}, Height={defaultTableHeight}, waiting for host sync...");
+            }
 #endif
 
-        Debug.Log($"{LOG_TAG} Table spawned at height {defaultTableHeight}");
+            Debug.Log($"{LOG_TAG} SpawnTable Table configured - Height: {defaultTableHeight}, LocalPos: {spawnedTable.transform.localPosition}, WorldPos: {spawnedTable.transform.position}");
 
-        // Tag rackets in the spawned table for ControllerRacket to find
-        if (spawnedTable != null)
-        {
+            // Tag rackets in the spawned table for ControllerRacket to find
             foreach (Transform child in spawnedTable.GetComponentsInChildren<Transform>(true))
             {
                 if (child.name.ToLower().Contains("racket") || child.name.ToLower().Contains("paddle"))
@@ -535,11 +528,17 @@ public class PassthroughGameManager : NetworkBehaviour
                 }
             }
         }
+        else
+        {
+            Debug.LogError($"{LOG_TAG} SpawnTable FAILED - spawnedTable is still NULL after all attempts!");
+        }
 
         CreateGameUI();
 
         // Initialize ControllerRacket for single-hand passthrough mode
         InitializeControllerRacket();
+
+        Debug.Log($"{LOG_TAG} SpawnTable COMPLETE - Table: {(spawnedTable != null ? "OK" : "FAILED")}");
     }
     
 
@@ -565,17 +564,26 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         var anchors = mainManager?.GetCurrentAnchors();
         if (spawnedTable == null || anchors == null || anchors.Count == 0) return;
-        
+
 #if FUSION2
+        // CRITICAL FIX: Don't apply networked state until host has initialized values
+        // When client first spawns table, NetworkedTableHeight will be 0 (default) until host's values sync
+        // We detect this by checking if NetworkedGameActive is true (set by host along with other values)
+        if (!NetworkedGameActive)
+        {
+            Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] ApplyTableState SKIPPED - NetworkedGameActive=false (waiting for host to initialize values)");
+            return;
+        }
+
         Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) ApplyTableState - Before Y update: localPos={spawnedTable.transform.localPosition}, worldPos={spawnedTable.transform.position}");
-        
+
         spawnedTable.transform.localRotation = Quaternion.Euler(
             tableXRotationOffset, NetworkedTableYRotation, 0);
-        
+
         Vector3 pos = spawnedTable.transform.localPosition;
         pos.y = NetworkedTableHeight;
         spawnedTable.transform.localPosition = pos;
-        
+
         Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) ApplyTableState - After Y update: localPos={spawnedTable.transform.localPosition}, worldPos={spawnedTable.transform.position}, NetworkedTableHeight={NetworkedTableHeight}");
 #endif
     }
@@ -597,27 +605,69 @@ public class PassthroughGameManager : NetworkBehaviour
     
     private void SpawnBall()
     {
-        if (spawnedTable == null) return;
-        
-        Vector3 spawnPos = spawnedTable.transform.position + Vector3.up * 0.5f;
-        
+        if (spawnedTable == null)
+        {
+            Debug.LogWarning($"{LOG_TAG} SpawnBall No table found");
+            return;
+        }
+
+        // Calculate table surface position (top center of table)
+        // IMPORTANT: Use world position, not relying on NetworkedTableHeight which may not be synced yet
+        Vector3 tableSurfacePos = spawnedTable.transform.position;
+
+        // Try to get table bounds to find actual surface height
+        Renderer tableRenderer = spawnedTable.GetComponentInChildren<Renderer>();
+        if (tableRenderer != null)
+        {
+            // Use bounds to find the TOP of the table (max Y of mesh bounds)
+            Bounds bounds = tableRenderer.bounds;
+            tableSurfacePos = bounds.center;
+            tableSurfacePos.y = bounds.max.y; // Top of the table
+            Debug.Log($"{LOG_TAG} SpawnBall Using table renderer bounds - Center: {bounds.center}, Max Y: {bounds.max.y}, Surface: {tableSurfacePos}");
+        }
+        else
+        {
+            // Fallback: assume table is at its transform position + default height
+            tableSurfacePos.y += defaultTableHeight;
+            Debug.LogWarning($"{LOG_TAG} SpawnBall No renderer found, using table transform + default height: {tableSurfacePos}");
+        }
+
+        // Spawn ball 0.75m above table surface
+        Vector3 spawnPos = tableSurfacePos + Vector3.up * 0.75f;
+        Debug.Log($"{LOG_TAG} SpawnBall FINAL - Table world pos: {spawnedTable.transform.position}, Surface: {tableSurfacePos}, Ball spawn: {spawnPos}");
+
 #if FUSION2
         if (Object.HasStateAuthority && Runner != null)
         {
+            Debug.Log($"{LOG_TAG} SpawnBall Host spawning networked ball");
             var ball = Runner.Spawn(BallPrefab, spawnPos, Quaternion.identity);
             if (ball != null)
             {
                 spawnedBall = ball.gameObject;
+                Debug.Log($"{LOG_TAG} SpawnBall Ball spawned successfully: {ball.Id}");
+
                 var networkedBall = ball.GetComponent<NetworkedBall>();
                 if (networkedBall != null)
                 {
+                    Debug.Log($"{LOG_TAG} SpawnBall Entering positioning mode");
                     networkedBall.EnterPositioningMode();
                 }
+                else
+                {
+                    Debug.LogWarning($"{LOG_TAG} SpawnBall No NetworkedBall component found");
+                }
+
                 RPC_NotifyBallSpawned();
+                Debug.Log($"{LOG_TAG} SpawnBall Notified clients of ball spawn");
+            }
+            else
+            {
+                Debug.LogError($"{LOG_TAG} SpawnBall Failed to spawn ball");
             }
         }
         else
         {
+            Debug.Log($"{LOG_TAG} SpawnBall Client requesting ball spawn");
             RPC_RequestSpawnBall();
         }
 #else
@@ -626,12 +676,75 @@ public class PassthroughGameManager : NetworkBehaviour
         if (ballPrefabObj != null)
         {
             spawnedBall = Instantiate(ballPrefabObj, spawnPos, Quaternion.identity);
+            Debug.Log($"{LOG_TAG} SpawnBall Non-networked ball spawned");
+        }
+        else
+        {
+            Debug.LogError($"{LOG_TAG} SpawnBall Ball prefab not found in Resources");
         }
 #endif
-        
-        Debug.Log($"{LOG_TAG} Ball spawned");
+
+        Debug.Log($"{LOG_TAG} SpawnBall Completed");
     }
-    
+
+    /// <summary>
+    /// Called by NetworkedBall when ball hits ground
+    /// </summary>
+    public void OnBallGroundHit()
+    {
+        Debug.Log($"{LOG_TAG} OnBallGroundHit called - setting phase to BallGrounded");
+        ballNeedsRespawn = true;
+        currentPhase = GamePhase.BallGrounded;
+        UpdateInstructions();
+        Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ballNeedsRespawn: {ballNeedsRespawn} - Press GRIP to respawn");
+    }
+
+    /// <summary>
+    /// Respawn ball at initial position above table
+    /// </summary>
+    private void RespawnBall()
+    {
+#if FUSION2
+        if (!Object.HasStateAuthority)
+        {
+            Debug.Log($"{LOG_TAG} Client requesting ball respawn");
+            RPC_RequestRespawnBall();
+            return;
+        }
+#endif
+
+        Debug.Log($"{LOG_TAG} Respawning ball");
+
+        // Despawn old ball
+        if (spawnedBall != null)
+        {
+#if FUSION2
+            if (Runner != null && Object.HasStateAuthority)
+            {
+                var netObj = spawnedBall.GetComponent<NetworkObject>();
+                if (netObj != null) Runner.Despawn(netObj);
+            }
+#endif
+            spawnedBall = null;
+        }
+
+        // Spawn new ball
+        SpawnBall();
+
+        // Reset state
+        ballNeedsRespawn = false;
+        currentPhase = GamePhase.Playing;
+        UpdateInstructions();
+    }
+
+#if FUSION2
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestRespawnBall()
+    {
+        RespawnBall();
+    }
+#endif
+
     // ==================== GAME FLOW ====================
     
     private void AdvancePhase()
@@ -868,19 +981,20 @@ public class PassthroughGameManager : NetworkBehaviour
         switch (currentPhase)
         {
             case GamePhase.TableAdjust:
-                // [COMMENTED OUT OLD UI] statusText.text = "TABLE ADJUST\n\nRight Stick: Rotate/Height\nB/Y: Switch Racket Hand\nA/X: Confirm";
                 statusText.text = "TABLE ADJUST";
-                if (controlsText) controlsText.text = "Right Stick: Rotate/Height\nB/Y: Switch Racket Hand\nA/X: Confirm";
+                if (controlsText) controlsText.text = "Right Stick X: Rotate\nLeft Stick Y: Height\nB/Y: Switch Racket Hand\nA/X: Confirm";
                 break;
             case GamePhase.BallPosition:
-                // [COMMENTED OUT OLD UI] statusText.text = "BALL POSITION\n\nGRIP: Spawn Ball\nA/X + Stick: Move Ball\nHit ball to play!";
                 statusText.text = "BALL POSITION";
-                if (controlsText) controlsText.text = "GRIP: Spawn Ball\nA/X + Stick: Move Ball\nHit ball to play!";
+                if (controlsText) controlsText.text = "A/X: Toggle Adjust Mode\nLeft Stick: Move (X/Z)\nRight Stick Y: Height\nHit ball to start!";
                 break;
             case GamePhase.Playing:
-                // [COMMENTED OUT OLD UI] statusText.text = "PLAYING\n\nMENU: Pause";
                 statusText.text = "PLAYING";
-                if (controlsText) controlsText.text = "MENU: Pause";
+                if (controlsText) controlsText.text = ballNeedsRespawn ? "GRIP: Respawn Ball\nMENU: Pause" : "MENU: Pause";
+                break;
+            case GamePhase.BallGrounded:
+                statusText.text = "BALL OUT OF BOUNDS";
+                if (controlsText) controlsText.text = "GRIP: Respawn Ball\nMENU: Pause";
                 break;
         }
     }
@@ -893,15 +1007,6 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         NetworkedTableYRotation += rotDelta;
         NetworkedTableHeight += heightDelta;
-    }
-    
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestBallMove(Vector3 movement)
-    {
-        if (spawnedBall != null)
-        {
-            spawnedBall.transform.position += movement;
-        }
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]

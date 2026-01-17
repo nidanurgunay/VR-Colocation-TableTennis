@@ -1,0 +1,54 @@
+Unity Editor version:    2022.3.62f3 (96770f904ca7)
+Branch:                  2022.3/respin/2022.3.62f2-4af31df585-v2
+Build type:              Release
+Batch mode:              YES
+macOS version:           Version 15.6.1 (Build 24G90)
+Darwin version:          24.6.0
+Architecture:            arm64
+Running under Rosetta:   NO
+Available memory:        24576 MB
+[Licensing::Module] Trying to connect to existing licensing client channel...
+[Licensing::IpcConnector] Successfully connected to: "LicenseClient-nidanurgunay" at "2026-01-16T10:56:21.215Z"
+[Licensing::Client] Code 10 while verifying Licensing Client signature (process Id: 1217, path: "/Applications/Unity Hub.app/Contents/Frameworks/UnityLicensingClient_V1.app/Contents/MacOS/Unity.Licensing.Client")
+[Licensing::Module] LicensingClient has failed validation; ignoring
+[Licensing::Client] Handshaking with LicensingClient:
+  Version:                 1.17.4+4293ba1
+  Session Id:              5e37974bae4949ddb743aff556e1361a
+  Correlation Id:          014901a14bba4d004f2516a0ad401163
+  External correlation Id: 2131607215106374212
+  Machine Id:              VuNvu+BTA0ENcdgxHFAmB7U+8oM=
+[Licensing::Module] Successfully connected to LicensingClient on channel: "LicenseClient-nidanurgunay" (connect: 0.00s, validation: 0.01s, handshake: 0.17s)
+[Licensing::IpcConnector] Successfully connected to: "LicenseClient-nidanurgunay-notifications" at "2026-01-16T10:56:21.395867Z"
+[Licensing::Module] Error: Access token is unavailable; failed to update
+[Licensing::Client] Successfully updated license
+[Licensing::Client] Successfully resolved entitlement details
+[Licensing::Module] Serial number assigned to: "18968332634479-UnityPersXXXX"
+Pro License: NO
+[Licensing::Client] Successfully resolved entitlement details
+Launching external process: /Applications/Unity/Hub/Editor/2022.3.62f3/Unity.app/Contents/Resources/PackageManager/Server/UnityPackageManager
+
+COMMAND LINE ARGUMENTS:
+/Applications/Unity/Hub/Editor/2022.3.62f3/Unity.app/Contents/MacOS/Unity
+-batchmode
+-nographics
+-projectPath
+.
+-executeMethod
+UnityEditor.BuildPlayerWindow.BuildPlayer
+-buildTarget
+Android
+-logFile
+build.log
+Successfully changed project path to: /Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr
+/Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr
+It looks like another Unity instance is running with this project open.
+
+Multiple Unity instances cannot open the same project.
+
+Project: /Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr
+Fatal Error! It looks like another Unity instance is running with this project open.
+
+Multiple Unity instances cannot open the same project.
+
+Project: /Users/nidanurgunay/Desktop/Uni/VR:AR lecture/Project/colocation-vr
+[Package Manager] Server::Kill -- Server was shutdown

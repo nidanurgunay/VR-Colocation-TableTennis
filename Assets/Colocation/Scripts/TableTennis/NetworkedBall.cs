@@ -10,9 +10,11 @@ public class NetworkedBall : NetworkBehaviour
 {
     [Header("Physics Settings")]
     [SerializeField] private float gravity = 9.81f;
-    [SerializeField] private float bounciness = 0.92f;
+    [SerializeField] private float bounciness = 0.95f; // Increased from 0.92 for more realistic ping pong bounce
     [SerializeField] private float airResistance = 0.02f;
     [SerializeField] private float tableHeight = 0.76f; // Standard table tennis height
+    [SerializeField] private float racketHitMultiplier = 2.2f; // Multiplier for racket velocity transfer
+    [SerializeField] private float fallbackHitMultiplier = 1.2f; // Multiplier when racket has no rigidbody
     
     [Header("Serve Settings")]
     [SerializeField] private float serveHeight = 0.4f; // Height above table for serve
@@ -295,6 +297,19 @@ public class NetworkedBall : NetworkBehaviour
             }
             // Always sync position to network (including during positioning)
             SyncToNetwork();
+        }
+        else
+        {
+            // CLIENT: Force immediate position sync during positioning mode for smooth updates
+            if (IsInPositioningMode && tableTransform != null)
+            {
+                Vector3 targetPosition = tableTransform.TransformPoint(TableRelativePosition);
+                transform.position = targetPosition; // Force immediate sync
+                if (rb != null)
+                {
+                    rb.position = targetPosition; // Also update rigidbody position
+                }
+            }
         }
     }
     
@@ -873,38 +888,95 @@ public class NetworkedBall : NetworkBehaviour
     private void OnCollisionEnter(Collision collision)
     {
         if (!Object.HasStateAuthority) return;
-        
-        if (collision.gameObject.CompareTag("Racket") || 
+
+        // Check for racket hit
+        if (collision.gameObject.CompareTag("Racket") ||
             collision.gameObject.layer == LayerMask.NameToLayer("Racket"))
         {
             Rigidbody racketRb = collision.gameObject.GetComponent<Rigidbody>();
             Vector3 hitVelocity;
-            
+
             if (racketRb != null)
             {
-                hitVelocity = racketRb.velocity * 1.5f;
+                // Use racket velocity for more responsive hits (increased from 1.5x to 2.2x)
+                hitVelocity = racketRb.velocity * racketHitMultiplier;
             }
             else
             {
-                hitVelocity = collision.relativeVelocity * 0.8f;
+                // Fallback to relative velocity (increased from 0.8x to 1.2x)
+                hitVelocity = collision.relativeVelocity * fallbackHitMultiplier;
             }
-            
+
+            // Ensure minimum upward velocity for playability
             hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
-            
+
             OnRacketHit(hitVelocity, collision.contacts[0].point);
+            return;
+        }
+
+        // Check for table collision (bounce)
+        if (collision.gameObject.CompareTag("Table") ||
+            collision.gameObject.CompareTag(tableTag) ||
+            (tableObject != null && collision.gameObject == tableObject.gameObject))
+        {
+            // Bounce off table with bounciness factor
+            Vector3 normal = collision.contacts[0].normal;
+            Vector3 velocity = rb.velocity;
+
+            // Reflect velocity with bounciness
+            Vector3 reflectedVelocity = Vector3.Reflect(velocity, normal) * bounciness;
+
+            rb.velocity = reflectedVelocity;
+            localVelocity = reflectedVelocity;
+
+            Debug.Log($"[NetworkedBall] Ball bounced on table - New velocity: {reflectedVelocity}");
+            return;
+        }
+
+        // Check for ground hit (respawn needed)
+        if (collision.gameObject.CompareTag("Ground") ||
+            collision.gameObject.layer == LayerMask.NameToLayer("Default") ||
+            transform.position.y < resetBelowY)
+        {
+            Debug.Log($"[NetworkedBall] Ball hit ground - Respawn needed");
+            OnGroundHit();
+        }
+    }
+
+    /// <summary>
+    /// Called when ball hits the ground - shows message and waits for GRIP to respawn
+    /// </summary>
+    private void OnGroundHit()
+    {
+        if (!Object.HasStateAuthority) return;
+
+        // Stop ball physics
+        rb.velocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        rb.isKinematic = true;
+        IsInPlay = false;
+
+        Debug.Log($"[NetworkedBall] Ground hit - Ball stopped. Press GRIP to respawn.");
+
+        // Notify PassthroughGameManager to show respawn message
+        var passthroughManager = FindObjectOfType<PassthroughGameManager>();
+        if (passthroughManager != null)
+        {
+            passthroughManager.OnBallGroundHit();
         }
     }
     
     private void OnTriggerEnter(Collider other)
     {
         if (!Object.HasStateAuthority) return;
-        
+
         if (other.CompareTag("Racket"))
         {
             Rigidbody racketRb = other.GetComponent<Rigidbody>();
             if (racketRb != null)
             {
-                Vector3 hitVelocity = racketRb.velocity * 1.5f;
+                // Use same multiplier as OnCollisionEnter for consistency
+                Vector3 hitVelocity = racketRb.velocity * racketHitMultiplier;
                 hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
                 OnRacketHit(hitVelocity, other.ClosestPoint(transform.position));
             }

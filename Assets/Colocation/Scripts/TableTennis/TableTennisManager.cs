@@ -9,6 +9,7 @@ using System.Linq;
 /// </summary>
 public class TableTennisManager : NetworkBehaviour
 {
+    private const string LOG_TAG = "[TableTennisManager]";
     [Header("Shared Config (assign this OR individual prefabs below)")]
     [SerializeField] private TableTennisConfig sharedConfig;
     
@@ -72,7 +73,7 @@ public class TableTennisManager : NetworkBehaviour
             if (Object.HasStateAuthority)
             {
                 CurrentPhase = GamePhase.Playing;
-                Debug.Log("[TableTennisManager] Ball hit! Transitioning to Playing phase.");
+                Debug.Log($"{LOG_TAG} OnBallHit Ball hit! Transitioning to Playing phase");
             }
             else
             {
@@ -190,9 +191,12 @@ public class TableTennisManager : NetworkBehaviour
             NetworkedTableLocalPosition.y + NetworkedFloorOffset,
             NetworkedTableLocalPosition.z
         );
-        
+
         // Apply LOCAL rotation relative to anchor
-        Quaternion localRotation = Quaternion.Euler(tableXRotationOffset, NetworkedTableYRotation, 0);
+        // Only apply X rotation offset if tableRoot is the table directly (not Environment)
+        bool isEnvironmentRoot = tableRoot.name.Contains("Environment");
+        float xRotation = isEnvironmentRoot ? 0f : tableXRotationOffset;
+        Quaternion localRotation = Quaternion.Euler(xRotation, NetworkedTableYRotation, 0);
         tableRoot.transform.localRotation = localRotation;
     }
     
@@ -204,8 +208,10 @@ public class TableTennisManager : NetworkBehaviour
         // Initialize references if needed
         if (tableRoot == null)
         {
-            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
-                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+            // Try to find Environment first (preferred), then fall back to table directly
+            tableRoot = GameObject.Find("Environment") ??
+                        GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") ??
+                        GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
         }
         if (cameraRig == null)
         {
@@ -610,9 +616,10 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (tableRoot == null)
         {
-            // Try to find the table
-            tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
-                        ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+            // Try to find Environment first (preferred), then fall back to table directly
+            tableRoot = GameObject.Find("Environment") ??
+                        GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") ??
+                        GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
             if (tableRoot == null) return;
         }
         
@@ -719,16 +726,17 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (Object.HasStateAuthority)
         {
+            Debug.Log($"{LOG_TAG} SpawnBallForPositioning Host spawning ball for positioning");
             SpawnBall();
             GameStarted = true; // Ball exists, but game hasn't truly started until hit
             ballSpawnPending = false; // Reset for host
             RPC_NotifyBallSpawned(); // Notify all clients
-            Debug.Log("[TableTennisManager] Ball spawned - adjust position with A/X + thumbstick, hit to start!");
+            Debug.Log($"{LOG_TAG} SpawnBallForPositioning Ball spawned - adjust position with A/X + thumbstick, hit to start");
         }
         else
         {
             // Client requests host to spawn ball
-            Debug.Log("[TableTennisManager] Client requesting ball spawn...");
+            Debug.Log($"{LOG_TAG} SpawnBallForPositioning Client requesting ball spawn");
             RPC_RequestGameStart();
         }
     }
@@ -750,17 +758,14 @@ public class TableTennisManager : NetworkBehaviour
             case GamePhase.TableAdjust:
                 // Move to ball position phase
                 CurrentPhase = GamePhase.BallPosition;
-                Debug.Log("[TableTennisManager] Phase: BALL POSITION");
-                Debug.Log("  Press GRIP to spawn ball");
-                Debug.Log("  A/X + Right Stick: Adjust ball position");
-                Debug.Log("  B/Y: Toggle racket visibility");
-                Debug.Log("  Hit ball with racket to START!");
+                Debug.Log($"{LOG_TAG} AdvancePhase Phase: BALL POSITION");
+                Debug.Log($"{LOG_TAG} AdvancePhase Instructions: Press GRIP to spawn ball, A/X + thumbstick to adjust ball position, hit ball with racket to START");
                 break;
-                
+
             case GamePhase.BallPosition:
                 // No phase advance - hit ball to start
                 break;
-                
+
             case GamePhase.Playing:
                 // No phase advance
                 break;
@@ -977,115 +982,143 @@ public class TableTennisManager : NetworkBehaviour
             return;
         }
 
-        // Find the PingPongTable FIRST (before cleanup) - the VR scene should have a table in the hierarchy
-        tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
-                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+        // Find the Environment object FIRST - this contains the table and room (walls, floor, etc.)
+        GameObject environmentRoot = GameObject.Find("Environment");
+        Debug.Log($"{LOG_TAG} PlaceTableAtAnchor Searching for Environment: {(environmentRoot != null ? "FOUND" : "NOT FOUND")}");
 
-        // CLEANUP: Remove OLD tables that were children of preserved anchors from previous scene
-        // BUT keep the current scene's table (tableRoot)
+        // Find the PingPongTable (used for reference and verification)
+        GameObject pingPongTable = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
+                    ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
+        Debug.Log($"{LOG_TAG} PlaceTableAtAnchor Searching for PingPongTable: {(pingPongTable != null ? $"FOUND '{pingPongTable.name}'" : "NOT FOUND")}");
+
+        // Determine which object to use as tableRoot (the one we'll parent to anchor and position)
+        if (environmentRoot != null)
+        {
+            // PREFERRED: Use Environment as root (contains table + room)
+            tableRoot = environmentRoot;
+
+            // Verify table exists within Environment
+            if (pingPongTable != null)
+            {
+                Debug.Log($"{LOG_TAG} PlaceTableAtAnchor Using Environment as root. Table '{pingPongTable.name}' found at local pos: {pingPongTable.transform.localPosition} within {pingPongTable.transform.parent?.name ?? "null"}");
+            }
+            else
+            {
+                Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor Using Environment but PingPongTable not found! Environment has {environmentRoot.transform.childCount} children");
+            }
+        }
+        else if (pingPongTable != null)
+        {
+            // FALLBACK: Use PingPongTable directly if no Environment found
+            tableRoot = pingPongTable;
+            Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor No Environment found - using PingPongTable directly (room may not be centered)");
+        }
+        else
+        {
+            tableRoot = null;
+            Debug.LogError($"{LOG_TAG} PlaceTableAtAnchor CRITICAL: Neither Environment nor PingPongTable found in scene!");
+        }
+
+        // CLEANUP: Remove OLD Environment/tables that were children of preserved anchors from previous scene
+        // BUT keep the current scene's tableRoot
         var preservedAnchors = FindObjectsOfType<OVRSpatialAnchor>();
         foreach (var anchor in preservedAnchors)
         {
-            // Remove any child tables from the anchor (except our current table)
+            // Remove any child Environment or tables from the anchor (except our current tableRoot)
             foreach (Transform child in anchor.transform)
             {
-                if (child.gameObject == tableRoot) continue; // Don't destroy current scene's table
+                if (child.gameObject == tableRoot) continue; // Don't destroy current scene's root
 
-                if (child.name.Contains("PingPongTable") || child.name.Contains("pingpongtable") ||
-                    child.name.Contains("pingpong") || child.name.Contains("PingPong") ||
-                    child.name.Contains("TableTennis"))
+                if (child.name.Contains("Environment") || child.name.Contains("PingPongTable") ||
+                    child.name.Contains("pingpongtable") || child.name.Contains("pingpong") ||
+                    child.name.Contains("PingPong") || child.name.Contains("TableTennis"))
                 {
-                    Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table)] Removing old table '{child.name}' from preserved anchor");
+                    Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table)] Removing old '{child.name}' from preserved anchor");
                     Destroy(child.gameObject);
                 }
             }
         }
 
+        // Fallback to assigned tableTransform if needed
         if (tableRoot == null && tableTransform != null)
         {
             tableRoot = tableTransform.gameObject;
+            Debug.LogWarning("[TableTennisManager PlaceTableAtAnchor] Using assigned tableTransform as fallback");
         }
         
         if (tableRoot != null)
         {
-            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Table found: {tableRoot.name}");
-            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Initial table world pos: {tableRoot.transform.position}, local pos: {tableRoot.transform.localPosition}");
-            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Primary anchor world pos: {sharedAnchor.position}, Secondary anchor world pos: {secondaryAnchor?.position ?? Vector3.zero}");
-            
-            // Parent table to primary anchor - this is critical for colocation!
-            // When parented, the table will automatically stay in correct position
-            // even if the camera rig is adjusted
+            // Parent Environment/table to primary anchor - this is critical for colocation!
+            // When parented, the Environment (and its children: table, room, etc.) will automatically
+            // stay in correct position even if the camera rig is adjusted
             tableRoot.transform.SetParent(sharedAnchor, worldPositionStays: false);
             _tableParented = true;
-            
-            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] After parenting - table local pos: {tableRoot.transform.localPosition}, world pos: {tableRoot.transform.position}");
-            
+
             // Calculate LOCAL position (relative to primary anchor)
-            Vector3 localTablePos;
-            float tableYRotation;
-            
+            // NOTE: If tableRoot is Environment, the table should be at (0,0,0) within Environment.
+            // So positioning Environment positions the table at Environment's origin.
+            Vector3 localEnvPos;  // Position of Environment (which centers the table)
+            float envYRotation;
+
             if (secondaryAnchor != null)
             {
-                // PLACE TABLE BETWEEN TWO ANCHORS
+                // PLACE ENVIRONMENT (AND TABLE) BETWEEN TWO ANCHORS
                 // Get secondary anchor position in primary anchor's local space
                 Vector3 secondaryLocalPos = sharedAnchor.InverseTransformPoint(secondaryAnchor.position);
-                
+
                 // Midpoint between primary (0,0,0 in local) and secondary
                 Vector3 midpoint = secondaryLocalPos / 2f;
-                
-                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Secondary local pos (relative to primary): {secondaryLocalPos}");
-                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Calculated midpoint: {midpoint}");
-                
+
                 // Calculate rotation to face from primary to secondary (table long axis)
                 Vector3 directionToSecondary = secondaryLocalPos;
                 directionToSecondary.y = 0; // Keep horizontal
-                
+
                 if (directionToSecondary.sqrMagnitude > 0.01f)
                 {
-                    // Table Y rotation: face perpendicular to the anchor line (so players stand at each anchor)
-                    tableYRotation = Mathf.Atan2(directionToSecondary.x, directionToSecondary.z) * Mathf.Rad2Deg;
+                    // Environment Y rotation: face perpendicular to the anchor line (so players stand at each anchor)
+                    envYRotation = Mathf.Atan2(directionToSecondary.x, directionToSecondary.z) * Mathf.Rad2Deg;
                     // Add 90° so table's LONG EDGE is along anchor line (players face each other across table)
-                    tableYRotation += 90f;
+                    envYRotation += 90f;
                 }
                 else
                 {
-                    tableYRotation = tableYRotationOffset;
+                    envYRotation = tableYRotationOffset;
                 }
-                
-                // Position at midpoint, at table height
-                localTablePos = new Vector3(midpoint.x, defaultTableHeight, midpoint.z) + tablePositionOffset;
-                
-                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] 2-ANCHOR: Secondary local pos: {secondaryLocalPos}, Midpoint: {midpoint}, TableYRot: {tableYRotation}");
+
+                // Position Environment at midpoint, at table height
+                // This centers the table (which is at Environment's origin) between the anchors
+                localEnvPos = new Vector3(midpoint.x, defaultTableHeight, midpoint.z) + tablePositionOffset;
             }
             else
             {
                 // SINGLE ANCHOR: Use offset from primary anchor
-                localTablePos = new Vector3(tablePositionOffset.x, defaultTableHeight, tablePositionOffset.z);
-                tableYRotation = tableYRotationOffset;
-                
-                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] SINGLE-ANCHOR: Using offset position");
+                localEnvPos = new Vector3(tablePositionOffset.x, defaultTableHeight, tablePositionOffset.z);
+                envYRotation = tableYRotationOffset;
             }
-            
-            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Final calculated local pos: {localTablePos}, Y rotation: {tableYRotation}°");
             
             // Host initializes networked values (LOCAL coordinates)
             if (Object.HasStateAuthority)
             {
-                NetworkedTableLocalPosition = localTablePos;
-                NetworkedTableYRotation = tableYRotation;
+                NetworkedTableLocalPosition = localEnvPos;
+                NetworkedTableYRotation = envYRotation;
                 NetworkedFloorOffset = 0f;
-                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] HOST: Set networked local pos: {localTablePos}, rot: {tableYRotation}");
             }
-            
+
             // Apply LOCAL position and rotation relative to anchor
-            tableRoot.transform.localPosition = localTablePos;
-            tableRoot.transform.localRotation = Quaternion.Euler(tableXRotationOffset, tableYRotation, 0);
-            
-            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] FINAL POSITION - LocalPos: {tableRoot.transform.localPosition}, LocalRot: {tableRoot.transform.localEulerAngles}, WorldPos: {tableRoot.transform.position}");
+            tableRoot.transform.localPosition = localEnvPos;
+
+            // Apply X rotation offset ONLY if positioning table directly (not Environment)
+            // Environment already has table oriented correctly, so no X flip needed
+            bool isEnvironmentRoot = tableRoot.name.Contains("Environment");
+            float xRotation = isEnvironmentRoot ? 0f : tableXRotationOffset;
+            tableRoot.transform.localRotation = Quaternion.Euler(xRotation, envYRotation, 0);
+
+            string rootType = isEnvironmentRoot ? "Environment (room + table)" : "Table only";
+            Debug.Log($"{LOG_TAG} PlaceTableAtAnchor FINAL - Positioned: {rootType}, LocalPos: {tableRoot.transform.localPosition}, LocalRot: {tableRoot.transform.localEulerAngles} (X: {xRotation}°), WorldPos: {tableRoot.transform.position}");
         }
         else
         {
-            Debug.LogWarning("[TableTennisManager PlaceTableAtAnchor (table)] Could not find table object to place at anchor");
+            Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor Could not find Environment or table object to place at anchor");
         }
     }
     
@@ -1328,18 +1361,18 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (BallPrefab == default)
         {
-            Debug.LogError("[TableTennisManager] Ball prefab not assigned!");
+            Debug.LogError($"{LOG_TAG} SpawnBall Ball prefab not assigned");
             return;
         }
-        
+
         if (Runner == null)
         {
-            Debug.LogError("[TableTennisManager] Runner is null! Cannot spawn ball.");
+            Debug.LogError($"{LOG_TAG} SpawnBall Runner is null! Cannot spawn ball");
             return;
         }
-        
+
         Vector3 spawnPosition = Vector3.zero;
-        
+
         // BEST: Use anchor + networked local position (most reliable)
         if (sharedAnchor != null)
         {
@@ -1347,19 +1380,19 @@ public class TableTennisManager : NetworkBehaviour
             Vector3 tableLocalPos = NetworkedTableLocalPosition;
             Vector3 tableWorldPos = sharedAnchor.TransformPoint(tableLocalPos);
             spawnPosition = tableWorldPos + Vector3.up * 0.5f;
-            Debug.Log($"[TableTennisManager] SpawnBall: Using anchor + local pos. Anchor: {sharedAnchor.position}, TableLocal: {tableLocalPos}, TableWorld: {tableWorldPos}, BallSpawn: {spawnPosition}");
+            Debug.Log($"{LOG_TAG} SpawnBall Using anchor + local pos. Anchor: {sharedAnchor.position}, TableLocal: {tableLocalPos}, TableWorld: {tableWorldPos}, BallSpawn: {spawnPosition}");
         }
         // FALLBACK: Use tableRoot if anchor not available
         else if (tableRoot != null)
         {
             // Spawn 50cm above the table center
             spawnPosition = tableRoot.transform.position + Vector3.up * 0.5f;
-            Debug.Log($"[TableTennisManager] SpawnBall: Using tableRoot position: {tableRoot.transform.position}, parent: {tableRoot.transform.parent?.name ?? "null"}");
+            Debug.Log($"{LOG_TAG} SpawnBall Using tableRoot position: {tableRoot.transform.position}, parent: {tableRoot.transform.parent?.name ?? "null"}");
         }
         else if (tableTransform != null)
         {
             spawnPosition = tableTransform.TransformPoint(ballSpawnOffset);
-            Debug.Log($"[TableTennisManager] SpawnBall: Using tableTransform: {tableTransform.position}");
+            Debug.Log($"{LOG_TAG} SpawnBall Using tableTransform: {tableTransform.position}");
         }
         else
         {
@@ -1368,32 +1401,32 @@ public class TableTennisManager : NetworkBehaviour
             if (head != null)
             {
                 spawnPosition = head.position + head.forward * 0.5f;
-                Debug.Log($"[TableTennisManager] SpawnBall: Using head position fallback");
+                Debug.Log($"{LOG_TAG} SpawnBall Using head position fallback");
             }
             else
             {
-                Debug.LogWarning("[TableTennisManager] SpawnBall: No reference found! Spawning at origin.");
+                Debug.LogWarning($"{LOG_TAG} SpawnBall No reference found! Spawning at origin");
             }
         }
-        
-        Debug.Log($"[TableTennisManager] Spawning ball at: {spawnPosition}");
-        
+
+        Debug.Log($"{LOG_TAG} SpawnBall Spawning ball at: {spawnPosition}");
+
         var ballObj = Runner.Spawn(
             BallPrefab,
             spawnPosition,
             Quaternion.identity,
             Object.InputAuthority
         );
-        
+
         if (ballObj != null)
         {
             spawnedBall = ballObj.GetComponent<NetworkedBall>();
             // Stay in BallPosition phase - transition to Playing when ball is hit
-            Debug.Log($"[TableTennisManager] Ball spawned successfully at {spawnPosition}");
+            Debug.Log($"{LOG_TAG} SpawnBall Ball spawned successfully at {spawnPosition}, NetworkId: {ballObj.Id}");
         }
         else
         {
-            Debug.LogError("[TableTennisManager] Runner.Spawn returned null!");
+            Debug.LogError($"{LOG_TAG} SpawnBall Runner.Spawn returned null!");
         }
     }
     
