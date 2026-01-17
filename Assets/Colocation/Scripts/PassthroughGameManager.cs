@@ -199,12 +199,13 @@ public class PassthroughGameManager : NetworkBehaviour
     /// <summary>
     /// Stop the passthrough game and cleanup
     /// </summary>
-    public void StopGame()
+    /// <param name="keepTableActive">If true, table stays active (for VR scene transition). If false, table is disabled.</param>
+    public void StopGame(bool keepTableActive = false)
     {
         isActive = false;
         currentPhase = GamePhase.Idle;
         isGameMenuOpen = false;
-        
+
         // Cleanup spawned objects
         if (spawnedBall != null)
         {
@@ -221,28 +222,37 @@ public class PassthroughGameManager : NetworkBehaviour
             }
             spawnedBall = null;
         }
-        
+
         if (spawnedTable != null)
         {
-            spawnedTable.SetActive(false);
+            // Only disable table if not keeping it active for VR scene transition
+            if (!keepTableActive)
+            {
+                spawnedTable.SetActive(false);
+                Debug.Log($"{LOG_TAG} StopGame Table disabled");
+            }
+            else
+            {
+                Debug.Log($"{LOG_TAG} StopGame Table kept active for VR scene transition");
+            }
         }
-        
+
         // Hide rackets
         if (leftRacket != null) leftRacket.SetActive(false);
         if (rightRacket != null) rightRacket.SetActive(false);
-        
+
         // Cleanup UI
         if (gameUIPanel != null) Destroy(gameUIPanel);
         if (runtimeMenuPanel != null) Destroy(runtimeMenuPanel);
-        
+
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
         {
             NetworkedGameActive = false;
         }
 #endif
-        
-        Debug.Log($"{LOG_TAG} Game stopped");
+
+        Debug.Log($"{LOG_TAG} Game stopped (keepTableActive: {keepTableActive})");
     }
     
     private void Update()
@@ -802,9 +812,10 @@ public class PassthroughGameManager : NetworkBehaviour
     private void SwitchToVRGame()
     {
         Debug.Log($"{LOG_TAG} Switching to VR TableTennis scene...");
-        
-        // Stop passthrough game
-        StopGame();
+
+        // Stop passthrough game but KEEP TABLE ACTIVE for VR scene to use
+        // Table is parented to anchor (which has DontDestroyOnLoad), so it persists across scenes
+        StopGame(keepTableActive: true);
         
         // Load the TableTennis scene using Fusion's networked scene loading
 #if FUSION2

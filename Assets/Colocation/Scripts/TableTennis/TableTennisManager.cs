@@ -1048,6 +1048,13 @@ public class TableTennisManager : NetworkBehaviour
         
         if (tableRoot != null)
         {
+            // CRITICAL FIX: Ensure table is active (might be disabled by PassthroughGameManager.StopGame)
+            if (!tableRoot.activeSelf)
+            {
+                Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor Table/Environment was INACTIVE - enabling it");
+                tableRoot.SetActive(true);
+            }
+
             // Parent Environment/table to primary anchor - this is critical for colocation!
             // When parented, the Environment (and its children: table, room, etc.) will automatically
             // stay in correct position even if the camera rig is adjusted
