@@ -15,7 +15,7 @@ GameObject:
   - component: {fileID: 726079139407410117}
   m_Layer: 0
   m_Name: PingPongBat
-  m_TagString: Untagged
+  m_TagString: Racket
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0

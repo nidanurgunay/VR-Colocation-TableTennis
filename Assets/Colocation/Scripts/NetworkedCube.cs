@@ -87,7 +87,7 @@ public class NetworkedCube : NetworkBehaviour
         {
             AnchorRelativePosition = transform.localPosition;
             AnchorRelativeRotation = transform.localRotation;
-            Debug.Log($"[NetworkedCube] Host storing anchor-relative pos: {AnchorRelativePosition}");
+            Debug.Log($"[NetworkedCube Spawned (cube)] Host storing anchor-relative pos: {AnchorRelativePosition}");
         }
 
         propertyBlock = new MaterialPropertyBlock();
@@ -96,7 +96,7 @@ public class NetworkedCube : NetworkBehaviour
         // Start trying to parent to anchor (will retry if anchor not ready yet)
         StartCoroutine(TryParentToAnchorRoutine());
 
-        Debug.Log($"[NetworkedCube] Spawned. HasStateAuth: {Object.HasStateAuthority}, BallMode: {isBallMode}, localPos: {transform.localPosition}");
+        Debug.Log($"[NetworkedCube Spawned (cube)] Spawned. HasStateAuth: {Object.HasStateAuthority}, BallMode: {isBallMode}, localPos: {transform.localPosition}");
     }
     
     private void SetupBallPhysics()
@@ -144,7 +144,7 @@ public class NetworkedCube : NetworkBehaviour
         {
             if (TryParentToLocalAnchor())
             {
-                Debug.Log($"[NetworkedCube] Successfully parented to anchor after {retryCount} attempts");
+                Debug.Log($"[NetworkedCube TryParentToAnchorRoutine (anchor)] Successfully parented to anchor after {retryCount} attempts");
                 yield break;
             }
             
@@ -154,7 +154,7 @@ public class NetworkedCube : NetworkBehaviour
 
         if (!isParentedToAnchor)
         {
-            Debug.LogError($"[NetworkedCube] Failed to parent to anchor after {MAX_RETRIES} attempts!");
+            Debug.LogError($"[NetworkedCube TryParentToAnchorRoutine (anchor)] Failed to parent to anchor after {MAX_RETRIES} attempts!");
         }
     }
 
@@ -185,7 +185,7 @@ public class NetworkedCube : NetworkBehaviour
         {
             if (anchor != null && anchor.Localized)
             {
-                Debug.Log($"[NetworkedCube] Found anchor via scene search: {anchor.name}");
+                Debug.Log($"[NetworkedCube TryParentToLocalAnchor (anchor)] Found anchor via scene search: {anchor.name}");
                 ParentToAnchor(anchor);
                 return true;
             }
@@ -205,7 +205,7 @@ public class NetworkedCube : NetworkBehaviour
         if (targetLocalPos == Vector3.zero && !Object.HasStateAuthority)
         {
             // Wait for networked values to sync
-            Debug.Log("[NetworkedCube] Waiting for networked position to sync...");
+            Debug.Log("[NetworkedCube ParentToAnchor (anchor)] Waiting for networked position to sync...");
             return;
         }
 
@@ -236,7 +236,7 @@ public class NetworkedCube : NetworkBehaviour
         }
         
         isParentedToAnchor = true;
-        Debug.Log($"[NetworkedCube] Parented to anchor '{anchor.name}' at local pos {targetLocalPos}, BallMode: {isBallMode}");
+        Debug.Log($"[NetworkedCube ParentToAnchor (anchor)] Parented to anchor '{anchor.name}' at local pos {targetLocalPos}, BallMode: {isBallMode}");
     }
 
     private void UpdateVisualState()
@@ -341,7 +341,7 @@ public class NetworkedCube : NetworkBehaviour
         // Reset if ball falls below threshold
         if (transform.position.y < resetBelowY)
         {
-            Debug.Log("[NetworkedCube] Ball fell below threshold, resetting");
+            Debug.Log("[NetworkedCube Update (ball)] Ball fell below threshold, resetting");
             ResetBallToServe();
         }
         

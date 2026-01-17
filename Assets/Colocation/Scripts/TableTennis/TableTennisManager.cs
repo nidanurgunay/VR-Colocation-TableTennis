@@ -973,14 +973,34 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (sharedAnchor == null)
         {
-            Debug.LogWarning("[TableTennisManager] No anchor to place table at!");
+            Debug.LogWarning("[TableTennisManager PlaceTableAtAnchor (table)] No anchor to place table at!");
             return;
         }
-        
-        // Find the PingPongTable (now a separate root object) or fallback to old names
-        tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable") 
+
+        // Find the PingPongTable FIRST (before cleanup) - the VR scene should have a table in the hierarchy
+        tableRoot = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
                     ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
-        
+
+        // CLEANUP: Remove OLD tables that were children of preserved anchors from previous scene
+        // BUT keep the current scene's table (tableRoot)
+        var preservedAnchors = FindObjectsOfType<OVRSpatialAnchor>();
+        foreach (var anchor in preservedAnchors)
+        {
+            // Remove any child tables from the anchor (except our current table)
+            foreach (Transform child in anchor.transform)
+            {
+                if (child.gameObject == tableRoot) continue; // Don't destroy current scene's table
+
+                if (child.name.Contains("PingPongTable") || child.name.Contains("pingpongtable") ||
+                    child.name.Contains("pingpong") || child.name.Contains("PingPong") ||
+                    child.name.Contains("TableTennis"))
+                {
+                    Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table)] Removing old table '{child.name}' from preserved anchor");
+                    Destroy(child.gameObject);
+                }
+            }
+        }
+
         if (tableRoot == null && tableTransform != null)
         {
             tableRoot = tableTransform.gameObject;
@@ -988,11 +1008,17 @@ public class TableTennisManager : NetworkBehaviour
         
         if (tableRoot != null)
         {
+            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Table found: {tableRoot.name}");
+            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Initial table world pos: {tableRoot.transform.position}, local pos: {tableRoot.transform.localPosition}");
+            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Primary anchor world pos: {sharedAnchor.position}, Secondary anchor world pos: {secondaryAnchor?.position ?? Vector3.zero}");
+            
             // Parent table to primary anchor - this is critical for colocation!
             // When parented, the table will automatically stay in correct position
             // even if the camera rig is adjusted
             tableRoot.transform.SetParent(sharedAnchor, worldPositionStays: false);
             _tableParented = true;
+            
+            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] After parenting - table local pos: {tableRoot.transform.localPosition}, world pos: {tableRoot.transform.position}");
             
             // Calculate LOCAL position (relative to primary anchor)
             Vector3 localTablePos;
@@ -1006,6 +1032,9 @@ public class TableTennisManager : NetworkBehaviour
                 
                 // Midpoint between primary (0,0,0 in local) and secondary
                 Vector3 midpoint = secondaryLocalPos / 2f;
+                
+                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Secondary local pos (relative to primary): {secondaryLocalPos}");
+                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Calculated midpoint: {midpoint}");
                 
                 // Calculate rotation to face from primary to secondary (table long axis)
                 Vector3 directionToSecondary = secondaryLocalPos;
@@ -1026,7 +1055,7 @@ public class TableTennisManager : NetworkBehaviour
                 // Position at midpoint, at table height
                 localTablePos = new Vector3(midpoint.x, defaultTableHeight, midpoint.z) + tablePositionOffset;
                 
-                Debug.Log($"[TableTennisManager] 2-ANCHOR: Secondary local pos: {secondaryLocalPos}, Midpoint: {midpoint}, TableYRot: {tableYRotation}");
+                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] 2-ANCHOR: Secondary local pos: {secondaryLocalPos}, Midpoint: {midpoint}, TableYRot: {tableYRotation}");
             }
             else
             {
@@ -1034,8 +1063,10 @@ public class TableTennisManager : NetworkBehaviour
                 localTablePos = new Vector3(tablePositionOffset.x, defaultTableHeight, tablePositionOffset.z);
                 tableYRotation = tableYRotationOffset;
                 
-                Debug.Log($"[TableTennisManager] SINGLE-ANCHOR: Using offset position");
+                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] SINGLE-ANCHOR: Using offset position");
             }
+            
+            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] Final calculated local pos: {localTablePos}, Y rotation: {tableYRotation}°");
             
             // Host initializes networked values (LOCAL coordinates)
             if (Object.HasStateAuthority)
@@ -1043,18 +1074,18 @@ public class TableTennisManager : NetworkBehaviour
                 NetworkedTableLocalPosition = localTablePos;
                 NetworkedTableYRotation = tableYRotation;
                 NetworkedFloorOffset = 0f;
-                Debug.Log($"[TableTennisManager] HOST: Set networked local pos: {localTablePos}, rot: {tableYRotation}");
+                Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] HOST: Set networked local pos: {localTablePos}, rot: {tableYRotation}");
             }
             
             // Apply LOCAL position and rotation relative to anchor
             tableRoot.transform.localPosition = localTablePos;
             tableRoot.transform.localRotation = Quaternion.Euler(tableXRotationOffset, tableYRotation, 0);
             
-            Debug.Log($"[TableTennisManager] Table placed - LocalPos: {tableRoot.transform.localPosition}, LocalRot: {tableRoot.transform.localEulerAngles}, WorldPos: {tableRoot.transform.position}");
+            Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table) (tablePosition)] FINAL POSITION - LocalPos: {tableRoot.transform.localPosition}, LocalRot: {tableRoot.transform.localEulerAngles}, WorldPos: {tableRoot.transform.position}");
         }
         else
         {
-            Debug.LogWarning("[TableTennisManager] Could not find table object to place at anchor");
+            Debug.LogWarning("[TableTennisManager PlaceTableAtAnchor (table)] Could not find table object to place at anchor");
         }
     }
     
@@ -1166,24 +1197,27 @@ public class TableTennisManager : NetworkBehaviour
             while ((sharedAnchor == null || secondaryAnchor == null) && attempts < 50)
             {
                 var anchors = FindObjectsOfType<OVRSpatialAnchor>(true);
+                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Found {anchors.Length} total OVRSpatialAnchor objects in scene");
                 
                 foreach (var anchor in anchors)
                 {
-                    if (anchor != null && anchor.Localized)
+                    if (anchor != null) // Removed Localized check for preserved anchors from scene transition
                     {
+                        Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Checking anchor {anchor.Uuid}, world pos: {anchor.transform.position}");
+                        
                         if (sharedAnchor == null)
                         {
                             sharedAnchor = anchor.transform;
                             primaryOVRAnchor = anchor;
                             NetworkedPrimaryAnchorUUID = anchor.Uuid.ToString();
-                            Debug.Log($"[TableTennisManager] HOST: Set PRIMARY anchor UUID: {anchor.Uuid}");
+                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Set PRIMARY anchor UUID: {anchor.Uuid}");
                         }
                         else if (anchor.transform != sharedAnchor && secondaryAnchor == null)
                         {
                             secondaryAnchor = anchor.transform;
                             secondaryOVRAnchor = anchor;
                             NetworkedSecondaryAnchorUUID = anchor.Uuid.ToString();
-                            Debug.Log($"[TableTennisManager] HOST: Set SECONDARY anchor UUID: {anchor.Uuid}");
+                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Set SECONDARY anchor UUID: {anchor.Uuid}");
                         }
                     }
                 }
@@ -1212,24 +1246,26 @@ public class TableTennisManager : NetworkBehaviour
             while ((sharedAnchor == null || secondaryAnchor == null) && attempts < 50)
             {
                 var anchors = FindObjectsOfType<OVRSpatialAnchor>(true);
+                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Found {anchors.Length} total OVRSpatialAnchor objects in scene");
                 
                 foreach (var anchor in anchors)
                 {
-                    if (anchor != null && anchor.Localized)
+                    if (anchor != null) // Removed Localized check for preserved anchors from scene transition
                     {
                         string anchorUUID = anchor.Uuid.ToString();
+                        Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Checking anchor {anchorUUID}, world pos: {anchor.transform.position}");
                         
                         if (sharedAnchor == null && anchorUUID == primaryUUID)
                         {
                             sharedAnchor = anchor.transform;
                             primaryOVRAnchor = anchor;
-                            Debug.Log($"[TableTennisManager] CLIENT: Found PRIMARY anchor by UUID: {anchorUUID}");
+                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Found PRIMARY anchor by UUID: {anchorUUID}");
                         }
                         else if (secondaryAnchor == null && anchorUUID == secondaryUUID)
                         {
                             secondaryAnchor = anchor.transform;
                             secondaryOVRAnchor = anchor;
-                            Debug.Log($"[TableTennisManager] CLIENT: Found SECONDARY anchor by UUID: {anchorUUID}");
+                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Found SECONDARY anchor by UUID: {anchorUUID}");
                         }
                     }
                 }
@@ -1254,21 +1290,37 @@ public class TableTennisManager : NetworkBehaviour
         {
             // CRITICAL: Re-align the camera rig to the preserved anchors!
             // Without this, each headset's OVRCameraRig starts at default (0,0,0) and objects appear misaligned.
-            Debug.Log("[TableTennisManager] Re-aligning camera rig to preserved anchors after scene transition...");
+            Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Re-aligning camera rig to preserved anchors after scene transition...");
+            Debug.Log($"[TableTennisManager WaitForAnchor (alignment)] Camera rig position before alignment: {Camera.main.transform.root.position}");
             
             if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
             {
                 alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
-                Debug.Log("[TableTennisManager] Applied 2-point alignment");
+                Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Applied 2-point alignment");
+                Debug.Log($"[TableTennisManager WaitForAnchor (alignment)] Camera rig position after alignment: {Camera.main.transform.root.position}");
             }
             else if (primaryOVRAnchor != null)
             {
                 alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
-                Debug.Log("[TableTennisManager] Applied single-point alignment");
+                Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Applied single-point alignment");
+                Debug.Log($"[TableTennisManager WaitForAnchor (alignment)] Camera rig position after alignment: {Camera.main.transform.root.position}");
             }
             
             // Wait for alignment to complete before placing table
             yield return new WaitForSeconds(1.0f);
+            Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Alignment wait complete, proceeding to place table");
+        }
+        
+        // SUMMARY: Log final anchor positions before table placement
+        if (sharedAnchor != null)
+        {
+            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] SUMMARY - Primary anchor world pos: {sharedAnchor.position}");
+            if (secondaryAnchor != null)
+            {
+                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] SUMMARY - Secondary anchor world pos: {secondaryAnchor.position}");
+                Vector3 distance = secondaryAnchor.position - sharedAnchor.position;
+                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] SUMMARY - Anchor separation: {distance.magnitude:F3}m, direction: {distance.normalized}");
+            }
         }
     }
     

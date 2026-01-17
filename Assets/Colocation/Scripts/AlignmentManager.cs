@@ -8,16 +8,16 @@ public class AlignmentManager : MonoBehaviour
     [SerializeField] private int alignmentIterations = 3; // More iterations for better accuracy
     
     [Header("Periodic Re-alignment")]
-    [SerializeField] private bool enablePeriodicAlignment = false; // OFF by default now
-    [SerializeField] private float realignmentInterval = 5.0f; // Check every X seconds
+    [SerializeField] private bool enablePeriodicAlignment = true; // ENABLED to reduce drift
+    [SerializeField] private float realignmentInterval = 5.0f; // Check every 5 seconds
     [SerializeField] private bool smoothRealignment = true; // Smoothly interpolate instead of snap
     [SerializeField] private float smoothSpeed = 2.0f; // How fast to interpolate
     [Tooltip("If true, periodic 2-point alignment only corrects position (more stable). If false, uses full rotation recalculation (original logic).")]
-    [SerializeField] private bool positionOnlyPeriodicFor2Point = true; // New: simpler mode for 2-point periodic
-    
+    [SerializeField] private bool positionOnlyPeriodicFor2Point = true; // Simpler mode for 2-point periodic (more stable)
+
     [Header("Drift Thresholds (only realign if drift exceeds these)")]
-    [SerializeField] private float positionDriftThreshold = 0.05f; // 5cm position drift
-    [SerializeField] private float rotationDriftThreshold = 2.0f; // 2 degrees rotation drift
+    [SerializeField] private float positionDriftThreshold = 0.03f; // 3cm position drift (reduced from 5cm)
+    [SerializeField] private float rotationDriftThreshold = 1.5f; // 1.5 degrees rotation drift (reduced from 2°)
     
     private Transform _cameraRigTransform;
     private OVRSpatialAnchor _currentAnchor; // Primary
