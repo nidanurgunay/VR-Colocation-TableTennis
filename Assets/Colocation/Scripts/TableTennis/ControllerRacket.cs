@@ -420,22 +420,45 @@ public class ControllerRacket : MonoBehaviour
         // Find and disable common ray/pointer components
         var cameraRig = FindObjectOfType<OVRCameraRig>(true);
         if (cameraRig == null) return;
-        
-        // Try to find OVRRayHelper components
+
+        int disabledCount = 0;
+
+        // 1. Disable OVRRayHelper components
         var rayHelpers = cameraRig.GetComponentsInChildren<OVRRayHelper>(true);
         foreach (var rayHelper in rayHelpers)
         {
             rayHelper.enabled = !hide;
+            disabledCount++;
         }
-        
-        // Try to find LineRenderer components (commonly used for rays)
+
+        // 2. Disable LineRenderer components (commonly used for rays)
         var lineRenderers = cameraRig.GetComponentsInChildren<LineRenderer>(true);
         foreach (var lr in lineRenderers)
         {
             lr.enabled = !hide;
+            disabledCount++;
         }
-        
-        // Try to find UIRaycastr or similar pointer components by name
+
+        // 3. Disable Unity XR Interaction Toolkit ray interactors
+        // Search for components with "Ray" or "Interactor" in type name
+        var allMonoBehaviours = cameraRig.GetComponentsInChildren<MonoBehaviour>(true);
+        foreach (var mb in allMonoBehaviours)
+        {
+            if (mb == null) continue;
+
+            string typeName = mb.GetType().Name.ToLower();
+            // Check for common ray interactor types
+            if (typeName.Contains("rayinteractor") ||
+                typeName.Contains("xrrayinteractor") ||
+                (typeName.Contains("ray") && typeName.Contains("interactor")))
+            {
+                mb.enabled = !hide;
+                disabledCount++;
+                Debug.Log($"[ControllerRacket DisableRayVisuals] {(hide ? "Disabled" : "Enabled")} ray interactor: {mb.GetType().Name}");
+            }
+        }
+
+        // 4. Disable ray/pointer visuals by GameObject name
         foreach (Transform child in cameraRig.GetComponentsInChildren<Transform>(true))
         {
             string nameLower = child.name.ToLower();
@@ -448,10 +471,14 @@ public class ControllerRacket : MonoBehaviour
                 }
             }
         }
-        
+
         if (hide)
         {
-            Debug.Log("[ControllerRacket DisableRayVisuals] Disabled ray/pointer visuals");
+            Debug.Log($"[ControllerRacket DisableRayVisuals] Disabled {disabledCount} ray/pointer components");
+        }
+        else
+        {
+            Debug.Log($"[ControllerRacket DisableRayVisuals] Enabled {disabledCount} ray/pointer components");
         }
     }
 
