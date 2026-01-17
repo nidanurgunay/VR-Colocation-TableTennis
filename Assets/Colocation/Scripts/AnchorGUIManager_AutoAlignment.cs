@@ -161,6 +161,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         startGameButton?.onClick.AddListener(OnStartGameClicked);
         startPassthroughGameButton?.onClick.AddListener(OnStartPassthroughGameClicked);
 
+        // Initialize status text BEFORE UpdateAllUI to prevent "Ready to play!" showing at start
+        if (guiStatusText != null)
+        {
+            SetStatusText("Waiting for network...", "Start");
+        }
+
         UpdateAllUI();
         UpdateUIWizard(); // Init text
         Debug.Log($"{LOG_TAG} Start Ready - Grip button to place anchors");
@@ -649,7 +655,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     // Client-specific UI updates
                     if (guiStatusText != null && !guiStatusText.text.Contains("Client Mode"))
                     {
-                        guiStatusText.text = "Client Mode\nSearching for host session...";
+                        SetStatusText("Client Mode\nSearching for host session...", "Update-Client");
                     }
 
                     // Auto-start or retry discovery if not aligned
@@ -685,7 +691,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                             // Show status on UI
                             if (guiStatusText != null && !guiStatusText.text.Contains("Loading"))
                             {
-                                guiStatusText.text = "Client Mode\nSearching for host...\n\nMake sure host has:\n1. Placed 2 anchors\n2. Shared them";
+                                SetStatusText("Client Mode\nSearching for host...\n\nMake sure host has:\n1. Placed 2 anchors\n2. Shared them", "Update-Discovery");
                             }
 
                             guiDiscoveryStarted = true;
@@ -701,7 +707,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 // Show "Connecting..." state
                 if (guiStatusText != null && !guiStatusText.text.Contains("Connect"))
                 {
-                    guiStatusText.text = "Connecting to network...";
+                    SetStatusText("Connecting to network...", "Update-Network");
                 }
             }
 #endif
@@ -1117,7 +1123,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             // Update status text to show both aligned
             if (guiStatusText != null)
             {
-                guiStatusText.text = "Both Players Aligned\n\nReady to play!";
+                SetStatusText("Both Players Aligned\n\nReady to play!", "RPC-BothAligned");
             }
         }
         else
@@ -1130,7 +1136,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             // Update status text to show waiting for host
             if (guiStatusText != null)
             {
-                guiStatusText.text = "Client Aligned\n\nWaiting for Host...";
+                SetStatusText("Client Aligned\n\nWaiting for Host...", "RPC-ClientAligned");
             }
         }
     }
@@ -1160,6 +1166,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         return _localizedAnchor;
     }
 
+    /// <summary>
+    /// Helper method to update status text with logging
+    /// </summary>
+    private void SetStatusText(string text, string source = "")
+    {
+        if (guiStatusText != null)
+        {
+            string oldText = guiStatusText.text;
+            guiStatusText.text = text;
+
+            // Log status text changes for debugging
+            if (oldText != text)
+            {
+                Debug.Log($"{LOG_TAG} [STATUS] {source} changed status: '{oldText}' -> '{text}'");
+            }
+        }
+    }
+
     protected override void Log(string message, bool isError = false)
     {
         base.Log(message, isError);
@@ -1173,7 +1197,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         }
         else if (guiStatusText != null)
         {
-            guiStatusText.text = message;
+            SetStatusText(message, "Log()");
         }
 
         if (message.Contains("Advertisement started")) currentState = ColocationState.AdvertisingSession;
@@ -1204,7 +1228,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Update UI to show discovery status
         if (guiStatusText != null)
         {
-            guiStatusText.text = "Session found!\nLoading anchors...";
+            SetStatusText("Session found!\nLoading anchors...", "SessionDiscovered");
         }
 
         base.OnColocationSessionDiscovered(session);
