@@ -599,7 +599,7 @@ public class NetworkedBall : NetworkBehaviour
         }
     }
     
-    private void ResetToServePosition(int serverPlayerNumber = 1)
+    public void ResetToServePosition(int serverPlayerNumber = 1)
     {
         // Use current authority if available, otherwise use provided parameter
         if (CurrentAuthority != 0)

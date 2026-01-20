@@ -38,18 +38,8 @@ public class PassthroughGameManager : NetworkBehaviour
     private NetworkPrefabRef BallPrefab => sharedConfig != null && sharedConfig.BallPrefab != default ? sharedConfig.BallPrefab : ballPrefab;
     private float TableRotateSpeed => sharedConfig != null ? sharedConfig.tableRotateSpeed : tableRotateSpeed;
     private float TableMoveSpeed => sharedConfig != null ? sharedConfig.tableMoveSpeed : tableMoveSpeed;
-    
-    // Game phases
-    public enum GamePhase {
-        Idle,           // Not in passthrough mode
-        TableAdjust,    // Adjusting table position/rotation
-        BallPosition,   // Ball spawned, adjusting position
-        Playing,        // Game in progress
-        BallGrounded    // Ball hit ground, waiting for respawn
-    }
 
-    // State
-    private GamePhase currentPhase = GamePhase.Idle;
+    // State (using shared GamePhase enum from GamePhaseDefinitions.cs)
     private bool isActive = false;
     private bool isGameMenuOpen = false;
     private bool racketsVisible = true;
@@ -68,9 +58,10 @@ public class PassthroughGameManager : NetworkBehaviour
     private GameObject runtimeMenuPanel;
     private GameObject gameUIPanel;
     private TextMesh scoreText;
-    private TextMesh infoText;
-    private TextMesh statusText;
-    private TextMesh controlsText;
+    private TextMesh roleText;          // Shows Client/Host
+    private TextMesh phaseText;         // Shows current game phase
+    private TextMesh authorityText;     // Shows active authority (Host Only / Your Turn / Opponent's Turn)
+    private TextMesh controlsText;      // Shows controller instructions
     private OVRSpatialAnchor _localizedAnchor;
     private AnchorGUIManager_AutoAlignment mainManager;
     private ControllerRacket controllerRacket;
@@ -80,11 +71,14 @@ public class PassthroughGameManager : NetworkBehaviour
     [Networked] private float NetworkedTableHeight { get; set; }
     [Networked] private NetworkBool NetworkedGameActive { get; set; }
 #endif
-    
+
     // Properties
     public bool IsActive => isActive;
     public GamePhase CurrentPhase => currentPhase;
     public bool RacketsVisible => racketsVisible;
+
+    // Local phase tracking (using shared GamePhase enum)
+    private GamePhase currentPhase = GamePhase.Idle;
     
     private void Awake()
     {
@@ -245,6 +239,13 @@ public class PassthroughGameManager : NetworkBehaviour
         if (gameUIPanel != null) Destroy(gameUIPanel);
         if (runtimeMenuPanel != null) Destroy(runtimeMenuPanel);
 
+        // Clear UI references
+        scoreText = null;
+        roleText = null;
+        phaseText = null;
+        authorityText = null;
+        controlsText = null;
+
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
         {
@@ -319,27 +320,12 @@ public class PassthroughGameManager : NetworkBehaviour
                 break;
 
             case GamePhase.Playing:
-                // Check for GRIP to respawn if ball is grounded
-                if (ballNeedsRespawn)
-                {
-                    bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
-                                      OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
-                    if (gripPressed)
-                    {
-                        RespawnBall();
-                    }
-                }
+                // Playing phase - game in progress
                 break;
 
             case GamePhase.BallGrounded:
-                // Wait for GRIP to respawn
-                bool gripPressedGrounded = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
-                                          OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
-                if (gripPressedGrounded)
-                {
-                    Debug.Log($"{LOG_TAG} GRIP pressed in BallGrounded phase - respawning ball");
-                    RespawnBall();
-                }
+                // This phase is no longer used - we transition directly to BallPosition
+                // Keep for backward compatibility
                 break;
         }
     }
@@ -622,14 +608,16 @@ public class PassthroughGameManager : NetworkBehaviour
         }
 
         // Calculate table surface position (top center of table)
-        // IMPORTANT: Use world position, not relying on NetworkedTableHeight which may not be synced yet
-        Vector3 tableSurfacePos = spawnedTable.transform.position;
+        // FIX: Use TransformPoint to convert local center to world space
+        // The table is parented to the anchor, so we need proper world space calculation
+        Vector3 tableSurfacePos;
 
         // Try to get table bounds to find actual surface height
         Renderer tableRenderer = spawnedTable.GetComponentInChildren<Renderer>();
         if (tableRenderer != null)
         {
             // Use bounds to find the TOP of the table (max Y of mesh bounds)
+            // Bounds are already in world space
             Bounds bounds = tableRenderer.bounds;
             tableSurfacePos = bounds.center;
             tableSurfacePos.y = bounds.max.y; // Top of the table
@@ -637,14 +625,28 @@ public class PassthroughGameManager : NetworkBehaviour
         }
         else
         {
-            // Fallback: assume table is at its transform position + default height
-            tableSurfacePos.y += defaultTableHeight;
-            Debug.LogWarning($"{LOG_TAG} SpawnBall No renderer found, using table transform + default height: {tableSurfacePos}");
+            // Fallback: Calculate world position manually from local position
+            // Get the anchor parent transform
+            Transform anchorTransform = spawnedTable.transform.parent;
+            if (anchorTransform != null)
+            {
+                // Convert local position to world space via parent transform
+                tableSurfacePos = anchorTransform.TransformPoint(spawnedTable.transform.localPosition);
+                tableSurfacePos.y += defaultTableHeight;
+                Debug.LogWarning($"{LOG_TAG} SpawnBall No renderer found, using anchor.TransformPoint + default height: {tableSurfacePos}");
+            }
+            else
+            {
+                // No parent - use world position directly
+                tableSurfacePos = spawnedTable.transform.position;
+                tableSurfacePos.y += defaultTableHeight;
+                Debug.LogWarning($"{LOG_TAG} SpawnBall No anchor parent, using table world position + default height: {tableSurfacePos}");
+            }
         }
 
         // Spawn ball 0.75m above table surface
         Vector3 spawnPos = tableSurfacePos + Vector3.up * 0.75f;
-        Debug.Log($"{LOG_TAG} SpawnBall FINAL - Table world pos: {spawnedTable.transform.position}, Surface: {tableSurfacePos}, Ball spawn: {spawnPos}");
+        Debug.Log($"{LOG_TAG} SpawnBall FINAL - Table local pos: {spawnedTable.transform.localPosition}, Table world pos: {spawnedTable.transform.position}, Surface: {tableSurfacePos}, Ball spawn: {spawnPos}");
 
 #if FUSION2
         if (Object.HasStateAuthority && Runner != null)
@@ -699,15 +701,23 @@ public class PassthroughGameManager : NetworkBehaviour
 
     /// <summary>
     /// Called by NetworkedBall when ball hits ground
+    /// Authority is swapped by NetworkedBall, so transition to BallPosition for next serve
     /// </summary>
     public void OnBallGroundHit()
     {
-        Debug.Log($"{LOG_TAG} OnBallGroundHit called - setting phase to BallGrounded");
+        Debug.Log($"{LOG_TAG} OnBallGroundHit called - transitioning to BallPosition for next serve");
         ballNeedsRespawn = true;
-        currentPhase = GamePhase.BallGrounded;
+        currentPhase = GamePhase.BallPosition;
+#if FUSION2
+        // Notify peer of phase change
+        if (Object != null && Object.HasStateAuthority)
+        {
+            RPC_NotifyPhaseChange(GamePhase.BallPosition);
+        }
+#endif
         UpdateScoreDisplay();
         UpdateInstructions();
-        Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ballNeedsRespawn: {ballNeedsRespawn} - Press GRIP to respawn");
+        Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ready for next serve");
     }
 
     /// <summary>
@@ -727,6 +737,8 @@ public class PassthroughGameManager : NetworkBehaviour
 
     /// <summary>
     /// Respawn ball at initial position above table
+    /// NOTE: This method is deprecated - ball respawn now happens automatically via NetworkedBall
+    /// when transitioning to BallPosition phase after ground hit
     /// </summary>
     private void RespawnBall()
     {
@@ -759,7 +771,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
         // Reset state
         ballNeedsRespawn = false;
-        currentPhase = GamePhase.Playing;
+        // Stay in BallPosition phase - ball will be positioned for serve
         UpdateInstructions();
     }
 
@@ -780,17 +792,35 @@ public class PassthroughGameManager : NetworkBehaviour
             case GamePhase.TableAdjust:
                 currentPhase = GamePhase.BallPosition;
                 Debug.Log($"{LOG_TAG} Phase: BallPosition");
+#if FUSION2
+                // Notify peer of phase change
+                if (Object != null && Object.HasStateAuthority)
+                {
+                    RPC_NotifyPhaseChange(GamePhase.BallPosition);
+                }
+                else if (Runner != null)
+                {
+                    RPC_RequestPhaseAdvance();
+                }
+#endif
                 break;
-                
+
             case GamePhase.BallPosition:
                 if (spawnedBall != null)
                 {
                     currentPhase = GamePhase.Playing;
                     Debug.Log($"{LOG_TAG} Phase: Playing");
+#if FUSION2
+                    // Notify peer of phase change
+                    if (Object != null && Object.HasStateAuthority)
+                    {
+                        RPC_NotifyPhaseChange(GamePhase.Playing);
+                    }
+#endif
                 }
                 break;
         }
-        
+
         UpdateInstructions();
     }
     
@@ -798,7 +828,7 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         isGameMenuOpen = false;
         if (runtimeMenuPanel != null) runtimeMenuPanel.SetActive(false);
-        
+
         // Cleanup ball
         if (spawnedBall != null)
         {
@@ -811,8 +841,15 @@ public class PassthroughGameManager : NetworkBehaviour
 #endif
             spawnedBall = null;
         }
-        
+
         currentPhase = GamePhase.TableAdjust;
+#if FUSION2
+        // Notify peer of phase change
+        if (Object != null && Object.HasStateAuthority)
+        {
+            RPC_NotifyPhaseChange(GamePhase.TableAdjust);
+        }
+#endif
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Game restarted");
     }
@@ -949,27 +986,17 @@ public class PassthroughGameManager : NetworkBehaviour
         gameUIPanel.transform.position = new Vector3(
             gameUIPanel.transform.position.x, 1.5f, gameUIPanel.transform.position.z);
         gameUIPanel.transform.rotation = Quaternion.LookRotation(-dir);
-        
-        // Status text
-        // [COMMENTED OUT OLD UI]
-        // var statusGO = new GameObject("StatusText");
-        // statusGO.transform.SetParent(gameUIPanel.transform, false);
-        // statusText = statusGO.AddComponent<TextMesh>();
-        // statusText.fontSize = 48;
-        // statusText.characterSize = 0.015f;
-        // statusText.anchor = TextAnchor.MiddleCenter;
-        // statusText.color = Color.white;
-        
+
         // Create Background Panel
         var panelObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
         panelObj.name = "Background";
         panelObj.transform.SetParent(gameUIPanel.transform, false);
-        panelObj.transform.localScale = new Vector3(3.0f, 2.0f, 1f);
+        panelObj.transform.localScale = new Vector3(3.5f, 2.5f, 1f);
         var renderer = panelObj.GetComponent<Renderer>();
         if (renderer != null)
         {
             renderer.material.shader = Shader.Find("Unlit/Color");
-            renderer.material.color = new Color(0, 0, 0, 0.8f);
+            renderer.material.color = new Color(0, 0, 0, 0.85f);
         }
 
         // Helper to create text
@@ -987,51 +1014,150 @@ public class PassthroughGameManager : NetworkBehaviour
             return tm;
         }
 
-        // Create text elements
-        scoreText = CreateText("ScoreText", new Vector3(0, 0.6f, -0.05f), 300, Color.yellow);
+        // NEW LAYOUT MATCHING TABLETENNISMANAGER:
+        // Top: Large Score (yellow)
+        scoreText = CreateText("ScoreText", new Vector3(0, 0.85f, -0.05f), 350, Color.yellow);
         scoreText.text = "0 - 0";
 
-        infoText = CreateText("InfoText", new Vector3(0, 0.2f, -0.05f), 200, Color.green);
-        infoText.text = "Passthrough Mode";
+        // Role: Client/Host (green)
+        roleText = CreateText("RoleText", new Vector3(0, 0.5f, -0.05f), 180, Color.green);
+#if FUSION2
+        roleText.text = Object != null && Object.HasStateAuthority ? "HOST" : "CLIENT";
+#else
+        roleText.text = "SOLO";
+#endif
 
-        statusText = CreateText("StatusText", new Vector3(0, -0.2f, -0.05f), 150, Color.white);
+        // Game Phase (white)
+        phaseText = CreateText("PhaseText", new Vector3(0, 0.2f, -0.05f), 160, Color.white);
 
-        controlsText = CreateText("ControlsText", new Vector3(0, -0.6f, -0.05f), 100, Color.cyan);
-        
+        // Active Authority (cyan/yellow based on whose turn)
+        authorityText = CreateText("AuthorityText", new Vector3(0, -0.1f, -0.05f), 140, Color.cyan);
+
+        // Controller Info (cyan, smaller)
+        controlsText = CreateText("ControlsText", new Vector3(0, -0.65f, -0.05f), 90, Color.cyan);
+
         UpdateInstructions();
     }
     
     private void UpdateInstructions()
     {
-        if (statusText == null) return;
+        if (phaseText == null) return;
 
+        // Update phase display
+        phaseText.text = currentPhase.GetDisplayName();
+
+        // Get current ball authority
+        int ballAuthority = 0;
+        bool isLocalPlayerAuthority = false;
+        if (spawnedBall != null)
+        {
+            var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
+            if (networkedBall != null)
+            {
+                ballAuthority = networkedBall.CurrentAuthority;
+#if FUSION2
+                // Determine if local player has authority
+                // Player 1 = Host, Player 2 = Client
+                if (Object != null)
+                {
+                    isLocalPlayerAuthority = (ballAuthority == 1 && Object.HasStateAuthority) ||
+                                            (ballAuthority == 2 && !Object.HasStateAuthority);
+                }
+#endif
+            }
+        }
+
+        // Update authority display based on phase
         switch (currentPhase)
         {
             case GamePhase.TableAdjust:
-                statusText.text = "TABLE ADJUST";
-                if (controlsText) controlsText.text = "Right Stick X: Rotate\nLeft Stick Y: Height\nB/Y: Switch Racket Hand\nA/X: Confirm";
-                break;
-            case GamePhase.BallPosition:
-                statusText.text = "BALL POSITION";
-                if (controlsText) controlsText.text = "A/X: Toggle Adjust Mode\nLeft Stick: Move (X/Z)\nRight Stick Y: Height\nHit ball to start!";
-                break;
-            case GamePhase.Playing:
-                statusText.text = "PLAYING";
-                if (controlsText) controlsText.text = ballNeedsRespawn ? "GRIP: Respawn Ball\nMENU: Pause" : "MENU: Pause";
-                break;
-            case GamePhase.BallGrounded:
-                // Show who gets the ball
-                string authorityMsg = "";
-                if (spawnedBall != null)
+                // TableAdjust: Host Only
+#if FUSION2
+                if (Object != null && Object.HasStateAuthority)
                 {
-                    var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
-                    if (networkedBall != null)
+                    authorityText.text = "HOST CONTROL";
+                    authorityText.color = Color.green;
+                }
+                else
+                {
+                    authorityText.text = "HOST ADJUSTING TABLE";
+                    authorityText.color = Color.gray;
+                }
+#else
+                authorityText.text = "ADJUST TABLE";
+                authorityText.color = Color.cyan;
+#endif
+                if (controlsText) controlsText.text = "Right Stick X: Rotate | Left Stick Y: Height\nA/X: Confirm";
+                break;
+
+            case GamePhase.BallPosition:
+                // BallPosition: Show current turn owner
+                if (ballAuthority > 0)
+                {
+                    if (isLocalPlayerAuthority)
                     {
-                        authorityMsg = $"\nPlayer {networkedBall.CurrentAuthority}'s serve";
+                        authorityText.text = "★ YOUR SERVE ★";
+                        authorityText.color = Color.yellow;
+                    }
+                    else
+                    {
+                        authorityText.text = $"OPPONENT'S SERVE (P{ballAuthority})";
+                        authorityText.color = Color.gray;
                     }
                 }
-                statusText.text = $"ROUND END{authorityMsg}";
-                if (controlsText) controlsText.text = "GRIP: Respawn Ball\nMENU: Pause";
+                else
+                {
+                    authorityText.text = "READY TO SERVE";
+                    authorityText.color = Color.cyan;
+                }
+                if (controlsText) controlsText.text = spawnedBall == null ? "GRIP: Spawn Ball" : "Hit ball to start!";
+                break;
+
+            case GamePhase.Playing:
+                // Playing: Show whose turn it is
+                if (ballAuthority > 0)
+                {
+                    if (isLocalPlayerAuthority)
+                    {
+                        authorityText.text = "★ YOUR TURN ★";
+                        authorityText.color = Color.yellow;
+                    }
+                    else
+                    {
+                        authorityText.text = $"OPPONENT'S TURN (P{ballAuthority})";
+                        authorityText.color = Color.gray;
+                    }
+                }
+                else
+                {
+                    authorityText.text = "PLAYING";
+                    authorityText.color = Color.white;
+                }
+                if (controlsText) controlsText.text = "MENU: Pause";
+                break;
+
+            case GamePhase.BallGrounded:
+                // BallGrounded: No longer used, but keep for compatibility
+                if (ballAuthority > 0)
+                {
+                    if (isLocalPlayerAuthority)
+                    {
+                        authorityText.text = "★ YOU WON ROUND ★";
+                        authorityText.color = Color.yellow;
+                    }
+                    else
+                    {
+                        authorityText.text = $"OPPONENT WON (P{ballAuthority})";
+                        authorityText.color = Color.gray;
+                    }
+                }
+                if (controlsText) controlsText.text = "Transitioning...";
+                break;
+
+            case GamePhase.Idle:
+                authorityText.text = "WAITING";
+                authorityText.color = Color.gray;
+                if (controlsText) controlsText.text = "";
                 break;
         }
     }
@@ -1044,6 +1170,7 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         NetworkedTableYRotation += rotDelta;
         NetworkedTableHeight += heightDelta;
+        ApplyTableState(); // Apply immediately so host sees changes
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -1057,16 +1184,41 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         StartCoroutine(FindBallDelayed());
     }
-    
+
     private IEnumerator FindBallDelayed()
     {
         yield return null;
         yield return null;
-        
+
         var ball = FindObjectOfType<NetworkedBall>();
         if (ball != null)
         {
             spawnedBall = ball.gameObject;
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestPhaseAdvance()
+    {
+        // Client requests host to advance phase
+        if (currentPhase == GamePhase.TableAdjust)
+        {
+            currentPhase = GamePhase.BallPosition;
+            Debug.Log($"{LOG_TAG} Host: Client requested phase advance to BallPosition");
+            // Notify all clients of phase change
+            RPC_NotifyPhaseChange(GamePhase.BallPosition);
+        }
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyPhaseChange(GamePhase newPhase)
+    {
+        // Synchronize phase on all clients
+        if (!Object.HasStateAuthority)
+        {
+            currentPhase = newPhase;
+            UpdateInstructions();
+            Debug.Log($"{LOG_TAG} Client: Phase synchronized to {newPhase}");
         }
     }
 #endif

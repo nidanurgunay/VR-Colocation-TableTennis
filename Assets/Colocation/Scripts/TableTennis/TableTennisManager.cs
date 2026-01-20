@@ -30,7 +30,7 @@ public class TableTennisManager : NetworkBehaviour
     // Ensure table X rotation is set correctly (in case serialized value was different)
     private void OnValidate()
     {
-        // If value is 0 but table appears upside down, it should be 180
+        // If value is 0 but table appears upside down, it should be 180h
         // Keep synchronized with passthrough mode's tableXRotationOffset
     }
     
@@ -50,16 +50,10 @@ public class TableTennisManager : NetworkBehaviour
     [Networked, Capacity(64)] private NetworkString<_64> NetworkedSecondaryAnchorUUID { get; set; }
     
     private bool _tableParented = false; // Track if table is parented to anchor
-    
-    // Game phase tracking
-    public enum GamePhase {
-        TableAdjust,     // Adjusting table position/rotation with thumbsticks
-        BallPosition,    // Ball spawned, A/X + thumbsticks to adjust. Hit ball to start.
-        Playing,         // Game in progress - racket switching locked
-        BallGrounded     // Ball hit ground, waiting for respawn
-    }
+
+    // Game phase tracking (using shared GamePhase enum from GamePhaseDefinitions.cs)
     [Networked] public GamePhase CurrentPhase { get; private set; } = GamePhase.TableAdjust;
-    
+
     // Racket state tracking - actual rackets are managed by ControllerRacket
     private bool isRacketOnRightHand = true; // Which hand holds the racket
     private bool racketsVisible = true; // Tracked for ray interactor logic
@@ -86,13 +80,15 @@ public class TableTennisManager : NetworkBehaviour
 
     /// <summary>
     /// Called by NetworkedBall when ball hits ground - triggers round end
+    /// Authority is swapped by NetworkedBall, so transition to BallPosition for next serve
     /// </summary>
     public void OnBallGroundHit()
     {
         if (Object.HasStateAuthority)
         {
-            CurrentPhase = GamePhase.BallGrounded;
-            Debug.Log($"{LOG_TAG} OnBallGroundHit Ball hit ground - round ended. Press GRIP to respawn.");
+            CurrentPhase = GamePhase.BallPosition;
+            RPC_NotifyPhaseChange(GamePhase.BallPosition);
+            Debug.Log($"{LOG_TAG} OnBallGroundHit Ball hit ground - round ended. Transitioning to BallPosition for next serve.");
         }
         else
         {
@@ -103,8 +99,9 @@ public class TableTennisManager : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestGroundHit()
     {
-        CurrentPhase = GamePhase.BallGrounded;
-        Debug.Log($"{LOG_TAG} Client notified ground hit - round ended");
+        CurrentPhase = GamePhase.BallPosition;
+        RPC_NotifyPhaseChange(GamePhase.BallPosition);
+        Debug.Log($"{LOG_TAG} Client notified ground hit - transitioning to BallPosition");
     }
     
     // Runtime adjustment state
@@ -313,12 +310,8 @@ public class TableTennisManager : NetworkBehaviour
                 break;
 
             case GamePhase.BallGrounded:
-                // GRIP respawns ball
-                if (gripPressed && !wasGripPressed)
-                {
-                    Debug.Log($"{LOG_TAG} GRIP pressed in BallGrounded - respawning ball");
-                    RespawnBall();
-                }
+                // This phase is no longer used - we transition directly to BallPosition
+                // Keep for backward compatibility
                 break;
         }
     }
@@ -785,7 +778,7 @@ public class TableTennisManager : NetworkBehaviour
             RPC_RequestAdvancePhase();
             return;
         }
-        
+
         switch (CurrentPhase)
         {
             case GamePhase.TableAdjust:
@@ -793,6 +786,8 @@ public class TableTennisManager : NetworkBehaviour
                 CurrentPhase = GamePhase.BallPosition;
                 Debug.Log($"{LOG_TAG} AdvancePhase Phase: BALL POSITION");
                 Debug.Log($"{LOG_TAG} AdvancePhase Instructions: Press GRIP to spawn ball, A/X + thumbstick to adjust ball position, hit ball with racket to START");
+                // Notify all clients of phase change
+                RPC_NotifyPhaseChange(GamePhase.BallPosition);
                 break;
 
             case GamePhase.BallPosition:
@@ -948,6 +943,7 @@ public class TableTennisManager : NetworkBehaviour
     private void RPC_RequestTableRotate(float rotation)
     {
         NetworkedTableYRotation += rotation;
+        ApplyNetworkedTableState(); // Apply immediately so host sees changes
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -963,6 +959,7 @@ public class TableTennisManager : NetworkBehaviour
     private void RPC_RequestFloorAdjust(float verticalMove)
     {
         NetworkedFloorOffset += verticalMove;
+        ApplyNetworkedTableState(); // Apply immediately so host sees changes
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -973,6 +970,19 @@ public class TableTennisManager : NetworkBehaviour
         {
             CurrentPhase = GamePhase.BallPosition;
             Debug.Log("[TableTennisManager] Host: Client requested phase advance to BallPosition");
+            // Notify all clients of phase change
+            RPC_NotifyPhaseChange(GamePhase.BallPosition);
+        }
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyPhaseChange(GamePhase newPhase)
+    {
+        // Ensure all clients are synchronized to the new phase
+        if (!Object.HasStateAuthority)
+        {
+            CurrentPhase = newPhase;
+            Debug.Log($"{LOG_TAG} Client: Phase synchronized to {newPhase}");
         }
     }
     
@@ -1419,15 +1429,65 @@ public class TableTennisManager : NetworkBehaviour
             // Calculate table world position from anchor + networked local position
             Vector3 tableLocalPos = NetworkedTableLocalPosition;
             Vector3 tableWorldPos = sharedAnchor.TransformPoint(tableLocalPos);
-            spawnPosition = tableWorldPos + Vector3.up * 0.5f;
-            Debug.Log($"{LOG_TAG} SpawnBall Using anchor + local pos. Anchor: {sharedAnchor.position}, TableLocal: {tableLocalPos}, TableWorld: {tableWorldPos}, BallSpawn: {spawnPosition}");
+
+            // Try to get accurate table surface height from renderer bounds
+            Vector3 tableSurfacePos = tableWorldPos;
+            if (tableRoot != null)
+            {
+                Renderer tableRenderer = tableRoot.GetComponentInChildren<Renderer>();
+                if (tableRenderer != null)
+                {
+                    // Use bounds to find the TOP of the table (max Y of mesh bounds)
+                    // Bounds are already in world space
+                    Bounds bounds = tableRenderer.bounds;
+                    tableSurfacePos = bounds.center;
+                    tableSurfacePos.y = bounds.max.y; // Top of the table
+                    Debug.Log($"{LOG_TAG} SpawnBall Using table renderer bounds - Center: {bounds.center}, Max Y: {bounds.max.y}");
+                }
+                else
+                {
+                    // Fallback: add default table height to calculated world position
+                    tableSurfacePos.y = tableWorldPos.y + defaultTableHeight;
+                    Debug.Log($"{LOG_TAG} SpawnBall No renderer, using calculated world pos + default height");
+                }
+            }
+
+            spawnPosition = tableSurfacePos + Vector3.up * 0.75f;
+            Debug.Log($"{LOG_TAG} SpawnBall Using anchor + local pos. Anchor: {sharedAnchor.position}, TableLocal: {tableLocalPos}, TableWorld: {tableWorldPos}, Surface: {tableSurfacePos}, BallSpawn: {spawnPosition}");
         }
         // FALLBACK: Use tableRoot if anchor not available
         else if (tableRoot != null)
         {
-            // Spawn 50cm above the table center
-            spawnPosition = tableRoot.transform.position + Vector3.up * 0.5f;
-            Debug.Log($"{LOG_TAG} SpawnBall Using tableRoot position: {tableRoot.transform.position}, parent: {tableRoot.transform.parent?.name ?? "null"}");
+            // Calculate world position properly - tableRoot is parented to anchor
+            Vector3 tableSurfacePos;
+            Renderer tableRenderer = tableRoot.GetComponentInChildren<Renderer>();
+            if (tableRenderer != null)
+            {
+                // Use bounds to find the TOP of the table (max Y of mesh bounds)
+                Bounds bounds = tableRenderer.bounds;
+                tableSurfacePos = bounds.center;
+                tableSurfacePos.y = bounds.max.y;
+                Debug.Log($"{LOG_TAG} SpawnBall Using tableRoot renderer bounds - Surface: {tableSurfacePos}");
+            }
+            else
+            {
+                // Fallback: Calculate world position from parent transform
+                Transform anchorTransform = tableRoot.transform.parent;
+                if (anchorTransform != null)
+                {
+                    tableSurfacePos = anchorTransform.TransformPoint(tableRoot.transform.localPosition);
+                    tableSurfacePos.y += defaultTableHeight;
+                    Debug.Log($"{LOG_TAG} SpawnBall No renderer, using anchor.TransformPoint + default height: {tableSurfacePos}");
+                }
+                else
+                {
+                    // No parent - use world position directly
+                    tableSurfacePos = tableRoot.transform.position + Vector3.up * defaultTableHeight;
+                    Debug.Log($"{LOG_TAG} SpawnBall No anchor parent, using world position + default height: {tableSurfacePos}");
+                }
+            }
+            spawnPosition = tableSurfacePos + Vector3.up * 0.75f;
+            Debug.Log($"{LOG_TAG} SpawnBall Using tableRoot - LocalPos: {tableRoot.transform.localPosition}, WorldPos: {tableRoot.transform.position}, Surface: {tableSurfacePos}, BallSpawn: {spawnPosition}");
         }
         else if (tableTransform != null)
         {
