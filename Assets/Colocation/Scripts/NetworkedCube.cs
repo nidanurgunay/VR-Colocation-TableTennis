@@ -32,10 +32,10 @@ public class NetworkedCube : NetworkBehaviour
     [Header("Ball Sync Settings")]
     [SerializeField] private float syncRate = 30f; // Hz
     
-    // Networked anchor-relative position (synced from host to clients)
-    [Networked] private Vector3 AnchorRelativePosition { get; set; }
-    [Networked] private Quaternion AnchorRelativeRotation { get; set; }
-    [Networked] private Vector3 AnchorRelativeVelocity { get; set; }
+    // SIMPLIFIED: Use world position sync (after alignment, world positions should match)
+    [Networked] private Vector3 SyncedWorldPosition { get; set; }
+    [Networked] private Quaternion SyncedWorldRotation { get; set; }
+    [Networked] private Vector3 SyncedVelocity { get; set; }
     [Networked] private NetworkBool IsBallInPlay { get; set; }
 
     private Renderer cubeRenderer;
@@ -82,21 +82,79 @@ public class NetworkedCube : NetworkBehaviour
             }
         }
 
-        // If we have state authority (host), store the relative position
-        if (Object.HasStateAuthority)
-        {
-            AnchorRelativePosition = transform.localPosition;
-            AnchorRelativeRotation = transform.localRotation;
-            Debug.Log($"[NetworkedCube Spawned (cube)] Host storing anchor-relative pos: {AnchorRelativePosition}");
-        }
-
         propertyBlock = new MaterialPropertyBlock();
         UpdateVisualState();
 
-        // Start trying to parent to anchor (will retry if anchor not ready yet)
-        StartCoroutine(TryParentToAnchorRoutine());
+        // SIMPLIFIED APPROACH: Use world position sync
+        // After alignment, both devices should have matching world coordinate systems
+        if (Object.HasStateAuthority)
+        {
+            // HOST: Store current world position for clients
+            SyncedWorldPosition = transform.position;
+            SyncedWorldRotation = transform.rotation;
+            
+            Debug.Log($"[NetworkedCube Spawned] HOST: Stored world pos: {SyncedWorldPosition}");
+        }
+        else
+        {
+            // CLIENT: Wait for sync and apply world position
+            StartCoroutine(ClientSyncRoutine());
+            
+            Debug.Log($"[NetworkedCube Spawned] CLIENT: Waiting for world position sync...");
+        }
 
-        Debug.Log($"[NetworkedCube Spawned (cube)] Spawned. HasStateAuth: {Object.HasStateAuthority}, BallMode: {isBallMode}, localPos: {transform.localPosition}");
+        Debug.Log($"[NetworkedCube Spawned] HasStateAuth: {Object.HasStateAuthority}, BallMode: {isBallMode}, WorldPos: {transform.position}");
+    }
+    
+    /// <summary>
+    /// Simple client sync - just apply the world position from host
+    /// </summary>
+    private IEnumerator ClientSyncRoutine()
+    {
+        Debug.Log("=== [CLIENT SYNC DEBUG START] ===");
+        
+        int attempts = 0;
+        const int MAX_ATTEMPTS = 50;
+        
+        // Log camera rig position for comparison with host
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null)
+        {
+            Debug.Log($"[CLIENT SYNC DEBUG] CameraRig position: {cameraRig.transform.position}, rotation: {cameraRig.transform.eulerAngles}");
+        }
+        
+        Debug.Log($"[CLIENT SYNC DEBUG] Current cube world position: {transform.position}");
+        Debug.Log($"[CLIENT SYNC DEBUG] Waiting for SyncedWorldPosition (currently: {SyncedWorldPosition})");
+        
+        // Wait for networked position to sync
+        while (SyncedWorldPosition == Vector3.zero && attempts < MAX_ATTEMPTS)
+        {
+            attempts++;
+            if (attempts % 10 == 0)
+            {
+                Debug.Log($"[CLIENT SYNC DEBUG] Still waiting... attempt {attempts}/{MAX_ATTEMPTS}, SyncedWorldPosition: {SyncedWorldPosition}");
+            }
+            yield return new WaitForSeconds(0.1f);
+        }
+        
+        if (SyncedWorldPosition != Vector3.zero)
+        {
+            Debug.Log($"[CLIENT SYNC DEBUG] Received SyncedWorldPosition: {SyncedWorldPosition}");
+            Debug.Log($"[CLIENT SYNC DEBUG] Received SyncedWorldRotation: {SyncedWorldRotation.eulerAngles}");
+            Debug.Log($"[CLIENT SYNC DEBUG] Current position BEFORE apply: {transform.position}");
+            
+            // Apply world position directly
+            transform.position = SyncedWorldPosition;
+            transform.rotation = SyncedWorldRotation;
+            
+            Debug.Log($"[CLIENT SYNC DEBUG] Current position AFTER apply: {transform.position}");
+            Debug.Log("=== [CLIENT SYNC DEBUG END - SUCCESS] ===");
+        }
+        else
+        {
+            Debug.LogError($"[CLIENT SYNC DEBUG] Failed to receive world position after {MAX_ATTEMPTS} attempts!");
+            Debug.Log("=== [CLIENT SYNC DEBUG END - FAILED] ===");
+        }
     }
     
     private void SetupBallPhysics()
@@ -164,79 +222,137 @@ public class NetworkedCube : NetworkBehaviour
         if (transform.parent != null && transform.parent.GetComponent<OVRSpatialAnchor>() != null)
         {
             isParentedToAnchor = true;
+            Debug.Log($"[NetworkedCube] Already parented to anchor: {transform.parent.name}");
             return true;
         }
 
-        // Method 1: Find via AnchorGUIManager_AutoAlignment
+        // CRITICAL: Wait for ColocationManager alignment to complete
+        // This ensures the camera rig has been adjusted before we position objects
+        if (!ColocationManager.AlignmentCompletedStatic)
+        {
+            if (retryCount % 10 == 0) // Log every 1 second (10 x 100ms)
+            {
+                Debug.Log($"[NetworkedCube] Waiting for ColocationManager.AlignmentCompletedStatic... (attempt {retryCount})");
+            }
+            return false;
+        }
+
+        Debug.Log($"[NetworkedCube] Alignment complete. Looking for primary anchor...");
+
+        // Method 1: Use ColocationManager.GetPrimaryAnchor() - PREFERRED
+        // This ensures we use the SAME anchor that AlignmentManager used
+        var colocationManager = FindObjectOfType<ColocationManager>();
+        if (colocationManager != null)
+        {
+            var primaryAnchor = colocationManager.GetPrimaryAnchor();
+            if (primaryAnchor != null && primaryAnchor.Localized)
+            {
+                Debug.Log($"[NetworkedCube] Using ColocationManager.GetPrimaryAnchor(): {primaryAnchor.Uuid}");
+                ParentToAnchor(primaryAnchor);
+                return true;
+            }
+            else
+            {
+                Debug.Log($"[NetworkedCube] ColocationManager.GetPrimaryAnchor() returned null or unlocalized");
+            }
+        }
+
+        // Method 2 (Fallback): Find via AnchorGUIManager_AutoAlignment
         var guiManager = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
         if (guiManager != null)
         {
             var anchor = guiManager.GetLocalizedAnchor();
             if (anchor != null && anchor.Localized)
             {
+                Debug.Log($"[NetworkedCube] Using AnchorGUIManager.GetLocalizedAnchor(): {anchor.Uuid}");
                 ParentToAnchor(anchor);
                 return true;
             }
         }
 
-        // Method 2: Find any localized OVRSpatialAnchor in scene
+        // Method 3 (Last Resort): Find any localized OVRSpatialAnchor in scene
         var allAnchors = FindObjectsOfType<OVRSpatialAnchor>();
+        Debug.Log($"[NetworkedCube] Fallback scene search found {allAnchors.Length} anchors");
         foreach (var anchor in allAnchors)
         {
             if (anchor != null && anchor.Localized)
             {
-                Debug.Log($"[NetworkedCube TryParentToLocalAnchor (anchor)] Found anchor via scene search: {anchor.name}");
+                Debug.LogWarning($"[NetworkedCube] FALLBACK: Using scene-found anchor: {anchor.name} (UUID: {anchor.Uuid})");
                 ParentToAnchor(anchor);
                 return true;
             }
         }
 
+        Debug.Log($"[NetworkedCube] No suitable anchor found yet (attempt {retryCount})");
         return false;
     }
 
     private void ParentToAnchor(OVRSpatialAnchor anchor)
     {
-        // Use the networked anchor-relative position
-        Vector3 targetLocalPos = AnchorRelativePosition;
-        Quaternion targetLocalRot = AnchorRelativeRotation;
-        Vector3 localScale = transform.localScale;
+        Debug.Log($"[NetworkedCube ParentToAnchor] START - Anchor: {anchor.name}, UUID: {anchor.Uuid}");
+        Debug.Log($"[NetworkedCube ParentToAnchor] Anchor world pos: {anchor.transform.position}, rot: {anchor.transform.eulerAngles}");
+        Debug.Log($"[NetworkedCube ParentToAnchor] HasStateAuthority: {Object.HasStateAuthority}, isBallMode: {isBallMode}");
         
-        // If networked values aren't set yet (all zeros), use current local position
-        if (targetLocalPos == Vector3.zero && !Object.HasStateAuthority)
-        {
-            // Wait for networked values to sync
-            Debug.Log("[NetworkedCube ParentToAnchor (anchor)] Waiting for networked position to sync...");
-            return;
-        }
-
         // Store anchor reference for ball mode
         sharedAnchor = anchor.transform;
         
-        // Only parent to anchor in cube mode (ball mode uses anchor reference only)
-        if (!isBallMode)
+        Vector3 localScale = transform.localScale;
+        
+        // HOST: Set anchor-relative position NOW (after alignment completed)
+        if (Object.HasStateAuthority)
         {
-            transform.SetParent(anchor.transform, worldPositionStays: false);
-            transform.localPosition = targetLocalPos;
-            transform.localRotation = targetLocalRot;
-            transform.localScale = localScale;
+            // For host, we store the current position relative to the anchor
+            // This happens AFTER alignment, so positions are correct
+            
+            if (!isBallMode)
+            {
+                // Cube mode: Store world position
+                SyncedWorldPosition = transform.position;
+                SyncedWorldRotation = transform.rotation;
+                
+                Debug.Log($"[NetworkedCube ParentToAnchor] HOST cube world pos: {SyncedWorldPosition}");
+            }
+            else
+            {
+                // Ball mode: Keep current world position, just store relative
+                SyncedWorldPosition = transform.position;
+                SyncedWorldRotation = transform.rotation;
+                ballInitialized = true;
+                
+                Debug.Log($"[NetworkedCube ParentToAnchor] HOST ball world pos: {SyncedWorldPosition}");
+            }
         }
         else
         {
-            // Ball mode: set world position based on anchor
-            transform.position = sharedAnchor.TransformPoint(targetLocalPos);
-            transform.rotation = sharedAnchor.rotation * targetLocalRot;
-            ballInitialized = true;
+            // CLIENT: Use the networked world position from host
+            Vector3 targetWorldPos = SyncedWorldPosition;
+            Quaternion targetWorldRot = SyncedWorldRotation;
             
-            // Initialize interpolation targets for clients
-            if (!Object.HasStateAuthority)
+            // If networked values aren't set yet (all zeros), wait
+            if (targetWorldPos == Vector3.zero)
             {
+                Debug.Log("[NetworkedCube ParentToAnchor] CLIENT waiting for networked position to sync...");
+                return;
+            }
+            
+            Debug.Log($"[NetworkedCube ParentToAnchor] CLIENT received world pos: {targetWorldPos}");
+            
+            // Apply world position directly (no anchor parenting needed)
+            transform.position = targetWorldPos;
+            transform.rotation = targetWorldRot;
+            
+            if (isBallMode)
+            {
+                ballInitialized = true;
                 targetPosition = transform.position;
                 previousPosition = transform.position;
             }
+            
+            Debug.Log($"[NetworkedCube ParentToAnchor] CLIENT applied world pos: {transform.position}");
         }
         
         isParentedToAnchor = true;
-        Debug.Log($"[NetworkedCube ParentToAnchor (anchor)] Parented to anchor '{anchor.name}' at local pos {targetLocalPos}, BallMode: {isBallMode}");
+        Debug.Log($"[NetworkedCube ParentToAnchor] COMPLETE - Parented to '{anchor.name}'");
     }
 
     private void UpdateVisualState()
@@ -299,18 +415,17 @@ public class NetworkedCube : NetworkBehaviour
     
     private void SyncBallToNetwork()
     {
-        if (sharedAnchor == null) return;
         if (Time.time - lastSyncTime < 1f / syncRate) return;
         
         lastSyncTime = Time.time;
-        AnchorRelativePosition = sharedAnchor.InverseTransformPoint(transform.position);
-        AnchorRelativeVelocity = sharedAnchor.InverseTransformDirection(rb.velocity);
+        // Use world position sync
+        SyncedWorldPosition = transform.position;
+        SyncedWorldRotation = transform.rotation;
+        SyncedVelocity = rb != null ? rb.velocity : Vector3.zero;
     }
     
     private void InterpolateBallPosition()
     {
-        if (sharedAnchor == null) return;
-        
         interpolationTime += Time.deltaTime * syncRate;
         
         if (interpolationTime <= 1f)
@@ -319,19 +434,18 @@ public class NetworkedCube : NetworkBehaviour
         }
         else
         {
-            // Predict based on velocity
-            Vector3 worldVelocity = sharedAnchor.TransformDirection(AnchorRelativeVelocity);
-            transform.position = targetPosition + worldVelocity * (interpolationTime - 1f) / syncRate;
+            // Predict based on velocity (using world velocity directly)
+            transform.position = targetPosition + SyncedVelocity * (interpolationTime - 1f) / syncRate;
         }
     }
     
     public override void Render()
     {
         // Client: update target position when networked data changes
-        if (isBallMode && !Object.HasStateAuthority && ballInitialized && sharedAnchor != null)
+        if (isBallMode && !Object.HasStateAuthority && ballInitialized)
         {
             previousPosition = targetPosition;
-            targetPosition = sharedAnchor.TransformPoint(AnchorRelativePosition);
+            targetPosition = SyncedWorldPosition; // Use world position directly
             interpolationTime = 0f;
         }
     }
@@ -355,10 +469,8 @@ public class NetworkedCube : NetworkBehaviour
     
     private void ResetBallToServe()
     {
-        if (sharedAnchor == null) return;
-        
-        Vector3 worldServePos = sharedAnchor.TransformPoint(servePosition);
-        transform.position = worldServePos;
+        // Use serve position relative to start position
+        transform.position = servePosition;
         
         if (rb != null)
         {
@@ -370,10 +482,10 @@ public class NetworkedCube : NetworkBehaviour
         IsBallInPlay = false;
         lastHitTime = Time.time;
         
-        AnchorRelativePosition = servePosition;
-        AnchorRelativeVelocity = Vector3.zero;
+        SyncedWorldPosition = transform.position;
+        SyncedVelocity = Vector3.zero;
         
-        Debug.Log($"[NetworkedCube] Ball reset to serve position: {worldServePos}");
+        Debug.Log($"[NetworkedCube] Ball reset to serve position: {transform.position}");
     }
     
     /// <summary>

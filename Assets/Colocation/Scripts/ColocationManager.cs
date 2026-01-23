@@ -755,6 +755,53 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
         }
     }
 
+    // ==================== PUBLIC ACCESSORS FOR NetworkedCube ====================
+    
+    /// <summary>
+    /// Get the PRIMARY anchor used for alignment.
+    /// NetworkedCube and other objects should use this to ensure consistent positioning.
+    /// </summary>
+    public virtual OVRSpatialAnchor GetPrimaryAnchor()
+    {
+        if (_localizedAnchor != null && _localizedAnchor.Localized)
+        {
+            Debug.Log($"[ColocationManager] GetPrimaryAnchor returning: {_localizedAnchor.Uuid}, pos: {_localizedAnchor.transform.position}");
+            return _localizedAnchor;
+        }
+        
+        // Fallback: return first localized anchor from list
+        if (currentAnchors != null && currentAnchors.Count > 0)
+        {
+            foreach (var anchor in currentAnchors)
+            {
+                if (anchor != null && anchor.Localized)
+                {
+                    Debug.Log($"[ColocationManager] GetPrimaryAnchor fallback to currentAnchors[0]: {anchor.Uuid}");
+                    return anchor;
+                }
+            }
+        }
+        
+        Debug.LogWarning("[ColocationManager] GetPrimaryAnchor: No localized anchor found!");
+        return null;
+    }
+    
+    /// <summary>
+    /// Get the list of all current anchors
+    /// </summary>
+    public virtual List<OVRSpatialAnchor> GetAnchors()
+    {
+        return currentAnchors;
+    }
+    
+    /// <summary>
+    /// Check if alignment has completed
+    /// </summary>
+    public virtual bool IsAlignmentComplete()
+    {
+        return AlignmentCompletedStatic;
+    }
+
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     protected virtual void RPC_NotifyClientAligned() { }
 }

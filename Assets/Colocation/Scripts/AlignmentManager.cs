@@ -8,7 +8,7 @@ public class AlignmentManager : MonoBehaviour
     [SerializeField] private int alignmentIterations = 3; // More iterations for better accuracy
     
     [Header("Periodic Re-alignment")]
-    [SerializeField] private bool enablePeriodicAlignment = true; // ENABLED to reduce drift
+    [SerializeField] private bool enablePeriodicAlignment = false; // DISABLED to test drift
     [SerializeField] private float realignmentInterval = 5.0f; // Check every 5 seconds
     [SerializeField] private bool smoothRealignment = true; // Smoothly interpolate instead of snap
     [SerializeField] private float smoothSpeed = 2.0f; // How fast to interpolate

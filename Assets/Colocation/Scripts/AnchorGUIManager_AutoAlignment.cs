@@ -1237,6 +1237,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private void OnSpawnCubeClicked()
     {
 #if FUSION2
+        Debug.Log("=== [SPAWN CUBE DEBUG START] ===");
+        
         if (networkRunner == null || !networkRunner.IsRunning)
         {
             Log("Starting network session first...");
@@ -1249,6 +1251,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             Log("Not aligned! Click Auto Align first.", true);
             return;
         }
+        
+        Debug.Log($"[SPAWN DEBUG] IsAlignmentComplete: {IsAlignmentComplete()}");
+        Debug.Log($"[SPAWN DEBUG] AlignmentCompletedStatic: {AlignmentCompletedStatic}");
 
         if (!cubePrefab.IsValid)
         {
@@ -1256,31 +1261,58 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
 
+        // Log camera rig position - this shows if alignment was applied
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        if (cameraRig != null)
+        {
+            Debug.Log($"[SPAWN DEBUG] CameraRig position: {cameraRig.transform.position}, rotation: {cameraRig.transform.eulerAngles}");
+        }
+        
+        // Log anchor position
+        if (_localizedAnchor != null)
+        {
+            Debug.Log($"[SPAWN DEBUG] _localizedAnchor: {_localizedAnchor.name}, UUID: {_localizedAnchor.Uuid}");
+            Debug.Log($"[SPAWN DEBUG] Anchor world pos: {_localizedAnchor.transform.position}, rot: {_localizedAnchor.transform.eulerAngles}");
+        }
+        else
+        {
+            Debug.LogError("[SPAWN DEBUG] _localizedAnchor is NULL!");
+        }
+
         // Get controller position and convert to anchor-relative
         Vector3 worldPos = GetControllerSpawnPosition();
         Vector3 anchorRelativePos = worldPos;
+        
+        Debug.Log($"[SPAWN DEBUG] Controller spawn position (world): {worldPos}");
 
         if (_localizedAnchor != null && _localizedAnchor.Localized)
         {
             anchorRelativePos = _localizedAnchor.transform.InverseTransformPoint(worldPos);
-            Debug.Log($"[AnchorGUIManager OnSpawnCubeClicked (cube)] Spawn: World {worldPos} -> Anchor-relative {anchorRelativePos}");
+            Debug.Log($"[SPAWN DEBUG] Anchor-relative pos: {anchorRelativePos}");
+            
+            // Verify: convert back to world to check consistency
+            Vector3 verifyWorldPos = _localizedAnchor.transform.TransformPoint(anchorRelativePos);
+            Debug.Log($"[SPAWN DEBUG] Verify (back to world): {verifyWorldPos}");
         }
         else
         {
-            Debug.LogWarning("[AnchorGUIManager OnSpawnCubeClicked (cube)] No localized anchor! Using world position directly.");
+            Debug.LogWarning("[SPAWN DEBUG] No localized anchor! Using world position directly.");
         }
 
         // Request spawn via RPC if not host
         if (!Object.HasStateAuthority)
         {
+            Debug.Log("[SPAWN DEBUG] CLIENT: Sending RPC_RequestSpawnCube to host");
             RPC_RequestSpawnCube(anchorRelativePos);
         }
         else
         {
+            Debug.Log("[SPAWN DEBUG] HOST: Calling SpawnCubeAtAnchorPosition directly");
             SpawnCubeAtAnchorPosition(anchorRelativePos);
         }
 
         Log("Spawning cube!");
+        Debug.Log("=== [SPAWN CUBE DEBUG END] ===");
 #else
         Log("Photon Fusion not available!", true);
 #endif
@@ -1299,20 +1331,20 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Clear existing cube first (limit to 1)
         if (spawnedCube != null && Runner != null)
         {
-            Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition (cube)] Despawning existing cube: {spawnedCube.Id}");
+            Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition] Despawning existing cube: {spawnedCube.Id}");
             Runner.Despawn(spawnedCube);
             spawnedCube = null;
         }
 
         if (_localizedAnchor == null || !_localizedAnchor.Localized)
         {
-            Debug.LogError("[AnchorGUIManager SpawnCubeAtAnchorPosition (cube)] Cannot spawn cube - no localized anchor!");
+            Debug.LogError("[AnchorGUIManager SpawnCubeAtAnchorPosition] Cannot spawn cube - no localized anchor!");
             return;
         }
 
-        // Spawn at world position first (required by Fusion)
+        // SIMPLIFIED: Spawn at world position - NetworkedCube handles sync via world position
         Vector3 worldPos = _localizedAnchor.transform.TransformPoint(anchorRelativePos);
-        Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition (cube)] Spawning cube at world {worldPos}, will parent to anchor");
+        Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition] Spawning at world pos: {worldPos}");
 
         var newCube = Runner.Spawn(
             cubePrefab,
@@ -1323,18 +1355,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (newCube != null)
         {
-            // Parent to anchor so position is relative to anchor on all devices
-            newCube.transform.SetParent(_localizedAnchor.transform, worldPositionStays: false);
-            newCube.transform.localPosition = anchorRelativePos;
-            newCube.transform.localRotation = Quaternion.identity;
+            // DON'T parent to anchor - NetworkedCube uses world position sync
             newCube.transform.localScale = Vector3.one * cubeScale;
-
             spawnedCube = newCube;
-            Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition (cube)] Cube parented to anchor at local pos {anchorRelativePos}! NetworkId: {newCube.Id}");
+            Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition] Cube spawned at world pos: {worldPos}, NetworkId: {newCube.Id}");
         }
         else
         {
-            Debug.LogError("[AnchorGUIManager SpawnCubeAtAnchorPosition (cube)] Failed to spawn cube!");
+            Debug.LogError("[AnchorGUIManager SpawnCubeAtAnchorPosition] Failed to spawn cube!");
         }
     }
 
