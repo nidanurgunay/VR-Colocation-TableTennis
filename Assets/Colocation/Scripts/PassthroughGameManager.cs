@@ -183,12 +183,130 @@ public class PassthroughGameManager : NetworkBehaviour
         }
         isActive = true;
         currentPhase = GamePhase.TableAdjust;
-        
+
         Debug.Log($"{LOG_TAG} Starting passthrough game");
-        
+
+        // Destroy any existing cubes when game starts
+        DespawnAllCubes();
+
         SpawnTable();
         UpdateInstructions();
     }
+
+    /// <summary>
+    /// Despawn all NetworkedCube objects when game starts
+    /// Also cleans up any cube GameObjects that are children of anchors
+    /// </summary>
+    private void DespawnAllCubes()
+    {
+#if FUSION2
+        var allCubes = FindObjectsOfType<NetworkedCube>();
+        if (allCubes.Length == 0)
+        {
+            // Still check for orphaned cube GameObjects in anchors
+            CleanupCubeChildrenFromAnchors();
+            return;
+        }
+
+        Debug.Log($"{LOG_TAG} DespawnAllCubes: Destroying {allCubes.Length} cubes");
+
+        if (Runner != null && Runner.IsRunning && Object != null && Object.HasStateAuthority)
+        {
+            // Host: despawn via network, then cleanup GameObjects
+            foreach (var cube in allCubes)
+            {
+                if (cube != null)
+                {
+                    // Unparent first to prevent anchor from keeping the object
+                    cube.transform.SetParent(null);
+
+                    if (cube.Object != null && cube.Object.IsValid)
+                    {
+                        Debug.Log($"{LOG_TAG} DespawnAllCubes: Despawning cube {cube.Object.Id}");
+                        Runner.Despawn(cube.Object);
+                    }
+                    else
+                    {
+                        // Not a valid network object, just destroy
+                        Destroy(cube.gameObject);
+                    }
+                }
+            }
+        }
+        else if (Runner != null && Runner.IsRunning)
+        {
+            // Client: request host to despawn
+            RPC_RequestDespawnCubes();
+        }
+        else
+        {
+            // Runner not available, destroy locally
+            foreach (var cube in allCubes)
+            {
+                if (cube != null)
+                {
+                    cube.transform.SetParent(null);
+                    Destroy(cube.gameObject);
+                }
+            }
+        }
+
+        // Also cleanup any orphaned cube GameObjects in anchors
+        CleanupCubeChildrenFromAnchors();
+#else
+        // Non-networked: just destroy
+        var allCubes = FindObjectsOfType<NetworkedCube>();
+        foreach (var cube in allCubes)
+        {
+            if (cube != null)
+            {
+                cube.transform.SetParent(null);
+                Destroy(cube.gameObject);
+            }
+        }
+        CleanupCubeChildrenFromAnchors();
+#endif
+    }
+
+    /// <summary>
+    /// Cleanup any cube GameObjects that are children of anchors (orphaned after despawn)
+    /// </summary>
+    private void CleanupCubeChildrenFromAnchors()
+    {
+        var anchors = FindObjectsOfType<OVRSpatialAnchor>();
+        foreach (var anchor in anchors)
+        {
+            if (anchor == null) continue;
+
+            // Check all children of the anchor for cube-like objects
+            var childrenToDestroy = new System.Collections.Generic.List<GameObject>();
+            foreach (Transform child in anchor.transform)
+            {
+                // Check if it's a NetworkedCube or has "cube" in name
+                if (child.GetComponent<NetworkedCube>() != null ||
+                    child.name.ToLower().Contains("cube") ||
+                    child.name.ToLower().Contains("networkedcube"))
+                {
+                    childrenToDestroy.Add(child.gameObject);
+                }
+            }
+
+            foreach (var obj in childrenToDestroy)
+            {
+                Debug.Log($"{LOG_TAG} CleanupCubeChildrenFromAnchors: Destroying orphaned cube '{obj.name}' from anchor '{anchor.name}'");
+                Destroy(obj);
+            }
+        }
+    }
+
+#if FUSION2
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestDespawnCubes()
+    {
+        Debug.Log($"{LOG_TAG} RPC_RequestDespawnCubes: Host received request to despawn cubes");
+        DespawnAllCubes();
+    }
+#endif
     
     /// <summary>
     /// Stop the passthrough game and cleanup
@@ -266,13 +384,8 @@ public class PassthroughGameManager : NetworkBehaviour
 #if FUSION2
     public override void FixedUpdateNetwork()
     {
-        if (!NetworkedGameActive) return;
-
-        // Client: Apply networked table state every frame to see host's adjustments
-        if (!Object.HasStateAuthority && spawnedTable != null)
-        {
-            ApplyTableState();
-        }
+        // Table sync is now handled via RPC_SyncTableTransform instead of polling
+        // No need to apply table state every frame - updates come via explicit RPCs
     }
 #endif
     
@@ -310,9 +423,27 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             case GamePhase.TableAdjust:
                 if (aPressed || xPressed)
+                {
+#if FUSION2
+                    // ONLY HOST can confirm table adjustment
+                    // When host confirms, spawn ball and sync to all clients
+                    if (Object != null && Object.HasStateAuthority)
+                    {
+                        Debug.Log($"{LOG_TAG} HOST confirming table adjustment - spawning ball and advancing phase");
+                        ConfirmTableAdjustmentAndSpawnBall();
+                    }
+                    else
+                    {
+                        Debug.Log($"{LOG_TAG} CLIENT cannot confirm table adjustment - waiting for host");
+                    }
+#else
                     AdvancePhase();
+#endif
+                }
                 else
+                {
                     HandleTableAdjust();
+                }
                 break;
                 
             case GamePhase.BallPosition:
@@ -343,13 +474,16 @@ public class PassthroughGameManager : NetworkBehaviour
         // Right stick X = Rotation, Left stick Y = Height
         float rotationDelta = rightStick.x * TableRotateSpeed * Time.deltaTime;
         float heightDelta = leftStick.y * TableMoveSpeed * Time.deltaTime;
-        
+
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
         {
             NetworkedTableYRotation += rotationDelta;
             NetworkedTableHeight += heightDelta;
             ApplyTableState();
+
+            // Send RPC to sync table transform to all clients
+            RPC_SyncTableTransform(NetworkedTableYRotation, NetworkedTableHeight);
         }
         else if (Runner != null)
         {
@@ -382,13 +516,11 @@ public class PassthroughGameManager : NetworkBehaviour
         bool bPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
         bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch);
         bool yPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
-        
-        // GRIP = Switch to VR TableTennis scene
+
+        // GRIP = Return to main AnchorGUI menu for game mode selection
         bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
                           OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
-        
-        Vector2 stick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
-        
+
         // A/X = Resume
         if (aPressed || xPressed)
         {
@@ -399,13 +531,8 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             RestartGame();
         }
-        // GRIP = Switch to VR Game
+        // GRIP = Return to main menu for game mode selection
         else if (gripPressed)
-        {
-            SwitchToVRGame();
-        }
-        // Thumbstick down = Return to menu
-        else if (stick.y < -0.7f)
         {
             ReturnToMainMenu();
         }
@@ -651,18 +778,43 @@ public class PassthroughGameManager : NetworkBehaviour
 #if FUSION2
         if (Object.HasStateAuthority && Runner != null)
         {
-            Debug.Log($"{LOG_TAG} SpawnBall Host spawning networked ball");
-            var ball = Runner.Spawn(BallPrefab, spawnPos, Quaternion.identity);
+            Debug.Log($"{LOG_TAG} SpawnBall Host spawning networked ball at {spawnPos}");
+
+            // CRITICAL: Spawn at origin first, then move - Fusion may ignore spawn position if parent exists
+            var ball = Runner.Spawn(BallPrefab, Vector3.zero, Quaternion.identity);
             if (ball != null)
             {
                 spawnedBall = ball.gameObject;
-                Debug.Log($"{LOG_TAG} SpawnBall Ball spawned successfully: {ball.Id}");
+                Debug.Log($"{LOG_TAG} SpawnBall Ball spawned at origin: {ball.transform.position}");
+
+                // IMMEDIATELY set to correct world position before anything else
+                ball.transform.position = spawnPos;
+
+                // Get rigidbody and set its position too
+                var rb = ball.GetComponent<Rigidbody>();
+                if (rb != null)
+                {
+                    rb.position = spawnPos;
+                    rb.velocity = Vector3.zero;
+                }
+
+                Debug.Log($"{LOG_TAG} SpawnBall Ball position IMMEDIATELY corrected to: {spawnPos}, actual: {ball.transform.position}");
 
                 var networkedBall = ball.GetComponent<NetworkedBall>();
                 if (networkedBall != null)
                 {
+                    // Disable the initialization coroutine from moving the ball
+                    // CRITICAL: Pass table reference so TableRelativePosition can be set immediately
+                    Debug.Log($"{LOG_TAG} SpawnBall Calling SetSpawnPosition to lock position at {spawnPos}, table={spawnedTable.name}");
+                    networkedBall.SetSpawnPosition(spawnPos, spawnedTable.transform);
+                    Debug.Log($"{LOG_TAG} SpawnBall Ball position after SetSpawnPosition: {ball.transform.position}");
+
                     Debug.Log($"{LOG_TAG} SpawnBall Entering positioning mode");
                     networkedBall.EnterPositioningMode();
+                    Debug.Log($"{LOG_TAG} SpawnBall Ball position after EnterPositioningMode: {ball.transform.position}");
+
+                    // Start coroutine to continuously force position during initialization
+                    StartCoroutine(EnsureBallPositionAfterInit(networkedBall, spawnPos));
                 }
                 else
                 {
@@ -670,7 +822,7 @@ public class PassthroughGameManager : NetworkBehaviour
                 }
 
                 RPC_NotifyBallSpawned();
-                Debug.Log($"{LOG_TAG} SpawnBall Notified clients of ball spawn");
+                Debug.Log($"{LOG_TAG} SpawnBall Notified clients of ball spawn, final ball position: {ball.transform.position}");
             }
             else
             {
@@ -718,6 +870,53 @@ public class PassthroughGameManager : NetworkBehaviour
         UpdateScoreDisplay();
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ready for next serve");
+    }
+
+    /// <summary>
+    /// Called when ball authority changes (via RPC from NetworkedBall)
+    /// Updates UI to reflect new authority
+    /// </summary>
+    public void OnAuthorityChanged(int newAuthority)
+    {
+        Debug.Log($"{LOG_TAG} OnAuthorityChanged called - new authority: Player {newAuthority}");
+        UpdateScoreDisplay();
+        UpdateInstructions();
+    }
+
+    /// <summary>
+    /// Ensure ball stays at spawn position after initialization completes
+    /// Check multiple times to prevent any async initialization from moving it
+    /// </summary>
+    private IEnumerator EnsureBallPositionAfterInit(NetworkedBall ball, Vector3 targetPosition)
+    {
+        // Check and correct position multiple times during initialization
+        for (int i = 0; i < 10; i++)
+        {
+            yield return new WaitForSeconds(0.1f);
+
+            float distance = Vector3.Distance(ball.transform.position, targetPosition);
+            if (distance > 0.01f) // If ball moved away from target
+            {
+                Debug.Log($"{LOG_TAG} EnsureBallPositionAfterInit[{i}]: Ball drifted to {ball.transform.position}, correcting to {targetPosition} (distance: {distance:F3}m)");
+
+                // Force back to correct position
+                ball.transform.position = targetPosition;
+
+                // Also update rigidbody
+                var rb = ball.GetComponent<Rigidbody>();
+                if (rb != null)
+                {
+                    rb.position = targetPosition;
+                    rb.velocity = Vector3.zero;
+                }
+            }
+            else
+            {
+                Debug.Log($"{LOG_TAG} EnsureBallPositionAfterInit[{i}]: Ball stable at correct position {ball.transform.position}");
+            }
+        }
+
+        Debug.Log($"{LOG_TAG} EnsureBallPositionAfterInit: Complete. Final position: {ball.transform.position}");
     }
 
     /// <summary>
@@ -784,7 +983,53 @@ public class PassthroughGameManager : NetworkBehaviour
 #endif
 
     // ==================== GAME FLOW ====================
-    
+
+#if FUSION2
+    /// <summary>
+    /// HOST ONLY: Confirms table adjustment, spawns ball, and syncs state to all clients
+    /// </summary>
+    private void ConfirmTableAdjustmentAndSpawnBall()
+    {
+        if (!Object.HasStateAuthority)
+        {
+            Debug.LogWarning($"{LOG_TAG} ConfirmTableAdjustmentAndSpawnBall called on client - ignoring");
+            return;
+        }
+
+        Debug.Log($"{LOG_TAG} ConfirmTableAdjustmentAndSpawnBall - Host confirming table adjustment");
+
+        // Advance phase to BallPosition
+        currentPhase = GamePhase.BallPosition;
+        Debug.Log($"{LOG_TAG} Phase: BallPosition (confirmed by host)");
+
+        // Spawn ball at correct position above table
+        SpawnBall();
+
+        // Notify all clients of phase change and ball spawn
+        RPC_NotifyTableAdjustmentConfirmed();
+
+        UpdateInstructions();
+    }
+
+    /// <summary>
+    /// RPC to notify all clients that host has confirmed table adjustment and ball is spawned
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyTableAdjustmentConfirmed()
+    {
+        Debug.Log($"{LOG_TAG} RPC_NotifyTableAdjustmentConfirmed received - updating phase to BallPosition");
+
+        // Update local phase
+        currentPhase = GamePhase.BallPosition;
+
+        // Update UI
+        UpdateScoreDisplay();
+        UpdateInstructions();
+
+        Debug.Log($"{LOG_TAG} Table adjustment confirmed by host - ball should now be visible at spawn position");
+    }
+#endif
+
     private void AdvancePhase()
     {
         switch (currentPhase)
@@ -982,10 +1227,43 @@ public class PassthroughGameManager : NetworkBehaviour
         dir.y = 0;
         
         gameUIPanel = new GameObject("PassthroughGameUI");
-        gameUIPanel.transform.position = primary.position - dir * 3f;
-        gameUIPanel.transform.position = new Vector3(
-            gameUIPanel.transform.position.x, 1.5f, gameUIPanel.transform.position.z);
-        gameUIPanel.transform.rotation = Quaternion.LookRotation(-dir);
+
+        // FIX: Parent UI to camera rig so it stays stable during periodic realignment
+        // Find the OVR camera rig
+        var cameraRig = FindObjectOfType<OVRCameraRig>();
+        Camera mainCam = Camera.main;
+
+        if (cameraRig != null && mainCam != null)
+        {
+            // Parent to camera rig (or tracking space) to stay stable during realignment
+            gameUIPanel.transform.SetParent(cameraRig.trackingSpace != null ? cameraRig.trackingSpace : cameraRig.transform, false);
+
+            // Position in front and to the side of the camera
+            Vector3 localPos = mainCam.transform.localPosition + mainCam.transform.localRotation * new Vector3(-2f, 0.2f, 3f);
+            gameUIPanel.transform.localPosition = localPos;
+
+            // Face AWAY from camera (flip 180°) to maximize passthrough visibility
+            // The backside is transparent, UI elements face away
+            Vector3 dirAwayFromCamera = gameUIPanel.transform.position - mainCam.transform.position;
+            dirAwayFromCamera.y = 0;
+            if (dirAwayFromCamera.sqrMagnitude > 0.01f)
+            {
+                gameUIPanel.transform.rotation = Quaternion.LookRotation(dirAwayFromCamera);
+            }
+
+            Debug.Log($"{LOG_TAG} CreateGameUI: UI panel parented to camera rig at local position {localPos}, flipped to maximize passthrough visibility");
+        }
+        else
+        {
+            // Fallback: position in world space (will move during realignment)
+            gameUIPanel.transform.position = primary.position - dir * 3f;
+            gameUIPanel.transform.position = new Vector3(
+                gameUIPanel.transform.position.x, 1.5f, gameUIPanel.transform.position.z);
+            // Flip 180° to face away (maximize passthrough visibility)
+            gameUIPanel.transform.rotation = Quaternion.LookRotation(dir);
+
+            Debug.LogWarning($"{LOG_TAG} CreateGameUI: No camera rig found, using world space positioning (may move during realignment), flipped for passthrough");
+        }
 
         // Create Background Panel
         var panelObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
@@ -1071,23 +1349,33 @@ public class PassthroughGameManager : NetworkBehaviour
         switch (currentPhase)
         {
             case GamePhase.TableAdjust:
-                // TableAdjust: Host Only
+                // TableAdjust: Host Only can confirm
 #if FUSION2
                 if (Object != null && Object.HasStateAuthority)
                 {
                     authorityText.text = "HOST CONTROL";
                     authorityText.color = Color.green;
+                    if (controlsText) controlsText.text =
+                        "[Right Stick X] Rotate Table\n" +
+                        "[Left Stick Y] Adjust Height\n" +
+                        "[A/X] Confirm & Spawn Ball";
                 }
                 else
                 {
-                    authorityText.text = "HOST ADJUSTING TABLE";
+                    authorityText.text = "WAITING FOR HOST";
                     authorityText.color = Color.gray;
+                    if (controlsText) controlsText.text =
+                        "Host is adjusting table...\n" +
+                        "Wait for host to press A/X";
                 }
 #else
                 authorityText.text = "ADJUST TABLE";
                 authorityText.color = Color.cyan;
+                if (controlsText) controlsText.text =
+                    "[Right Stick X] Rotate Table\n" +
+                    "[Left Stick Y] Adjust Height\n" +
+                    "[A/X] Confirm";
 #endif
-                if (controlsText) controlsText.text = "Right Stick X: Rotate | Left Stick Y: Height\nA/X: Confirm";
                 break;
 
             case GamePhase.BallPosition:
@@ -1096,7 +1384,7 @@ public class PassthroughGameManager : NetworkBehaviour
                 {
                     if (isLocalPlayerAuthority)
                     {
-                        authorityText.text = "★ YOUR SERVE ★";
+                        authorityText.text = "YOUR SERVE";
                         authorityText.color = Color.yellow;
                     }
                     else
@@ -1110,7 +1398,22 @@ public class PassthroughGameManager : NetworkBehaviour
                     authorityText.text = "READY TO SERVE";
                     authorityText.color = Color.cyan;
                 }
-                if (controlsText) controlsText.text = spawnedBall == null ? "GRIP: Spawn Ball" : "Hit ball to start!";
+                if (controlsText)
+                {
+                    if (spawnedBall == null)
+                    {
+                        controlsText.text = "[GRIP] Spawn Ball";
+                    }
+                    else
+                    {
+                        controlsText.text =
+                            "[B/Y] Toggle Ball Adjust\n" +
+                            "[Left Stick] Move Ball XZ\n" +
+                            "[Right Stick Y] Move Ball Up/Down\n" +
+                            "[A/X] Reset Ball Position\n" +
+                            "Hit ball with racket to start!";
+                    }
+                }
                 break;
 
             case GamePhase.Playing:
@@ -1119,7 +1422,7 @@ public class PassthroughGameManager : NetworkBehaviour
                 {
                     if (isLocalPlayerAuthority)
                     {
-                        authorityText.text = "★ YOUR TURN ★";
+                        authorityText.text = "YOUR TURN";
                         authorityText.color = Color.yellow;
                     }
                     else
@@ -1133,7 +1436,9 @@ public class PassthroughGameManager : NetworkBehaviour
                     authorityText.text = "PLAYING";
                     authorityText.color = Color.white;
                 }
-                if (controlsText) controlsText.text = "MENU: Pause";
+                if (controlsText) controlsText.text =
+                    "[MENU] Pause Game\n" +
+                    "[A/X] Reset Ball";
                 break;
 
             case GamePhase.BallGrounded:
@@ -1142,7 +1447,7 @@ public class PassthroughGameManager : NetworkBehaviour
                 {
                     if (isLocalPlayerAuthority)
                     {
-                        authorityText.text = "★ YOU WON ROUND ★";
+                        authorityText.text = "YOU WON ROUND";
                         authorityText.color = Color.yellow;
                     }
                     else
@@ -1171,6 +1476,38 @@ public class PassthroughGameManager : NetworkBehaviour
         NetworkedTableYRotation += rotDelta;
         NetworkedTableHeight += heightDelta;
         ApplyTableState(); // Apply immediately so host sees changes
+
+        // Sync updated position to all clients
+        RPC_SyncTableTransform(NetworkedTableYRotation, NetworkedTableHeight);
+    }
+
+    /// <summary>
+    /// RPC to sync table position and rotation from host to all clients.
+    /// Called whenever host adjusts table position.
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_SyncTableTransform(float yRotation, float height)
+    {
+        if (Object.HasStateAuthority) return; // Host already applied
+
+        // Update local networked values cache
+        NetworkedTableYRotation = yRotation;
+        NetworkedTableHeight = height;
+
+        // Apply to table immediately
+        ApplyTableState();
+        Debug.Log($"{LOG_TAG} [RPC] Client received table sync: Rotation={yRotation}, Height={height}");
+    }
+
+    /// <summary>
+    /// Client requests current table state from host (used on join/spawn)
+    /// </summary>
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestTableState()
+    {
+        Debug.Log($"{LOG_TAG} [RPC] Host received request for current table state");
+        // Send current state to all clients
+        RPC_SyncTableTransform(NetworkedTableYRotation, NetworkedTableHeight);
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -1329,19 +1666,23 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         isActive = true;
         currentPhase = GamePhase.TableAdjust;
-        
+
+        // Despawn all existing cubes when AR game starts
+        Debug.Log($"{LOG_TAG} StartPassthroughGame: Despawning all cubes before starting AR game");
+        DespawnAllCubes();
+
         // Disable anchor placement mode
         if (mainManager != null)
         {
             mainManager.SetWaitingForGripToPlaceAnchors(false);
         }
-        
+
         // Hide the entire main UI Canvas
         if (mainManager != null)
         {
             mainManager.HideMainGUIPanel();
         }
-        
+
         // Check if we have anchors - client might need to wait for anchor loading
         var currentAnchors = mainManager?.GetCurrentAnchors();
         if (currentAnchors == null || currentAnchors.Count < 2)
@@ -1354,12 +1695,12 @@ public class PassthroughGameManager : NetworkBehaviour
             // Spawn or enable the table at anchor midpoint
             SpawnTable();
             
-            // Client: apply networked state immediately after spawning
+            // Client: request current table state from host
 #if FUSION2
             if (Object != null && !Object.HasStateAuthority && spawnedTable != null)
             {
-                ApplyTableState();
-                Debug.Log("[Passthrough] Client: Applied networked table state after spawn");
+                RPC_RequestTableState();
+                Debug.Log("[Passthrough] Client: Requested current table state from host");
             }
 #endif
         }
