@@ -12,7 +12,6 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
 {
     [SerializeField] protected AlignmentManager alignmentManager;
     [SerializeField] protected bool autoStartColocation = false;
-    [SerializeField] private NetworkPrefabRef networkedPlayerPrefab; // Avatar for players
     [SerializeField] protected TextMeshProUGUI statusText; // Optional UI element
     [SerializeField] protected GameObject anchorMarkerPrefab; // Optional visual prefab
     [SerializeField] protected float anchorScale = 0.1f; // Scale for anchor visuals
@@ -52,10 +51,11 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
 #if FUSION2
     [Networked] protected NetworkBool HostAnchorsShared { get; set; }
     [Networked, Capacity(64)] protected NetworkString<_64> SharedAnchorGroupUuidString { get; set; }
+    // Individual anchor UUIDs for consistent ordering between host and client
+    [Networked, Capacity(64)] protected NetworkString<_64> FirstAnchorUuidString { get; set; }
+    [Networked, Capacity(64)] protected NetworkString<_64> SecondAnchorUuidString { get; set; }
 #endif
     
-    // Track spawned avatars
-    private Dictionary<PlayerRef, NetworkObject> _spawnedPlayerAvatars = new Dictionary<PlayerRef, NetworkObject>();
 
     public override void Spawned()
     {
@@ -220,7 +220,7 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
             {
                 Log("Sharing Success!");
                 currentState = ColocationState.SharingAnchors; // Host is sharing, not aligned until client joins
-                
+
                 // IMPORTANT: Set networked flag so client knows anchors are ready
                 HostAnchorsShared = true;
                 SharedAnchorGroupUuidString = _sharedAnchorGroupId.ToString();
@@ -230,21 +230,26 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
                 {
                     // Host aligns to its own anchors
                     _localizedAnchor = anchorsToShare[0];
-                    
+
+                    // Store individual anchor UUIDs for client to match order
+                    FirstAnchorUuidString = anchorsToShare[0].Uuid.ToString();
+                    SecondAnchorUuidString = anchorsToShare[1].Uuid.ToString();
+                    Debug.Log($"[ColocationManager ShareAnchors (anchor)] HOST sharing anchor UUIDs: First={FirstAnchorUuidString}, Second={SecondAnchorUuidString}");
+
                     // Log anchor positions BEFORE alignment
                     Debug.Log($"[ColocationManager ShareAnchors (anchor)] HOST Pre-align Anchor1: {anchorsToShare[0].transform.position}");
                     Debug.Log($"[ColocationManager ShareAnchors (anchor)] HOST Pre-align Anchor2: {anchorsToShare[1].transform.position}");
-                    
+
                     alignmentManager.AlignUserToTwoAnchors(anchorsToShare[0], anchorsToShare[1]);
-                    
+
                     // Store anchor positions and mark alignment complete
                     FirstAnchorPosition = anchorsToShare[0].transform.position;
                     SecondAnchorPosition = anchorsToShare[1].transform.position;
                     AlignmentCompletedStatic = true;
-                    
+
                     // Set state to HostAligned after alignment
                     currentState = ColocationState.HostAligned;
-                    
+
                     Debug.Log($"[ColocationManager ShareAnchors (anchor)] HOST Stored positions: Anchor1={FirstAnchorPosition}, Anchor2={SecondAnchorPosition}");
                 }
                 else
@@ -610,28 +615,68 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
             if (localizedAnchors.Count >= 2)
             {
                 Log($"Client aligned using 2-point alignment with {localizedAnchors.Count} anchors");
-                
+
+                // CRITICAL: Sort anchors to match host's order using networked UUIDs
+                OVRSpatialAnchor anchor1 = null;
+                OVRSpatialAnchor anchor2 = null;
+
+                string firstUuid = FirstAnchorUuidString.ToString();
+                string secondUuid = SecondAnchorUuidString.ToString();
+
+                if (!string.IsNullOrEmpty(firstUuid) && !string.IsNullOrEmpty(secondUuid))
+                {
+                    // Match anchors by UUID from host
+                    foreach (var anchor in localizedAnchors)
+                    {
+                        string anchorUuid = anchor.Uuid.ToString();
+                        if (anchorUuid == firstUuid)
+                        {
+                            anchor1 = anchor;
+                            Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT matched First anchor: {anchorUuid.Substring(0, 8)}");
+                        }
+                        else if (anchorUuid == secondUuid)
+                        {
+                            anchor2 = anchor;
+                            Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT matched Second anchor: {anchorUuid.Substring(0, 8)}");
+                        }
+                    }
+
+                    if (anchor1 == null || anchor2 == null)
+                    {
+                        Log($"Warning: Could not match all anchors by UUID. First={firstUuid.Substring(0, 8)}, Second={secondUuid.Substring(0, 8)}", true);
+                        // Fallback to order received
+                        anchor1 = localizedAnchors[0];
+                        anchor2 = localizedAnchors[1];
+                    }
+                }
+                else
+                {
+                    Log("Warning: Host anchor UUIDs not received via network, using load order");
+                    anchor1 = localizedAnchors[0];
+                    anchor2 = localizedAnchors[1];
+                }
+
                 _clientLocalizedAnchorCount = localizedAnchors.Count;
-                _localizedAnchor = localizedAnchors[0]; // Set primary as main
-                
+                _localizedAnchor = anchor1; // Set primary as main
+
                 // Log anchor positions BEFORE alignment for comparison with host
-                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Pre-align Anchor1: {localizedAnchors[0].transform.position}");
-                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Pre-align Anchor2: {localizedAnchors[1].transform.position}");
-                
-                alignmentManager.AlignUserToTwoAnchors(localizedAnchors[0], localizedAnchors[1]);
+                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Pre-align Anchor1: {anchor1.transform.position}");
+                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Pre-align Anchor2: {anchor2.transform.position}");
+
+                alignmentManager.AlignUserToTwoAnchors(anchor1, anchor2);
                 
                 // Wait for alignment to complete before logging post-alignment positions
                 await Task.Delay(1000);
-                
+
                 // Log anchor positions AFTER alignment - these should match host positions
-                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Post-align Anchor1: {localizedAnchors[0].transform.position}");
-                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Post-align Anchor2: {localizedAnchors[1].transform.position}");
-                
-                // Store anchor positions and mark alignment complete
-                FirstAnchorPosition = localizedAnchors[0].transform.position;
-                SecondAnchorPosition = localizedAnchors[1].transform.position;
+                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Post-align Anchor1: {anchor1.transform.position}");
+                Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Post-align Anchor2: {anchor2.transform.position}");
+
+                // Store anchor positions and mark alignment complete (using correctly ordered anchors)
+                FirstAnchorPosition = anchor1.transform.position;
+                SecondAnchorPosition = anchor2.transform.position;
                 AlignmentCompletedStatic = true;
-                
+
                 Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Stored positions: Anchor1={FirstAnchorPosition}, Anchor2={SecondAnchorPosition}");
                 
                 // Disable rediscovery - we have both anchors
@@ -728,31 +773,12 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
 
     public void PlayerJoined(PlayerRef player)
     {
-        if (Runner.IsServer && networkedPlayerPrefab != default)
-        {
-            Log($"[ColocationManager PlayerJoined] Player {player} joined. Spawning avatar...");
-            // Host spawns the avatar object, assigning Input Authority to the specific player
-            NetworkObject playerObj = Runner.Spawn(networkedPlayerPrefab, Vector3.zero, Quaternion.identity, player);
-            
-            if (playerObj != null)
-            {
-                _spawnedPlayerAvatars[player] = playerObj;
-                Log($"[ColocationManager PlayerJoined] Avatar spawned for Player {player}");
-            }
-        }
+        Log($"[ColocationManager PlayerJoined] Player {player} joined.");
     }
 
     public void PlayerLeft(PlayerRef player)
     {
-        if (Runner.IsServer)
-        {
-            Log($"[ColocationManager PlayerLeft] Player {player} left. Despawning avatar.");
-            if (_spawnedPlayerAvatars.TryGetValue(player, out var playerObj))
-            {
-                Runner.Despawn(playerObj);
-                _spawnedPlayerAvatars.Remove(player);
-            }
-        }
+        Log($"[ColocationManager PlayerLeft] Player {player} left.");
     }
 
     // ==================== PUBLIC ACCESSORS FOR NetworkedCube ====================
