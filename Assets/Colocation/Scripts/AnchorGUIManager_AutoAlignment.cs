@@ -171,7 +171,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Initialize status text BEFORE UpdateAllUI to prevent "Ready to play!" showing at start
         if (guiStatusText != null)
         {
-            SetStatusText("Waiting for network...", "Start");
+            SetStatusText("Click Auto Align to start", "Start");
         }
 
         UpdateAllUI();
@@ -280,24 +280,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             index++;
         }
-
-        //         // Add network status info
-        // #if FUSION2
-        //         if (networkRunner != null && networkRunner.IsRunning)
-        //         {
-        //             sb.AppendLine("\n================================");
-        //             sb.AppendLine($"Network: Connected ({(isHost ? "Host" : "Client")})");
-
-        //             if (!isHost && ClientAlignedToAnchors)
-        //             {
-        //                 sb.AppendLine("Client Status: ✓ Aligned to shared anchors");
-        //             }
-        //             else if (isHost)
-        //             {
-        //                 sb.AppendLine("Host Status: Sharing anchors with client");
-        //             }
-        //         }
-        // #endif
 
         anchorText.text = sb.ToString();
     }
@@ -827,7 +809,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
 
     // ==================== ANCHOR PLACEMENT & ALIGNMENT ====================
-
     /// Handle grip button to place anchors 
     private void HandleGripAnchorPlacement()
     {
@@ -1044,10 +1025,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
         }
     }
-
-
-
-
 
 
     // ==================== PUBLIC ACCESSORS FOR PassthroughGameManager ====================

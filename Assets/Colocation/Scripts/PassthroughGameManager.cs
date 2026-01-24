@@ -278,14 +278,26 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             if (anchor == null) continue;
 
-            // Check all children of the anchor for cube-like objects
+            // Check all children of the anchor for cube-like objects or any non-visual children
             var childrenToDestroy = new System.Collections.Generic.List<GameObject>();
             foreach (Transform child in anchor.transform)
             {
-                // Check if it's a NetworkedCube or has "cube" in name
-                if (child.GetComponent<NetworkedCube>() != null ||
-                    child.name.ToLower().Contains("cube") ||
-                    child.name.ToLower().Contains("networkedcube"))
+                // Skip the visual marker (usually named "Visual" or "AnchorMarker")
+                if (child.name == "Visual" || child.name.Contains("Marker") || child.name.Contains("AnchorCursor"))
+                {
+                    continue;
+                }
+
+                // Check if it's a NetworkedCube component
+                if (child.GetComponent<NetworkedCube>() != null)
+                {
+                    childrenToDestroy.Add(child.gameObject);
+                    continue;
+                }
+
+                // Check if name contains cube-related patterns
+                string lowerName = child.name.ToLower();
+                if (lowerName.Contains("cube") || lowerName.Contains("networked"))
                 {
                     childrenToDestroy.Add(child.gameObject);
                 }
@@ -293,8 +305,22 @@ public class PassthroughGameManager : NetworkBehaviour
 
             foreach (var obj in childrenToDestroy)
             {
-                Debug.Log($"{LOG_TAG} CleanupCubeChildrenFromAnchors: Destroying orphaned cube '{obj.name}' from anchor '{anchor.name}'");
+                Debug.Log($"{LOG_TAG} CleanupCubeChildrenFromAnchors: Destroying orphaned object '{obj.name}' from anchor '{anchor.name}'");
+                // Unparent first to ensure it's fully removed
+                obj.transform.SetParent(null);
                 Destroy(obj);
+            }
+        }
+
+        // Also find and destroy any NetworkedCube objects that might not be parented to anchors
+        var allCubeComponents = FindObjectsOfType<NetworkedCube>();
+        foreach (var cube in allCubeComponents)
+        {
+            if (cube != null && cube.gameObject != null)
+            {
+                Debug.Log($"{LOG_TAG} CleanupCubeChildrenFromAnchors: Found stray NetworkedCube '{cube.name}', destroying");
+                cube.transform.SetParent(null);
+                Destroy(cube.gameObject);
             }
         }
     }
@@ -311,7 +337,7 @@ public class PassthroughGameManager : NetworkBehaviour
     /// <summary>
     /// Stop the passthrough game and cleanup
     /// </summary>
-    /// <param name="keepTableActive">If true, table stays active (for VR scene transition). If false, table is disabled.</param>
+    /// <param name="keepTableActive">If true, table stays ac tive (for VR scene transition). If false, table is disabled.</param>
     public void StopGame(bool keepTableActive = false)
     {
         isActive = false;
@@ -468,12 +494,12 @@ public class PassthroughGameManager : NetworkBehaviour
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
         Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
 
-        bool hasInput = Mathf.Abs(rightStick.x) > 0.05f || Mathf.Abs(leftStick.y) > 0.05f;
+        bool hasInput = Mathf.Abs(rightStick.y) > 0.05f || Mathf.Abs(leftStick.x) > 0.05f;
         if (!hasInput) return;
 
-        // Right stick X = Rotation, Left stick Y = Height
-        float rotationDelta = rightStick.x * TableRotateSpeed * Time.deltaTime;
-        float heightDelta = leftStick.y * TableMoveSpeed * Time.deltaTime;
+        // Right stick Y = Height, Left stick X = Rotation
+        float rotationDelta = leftStick.x * TableRotateSpeed * Time.deltaTime;
+        float heightDelta = rightStick.y * TableMoveSpeed * Time.deltaTime;
 
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
@@ -1238,9 +1264,12 @@ public class PassthroughGameManager : NetworkBehaviour
             // Parent to camera rig (or tracking space) to stay stable during realignment
             gameUIPanel.transform.SetParent(cameraRig.trackingSpace != null ? cameraRig.trackingSpace : cameraRig.transform, false);
 
-            // Position in front and to the side of the camera
-            Vector3 localPos = mainCam.transform.localPosition + mainCam.transform.localRotation * new Vector3(-2f, 0.2f, 3f);
-            gameUIPanel.transform.localPosition = localPos;
+            // Position 2.5m away from the table, in the table direction
+            Vector3 cameraPos = mainCam.transform.position;
+            Vector3 tablePos = midpoint;
+            Vector3 dirToTable = (tablePos - cameraPos).normalized;
+            Vector3 targetWorldPos = tablePos - dirToTable * 4.0f;
+            gameUIPanel.transform.localPosition = gameUIPanel.transform.parent.InverseTransformPoint(targetWorldPos);
 
             // Face AWAY from camera (flip 180°) to maximize passthrough visibility
             // The backside is transparent, UI elements face away
@@ -1251,25 +1280,14 @@ public class PassthroughGameManager : NetworkBehaviour
                 gameUIPanel.transform.rotation = Quaternion.LookRotation(dirAwayFromCamera);
             }
 
-            Debug.Log($"{LOG_TAG} CreateGameUI: UI panel parented to camera rig at local position {localPos}, flipped to maximize passthrough visibility");
-        }
-        else
-        {
-            // Fallback: position in world space (will move during realignment)
-            gameUIPanel.transform.position = primary.position - dir * 3f;
-            gameUIPanel.transform.position = new Vector3(
-                gameUIPanel.transform.position.x, 1.5f, gameUIPanel.transform.position.z);
-            // Flip 180° to face away (maximize passthrough visibility)
-            gameUIPanel.transform.rotation = Quaternion.LookRotation(dir);
-
-            Debug.LogWarning($"{LOG_TAG} CreateGameUI: No camera rig found, using world space positioning (may move during realignment), flipped for passthrough");
+            Debug.Log($"{LOG_TAG} CreateGameUI: UI panel parented to camera rig at world position {targetWorldPos}, 2.5m from table, flipped to maximize passthrough visibility");
         }
 
         // Create Background Panel
         var panelObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
         panelObj.name = "Background";
         panelObj.transform.SetParent(gameUIPanel.transform, false);
-        panelObj.transform.localScale = new Vector3(3.5f, 2.5f, 1f);
+        panelObj.transform.localScale = new Vector3(4f, 3f, 1f);
         var renderer = panelObj.GetComponent<Renderer>();
         if (renderer != null)
         {
@@ -1294,7 +1312,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
         // NEW LAYOUT MATCHING TABLETENNISMANAGER:
         // Top: Large Score (yellow)
-        scoreText = CreateText("ScoreText", new Vector3(0, 0.85f, -0.05f), 350, Color.yellow);
+        scoreText = CreateText("ScoreText", new Vector3(0, 0.85f, -0.05f), 450, Color.yellow);
         scoreText.text = "0 - 0";
 
         // Role: Client/Host (green)
@@ -1306,13 +1324,13 @@ public class PassthroughGameManager : NetworkBehaviour
 #endif
 
         // Game Phase (white)
-        phaseText = CreateText("PhaseText", new Vector3(0, 0.2f, -0.05f), 160, Color.white);
+        phaseText = CreateText("PhaseText", new Vector3(0, 0.2f, -0.05f), 200, Color.white);
 
         // Active Authority (cyan/yellow based on whose turn)
-        authorityText = CreateText("AuthorityText", new Vector3(0, -0.1f, -0.05f), 140, Color.cyan);
+        authorityText = CreateText("AuthorityText", new Vector3(0, -0.1f, -0.05f), 160, Color.cyan);
 
         // Controller Info (cyan, smaller)
-        controlsText = CreateText("ControlsText", new Vector3(0, -0.65f, -0.05f), 90, Color.cyan);
+        controlsText = CreateText("ControlsText", new Vector3(0, -0.65f, -0.05f), 150, Color.cyan);
 
         UpdateInstructions();
     }
@@ -1351,30 +1369,21 @@ public class PassthroughGameManager : NetworkBehaviour
             case GamePhase.TableAdjust:
                 // TableAdjust: Host Only can confirm
 #if FUSION2
-                if (Object != null && Object.HasStateAuthority)
-                {
-                    authorityText.text = "HOST CONTROL";
-                    authorityText.color = Color.green;
-                    if (controlsText) controlsText.text =
-                        "[Right Stick X] Rotate Table\n" +
-                        "[Left Stick Y] Adjust Height\n" +
-                        "[A/X] Confirm & Spawn Ball";
-                }
-                else
-                {
-                    authorityText.text = "WAITING FOR HOST";
-                    authorityText.color = Color.gray;
-                    if (controlsText) controlsText.text =
-                        "Host is adjusting table...\n" +
-                        "Wait for host to press A/X";
-                }
+                authorityText.text = "Adjust Table with thumbsticks.\nHost should press A/X to confirm";
+                authorityText.color = Color.green;
+                if (controlsText) controlsText.text =
+                    "[Right Stick Y] Adjust Height\n" +
+                    "[Left Stick X] Rotate Table\n" +
+                    "[A/X] Confirm & Spawn Ball\n" +
+                    "[B/Y] Get Bat" ;
 #else
                 authorityText.text = "ADJUST TABLE";
                 authorityText.color = Color.cyan;
                 if (controlsText) controlsText.text =
-                    "[Right Stick X] Rotate Table\n" +
-                    "[Left Stick Y] Adjust Height\n" +
-                    "[A/X] Confirm";
+                    "[Right Stick Y] Adjust Height\n" +
+                    "[Left Stick X] Rotate Table\n" +
+                    "[A/X] Confirm\n" +
+                    "[B/Y] Get Bat" ;
 #endif
                 break;
 
@@ -1670,6 +1679,9 @@ public class PassthroughGameManager : NetworkBehaviour
         // Despawn all existing cubes when AR game starts
         Debug.Log($"{LOG_TAG} StartPassthroughGame: Despawning all cubes before starting AR game");
         DespawnAllCubes();
+
+        // Also do immediate cleanup of anchor children (in case Despawn is delayed)
+        CleanupCubeChildrenFromAnchors();
 
         // Disable anchor placement mode
         if (mainManager != null)
