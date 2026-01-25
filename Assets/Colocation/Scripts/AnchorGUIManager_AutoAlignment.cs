@@ -1304,12 +1304,48 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         foreach (var cube in allCubes)
         {
-            if (cube != null && cube.Object != null && cube.Object.IsValid)
+            if (cube == null) continue;
+
+            // CRITICAL: Unparent from anchor first to prevent anchor from keeping the object alive
+            cube.transform.SetParent(null);
+
+            if (cube.Object != null && cube.Object.IsValid)
             {
-                Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost (cube)] Despawning cube: {cube.Object.Id}");
+                Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost (cube)] Despawning cube via Runner: {cube.Object.Id}");
                 Runner.Despawn(cube.Object);
             }
+            else
+            {
+                // NetworkObject is not valid - destroy GameObject directly
+                Debug.LogWarning($"[AnchorGUIManager DespawnAllCubesOnHost (cube)] Cube has invalid NetworkObject, destroying GameObject directly: {cube.gameObject.name}");
+                Destroy(cube.gameObject);
+            }
         }
+
+        // Also destroy any GameObjects with "Cube" in name that might not have NetworkedCube component
+        var anchors = FindObjectsOfType<OVRSpatialAnchor>();
+        foreach (var anchor in anchors)
+        {
+            if (anchor == null) continue;
+            var childrenToDestroy = new System.Collections.Generic.List<GameObject>();
+            foreach (Transform child in anchor.transform)
+            {
+                string lowerName = child.name.ToLower();
+                if (lowerName.Contains("cube") || lowerName.Contains("networked"))
+                {
+                    // Skip visual markers
+                    if (child.name == "Visual" || child.name.Contains("Marker")) continue;
+                    childrenToDestroy.Add(child.gameObject);
+                }
+            }
+            foreach (var obj in childrenToDestroy)
+            {
+                Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost] Destroying orphaned cube child: {obj.name}");
+                obj.transform.SetParent(null);
+                Destroy(obj);
+            }
+        }
+
         spawnedCube = null;
     }
 
@@ -1318,6 +1354,30 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     {
         Debug.Log("[AnchorGUIManager RPC_RequestDespawnAllCubes (cube)] Host received request to despawn all cubes");
         DespawnAllCubesOnHost();
+    }
+
+    /// <summary>
+    /// Public method to despawn all cubes - can be called by other managers (e.g., PassthroughGameManager)
+    /// Handles both host and client cases properly
+    /// </summary>
+    public void DespawnAllCubes()
+    {
+        Debug.Log("[AnchorGUIManager DespawnAllCubes] Despawning all cubes");
+
+        if (Runner == null || !Runner.IsRunning)
+        {
+            Debug.LogWarning("[AnchorGUIManager DespawnAllCubes] Runner not available");
+            return;
+        }
+
+        if (Object.HasStateAuthority)
+        {
+            DespawnAllCubesOnHost();
+        }
+        else
+        {
+            RPC_RequestDespawnAllCubes();
+        }
     }
 #endif
 
@@ -1730,18 +1790,23 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // DEBUG MODE: Use local anchors without sharing
         if (skipAlignmentForDebug && currentAnchors.Count >= 2)
         {
+            // Sort anchors by UUID for consistent ordering (even in debug mode)
+            SortAnchorsConsistently();
+
             // Perform local alignment as if anchors were shared
             _localizedAnchor = currentAnchors[0];
 
             // Log anchor positions BEFORE alignment
-            Debug.Log($"[Anchor] DEBUG Pre-align Anchor1: {currentAnchors[0].transform.position}");
-            Debug.Log($"[Anchor] DEBUG Pre-align Anchor2: {currentAnchors[1].transform.position}");
+            Debug.Log($"[Anchor] DEBUG Pre-align Anchor1: {currentAnchors[0].transform.position} UUID: {currentAnchors[0].Uuid}");
+            Debug.Log($"[Anchor] DEBUG Pre-align Anchor2: {currentAnchors[1].transform.position} UUID: {currentAnchors[1].Uuid}");
 
             alignmentManager.AlignUserToTwoAnchors(currentAnchors[0], currentAnchors[1]);
 
             // Store anchor positions and mark alignment complete
             FirstAnchorPosition = currentAnchors[0].transform.position;
             SecondAnchorPosition = currentAnchors[1].transform.position;
+            FirstAnchorUuid = currentAnchors[0].Uuid;
+            SecondAnchorUuid = currentAnchors[1].Uuid;
             AlignmentCompletedStatic = true;
 
             // Set state to indicate we're "aligned" for UI purposes

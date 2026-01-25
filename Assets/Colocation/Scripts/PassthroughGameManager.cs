@@ -195,64 +195,47 @@ public class PassthroughGameManager : NetworkBehaviour
 
     /// <summary>
     /// Despawn all NetworkedCube objects when game starts
-    /// Also cleans up any cube GameObjects that are children of anchors
+    /// Delegates to AnchorGUIManager_AutoAlignment which manages cube spawning
     /// </summary>
     private void DespawnAllCubes()
     {
 #if FUSION2
         var allCubes = FindObjectsOfType<NetworkedCube>();
+        Debug.Log($"{LOG_TAG} DespawnAllCubes: Found {allCubes.Length} cubes to despawn");
+
         if (allCubes.Length == 0)
         {
-            // Still check for orphaned cube GameObjects in anchors
-            CleanupCubeChildrenFromAnchors();
+            Debug.Log($"{LOG_TAG} DespawnAllCubes: No cubes to despawn");
             return;
         }
 
-        Debug.Log($"{LOG_TAG} DespawnAllCubes: Destroying {allCubes.Length} cubes");
-
-        if (Runner != null && Runner.IsRunning && Object != null && Object.HasStateAuthority)
+        // Use AnchorGUIManager's despawn method - it manages cube spawning and has proper references
+        if (mainManager != null)
         {
-            // Host: despawn via network, then cleanup GameObjects
-            foreach (var cube in allCubes)
-            {
-                if (cube != null)
-                {
-                    // Unparent first to prevent anchor from keeping the object
-                    cube.transform.SetParent(null);
-
-                    if (cube.Object != null && cube.Object.IsValid)
-                    {
-                        Debug.Log($"{LOG_TAG} DespawnAllCubes: Despawning cube {cube.Object.Id}");
-                        Runner.Despawn(cube.Object);
-                    }
-                    else
-                    {
-                        // Not a valid network object, just destroy
-                        Destroy(cube.gameObject);
-                    }
-                }
-            }
-        }
-        else if (Runner != null && Runner.IsRunning)
-        {
-            // Client: request host to despawn
-            RPC_RequestDespawnCubes();
+            Debug.Log($"{LOG_TAG} DespawnAllCubes: Calling mainManager.DespawnAllCubes()");
+            mainManager.DespawnAllCubes();
         }
         else
         {
-            // Runner not available, destroy locally
-            foreach (var cube in allCubes)
+            Debug.LogWarning($"{LOG_TAG} DespawnAllCubes: mainManager is null, attempting direct despawn");
+
+            // Fallback: try to despawn directly
+            if (Runner != null && Runner.IsRunning && Object != null && Object.HasStateAuthority)
             {
-                if (cube != null)
+                foreach (var cube in allCubes)
                 {
-                    cube.transform.SetParent(null);
-                    Destroy(cube.gameObject);
+                    if (cube != null && cube.Object != null && cube.Object.IsValid)
+                    {
+                        cube.transform.SetParent(null);
+                        Debug.Log($"{LOG_TAG} DespawnAllCubes: Despawning cube {cube.Object.Id}");
+                        Runner.Despawn(cube.Object);
+                    }
                 }
             }
         }
 
-        // Also cleanup any orphaned cube GameObjects in anchors
-        CleanupCubeChildrenFromAnchors();
+        // Start verification coroutine to ensure cubes are actually destroyed
+        StartCoroutine(VerifyAndForceDespawnCubes());
 #else
         // Non-networked: just destroy
         var allCubes = FindObjectsOfType<NetworkedCube>();
@@ -264,38 +247,45 @@ public class PassthroughGameManager : NetworkBehaviour
                 Destroy(cube.gameObject);
             }
         }
-        CleanupCubeChildrenFromAnchors();
 #endif
     }
 
     /// <summary>
-    /// Cleanup any cube GameObjects that are children of anchors (orphaned after despawn)
+    /// Verification coroutine - if any cubes remain after despawn, force destroy them
     /// </summary>
-    private void CleanupCubeChildrenFromAnchors()
+    private IEnumerator VerifyAndForceDespawnCubes()
     {
+        // Wait for network despawn to process
+        yield return new WaitForSeconds(0.5f);
+
+        var remainingCubes = FindObjectsOfType<NetworkedCube>();
+        if (remainingCubes.Length > 0)
+        {
+            Debug.LogWarning($"{LOG_TAG} VerifyAndForceDespawnCubes: {remainingCubes.Length} cubes still exist after despawn! Force destroying...");
+
+            foreach (var cube in remainingCubes)
+            {
+                if (cube != null)
+                {
+                    Debug.Log($"{LOG_TAG} VerifyAndForceDespawnCubes: Force destroying cube: {cube.gameObject.name}");
+                    cube.transform.SetParent(null);
+                    Destroy(cube.gameObject);
+                }
+            }
+        }
+
+        // Also check for any orphaned cube-like objects in anchors
         var anchors = FindObjectsOfType<OVRSpatialAnchor>();
         foreach (var anchor in anchors)
         {
             if (anchor == null) continue;
 
-            // Check all children of the anchor for cube-like objects or any non-visual children
             var childrenToDestroy = new System.Collections.Generic.List<GameObject>();
             foreach (Transform child in anchor.transform)
             {
-                // Skip the visual marker (usually named "Visual" or "AnchorMarker")
                 if (child.name == "Visual" || child.name.Contains("Marker") || child.name.Contains("AnchorCursor"))
-                {
                     continue;
-                }
 
-                // Check if it's a NetworkedCube component
-                if (child.GetComponent<NetworkedCube>() != null)
-                {
-                    childrenToDestroy.Add(child.gameObject);
-                    continue;
-                }
-
-                // Check if name contains cube-related patterns
                 string lowerName = child.name.ToLower();
                 if (lowerName.Contains("cube") || lowerName.Contains("networked"))
                 {
@@ -305,35 +295,15 @@ public class PassthroughGameManager : NetworkBehaviour
 
             foreach (var obj in childrenToDestroy)
             {
-                Debug.Log($"{LOG_TAG} CleanupCubeChildrenFromAnchors: Destroying orphaned object '{obj.name}' from anchor '{anchor.name}'");
-                // Unparent first to ensure it's fully removed
+                Debug.Log($"{LOG_TAG} VerifyAndForceDespawnCubes: Destroying orphaned object: {obj.name}");
                 obj.transform.SetParent(null);
                 Destroy(obj);
             }
         }
 
-        // Also find and destroy any NetworkedCube objects that might not be parented to anchors
-        var allCubeComponents = FindObjectsOfType<NetworkedCube>();
-        foreach (var cube in allCubeComponents)
-        {
-            if (cube != null && cube.gameObject != null)
-            {
-                Debug.Log($"{LOG_TAG} CleanupCubeChildrenFromAnchors: Found stray NetworkedCube '{cube.name}', destroying");
-                cube.transform.SetParent(null);
-                Destroy(cube.gameObject);
-            }
-        }
+        Debug.Log($"{LOG_TAG} VerifyAndForceDespawnCubes: Verification complete");
     }
 
-#if FUSION2
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestDespawnCubes()
-    {
-        Debug.Log($"{LOG_TAG} RPC_RequestDespawnCubes: Host received request to despawn cubes");
-        DespawnAllCubes();
-    }
-#endif
-    
     /// <summary>
     /// Stop the passthrough game and cleanup
     /// </summary>
@@ -1222,7 +1192,9 @@ public class PassthroughGameManager : NetworkBehaviour
         if (cam == null) return;
         
         runtimeMenuPanel = new GameObject("PassthroughGameMenu");
-        runtimeMenuPanel.transform.position = cam.transform.position + cam.transform.forward * 1.5f;
+        Vector3 menuPosition = cam.transform.position + cam.transform.forward * 1.5f;
+        menuPosition.y += 1.0f; // Move GUI higher on Y axis
+        runtimeMenuPanel.transform.position = menuPosition;
         runtimeMenuPanel.transform.rotation = Quaternion.LookRotation(
             runtimeMenuPanel.transform.position - cam.transform.position);
         
@@ -1269,6 +1241,7 @@ public class PassthroughGameManager : NetworkBehaviour
             Vector3 tablePos = midpoint;
             Vector3 dirToTable = (tablePos - cameraPos).normalized;
             Vector3 targetWorldPos = tablePos - dirToTable * 4.0f;
+            targetWorldPos.y += 0.3f; // Move GUI higher on Y axis
             gameUIPanel.transform.localPosition = gameUIPanel.transform.parent.InverseTransformPoint(targetWorldPos);
 
             // Face AWAY from camera (flip 180°) to maximize passthrough visibility
@@ -1676,12 +1649,9 @@ public class PassthroughGameManager : NetworkBehaviour
         isActive = true;
         currentPhase = GamePhase.TableAdjust;
 
-        // Despawn all existing cubes when AR game starts
+        // Despawn all existing cubes when AR game starts (host handles actual despawn)
         Debug.Log($"{LOG_TAG} StartPassthroughGame: Despawning all cubes before starting AR game");
         DespawnAllCubes();
-
-        // Also do immediate cleanup of anchor children (in case Despawn is delayed)
-        CleanupCubeChildrenFromAnchors();
 
         // Disable anchor placement mode
         if (mainManager != null)

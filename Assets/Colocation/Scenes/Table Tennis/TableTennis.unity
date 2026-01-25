@@ -11774,91 +11774,71 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
-    - target: {fileID: 6566480311061659675, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
-        type: 3}
-      propertyPath: instanceId
-      value: 3094cc9a-6fce-40ae-815c-164d625eabf0
-      objectReference: {fileID: 0}
-    - target: {fileID: 6774608818299813392, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
-        type: 3}
-      propertyPath: SortKey
-      value: 3248655422
-      objectReference: {fileID: 0}
-    - target: {fileID: 6774608818299813392, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
-        type: 3}
-      propertyPath: NetworkedBehaviours.Array.size
-      value: 4
-      objectReference: {fileID: 0}
-    - target: {fileID: 7092780974933990305, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 4202299069010672415, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_Name
       value: NetworkedGrabbableBall 1
       objectReference: {fileID: 0}
-    - target: {fileID: 7092780974933990305, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
-        type: 3}
-      propertyPath: m_TagString
-      value: Ball
-      objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalPosition.x
-      value: 0.1799467
+      value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalPosition.y
-      value: -1.7417855
+      value: -3.03
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalPosition.z
-      value: 2.0220485
+      value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalRotation.w
       value: 1
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalRotation.x
       value: -0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalRotation.y
       value: -0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalRotation.z
       value: -0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalEulerAnglesHint.y
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 7192119194554296105, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5193084744622268369, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 8776048776989626248, guid: 6a70f6eba9ecc45b7b35b1800b6e3316,
+    - target: {fileID: 5706161831997906258, guid: e37da184afb8447e19edffce6986bd3b,
         type: 3}
-      propertyPath: instanceId
-      value: f2420b6d-dce2-42b8-a660-ddcc9c8678f9
+      propertyPath: SortKey
+      value: 2793812722
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: 6a70f6eba9ecc45b7b35b1800b6e3316, type: 3}
+  m_SourcePrefab: {fileID: 100100000, guid: e37da184afb8447e19edffce6986bd3b, type: 3}
 --- !u!1 &453101235
 GameObject:
   m_ObjectHideFlags: 0
@@ -27864,32 +27844,19 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   alignmentManager: {fileID: 1453752133}
   autoStartColocation: 0
-  networkedPlayerPrefab:
-    RawGuidValue: 00000000000000000000000000000000
+  statusText: {fileID: 0}
+  anchorMarkerPrefab: {fileID: 0}
+  anchorScale: 1
   autoAlignButton: {fileID: 0}
   spawnCubeButton: {fileID: 0}
   resetButton: {fileID: 0}
   startGameButton: {fileID: 0}
   startPassthroughGameButton: {fileID: 0}
-  buttonPanel: {fileID: 0}
-  instructionPanel: {fileID: 0}
-  instructionText: {fileID: 0}
   tableTennisSceneName: TableTennis
-  sharedConfig: {fileID: 0}
-  tablePrefab: {fileID: 0}
-  racketPrefab: {fileID: 0}
-  ballPrefab:
-    RawGuidValue: 00000000000000000000000000000000
-  tableRotateSpeed: 90
-  tableMoveSpeed: 1
-  tableXRotationOffset: 180
-  tableYRotationOffset: 90
-  defaultTableHeight: 0
-  statusText: {fileID: 0}
+  guiStatusText: {fileID: 0}
   anchorText: {fileID: 0}
   statusIndicator: {fileID: 0}
   networkIndicator: {fileID: 0}
-  anchorScale: 1
   cubePrefab:
     RawGuidValue: 618aebc8ddd1345948eb62e62b4add54
   cubeScale: 0.1
@@ -27899,11 +27866,7 @@ MonoBehaviour:
   anchorNotAlignedColor: {r: 1, g: 0, b: 0, a: 1}
   advertisingColor: {r: 0.5, g: 0, b: 1, a: 1}
   discoveringColor: {r: 1, g: 0.5, b: 0, a: 1}
-  sessionName: MyVRSession
-  autoStartSession: 0
-  autoAlignOnStart: 0
   skipAlignmentForDebug: 0
-  debugTablePosition: {x: 0, y: 0.76, z: 2}
 --- !u!114 &1131986600
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -51797,8 +51760,8 @@ SceneRoots:
   - {fileID: 2052588398}
   - {fileID: 513146814}
   - {fileID: 4252328837833793049}
-  - {fileID: 450879171}
   - {fileID: 473736875}
   - {fileID: 1982172265}
   - {fileID: 1533127587}
   - {fileID: 1317549856}
+  - {fileID: 450879171}

@@ -17,7 +17,7 @@ MonoBehaviour:
   _racketPrefab: {fileID: 8733148417151412701, guid: f49f097561511dd499970e7f53740fdd,
     type: 3}
   _ballPrefab:
-    RawGuidValue: 6a70f6eba9ecc45b7b35b1800b6e3316
+    RawGuidValue: e37da184afb8447e19edffce6986bd3b
   defaultTableHeight: 0.76
   tableRotateSpeed: 90
   tableMoveSpeed: 1

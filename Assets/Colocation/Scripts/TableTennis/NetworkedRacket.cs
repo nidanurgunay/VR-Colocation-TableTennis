@@ -22,6 +22,7 @@ public class NetworkedRacket : NetworkBehaviour
     private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
     private Vector3 racketRotationEuler = new Vector3(-51f, 184f, 81f);
     private float racketScale = 10f;
+    private float lastHitTime = 0f; // Prevent double hits
     
     // Rendering
     private Renderer[] renderers;
@@ -156,5 +157,43 @@ public class NetworkedRacket : NetworkBehaviour
     private void RPC_RequestVisibility(NetworkBool visible)
     {
         IsVisible = visible;
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (!isLocalPlayer) return;
+
+        // Prevent double hits (cooldown)
+        if (Time.time - lastHitTime < 0.3f) return;
+
+        // Check if colliding with ball
+        var ball = collision.gameObject.GetComponent<NetworkedBall>();
+        if (ball != null)
+        {
+            Debug.Log($"[NetworkedRacket] Local player hit ball! Sending RPC...");
+            lastHitTime = Time.time;
+
+            // Calculate hit velocity from racket
+            Vector3 hitVelocity = Vector3.zero;
+            if (GetComponent<Rigidbody>() != null)
+            {
+                hitVelocity = GetComponent<Rigidbody>().velocity * 2.2f; // Use same multiplier as ball
+            }
+            else
+            {
+                // Fallback: use controller velocity
+                hitVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch) * 2.2f;
+                if (hitVelocity.magnitude < 0.5f)
+                {
+                    hitVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch) * 2.2f;
+                }
+            }
+
+            // Ensure minimum upward velocity
+            hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+
+            // Send RPC to ball to apply hit
+            ball.RPC_RequestHit(hitVelocity, collision.contacts[0].point);
+        }
     }
 }

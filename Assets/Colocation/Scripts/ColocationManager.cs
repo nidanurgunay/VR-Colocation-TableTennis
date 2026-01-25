@@ -247,6 +247,9 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
                     SecondAnchorPosition = anchorsToShare[1].transform.position;
                     AlignmentCompletedStatic = true;
 
+                    // CRITICAL: Sort currentAnchors list to match the order we're sharing
+                    SortAnchorsConsistently();
+
                     // Set state to HostAligned after alignment
                     currentState = ColocationState.HostAligned;
 
@@ -677,6 +680,9 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
                 SecondAnchorPosition = anchor2.transform.position;
                 AlignmentCompletedStatic = true;
 
+                // CRITICAL: Reorder currentAnchors list to match host's order
+                SortAnchorsConsistently();
+
                 Debug.Log($"[ColocationManager LoadAndAlignToAnchor (anchor)] CLIENT Stored positions: Anchor1={FirstAnchorPosition}, Anchor2={SecondAnchorPosition}");
                 
                 // Disable rediscovery - we have both anchors
@@ -812,6 +818,67 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
         return null;
     }
     
+    /// <summary>
+    /// Sort currentAnchors list to ensure consistent order across devices.
+    /// Uses the networked UUIDs (FirstAnchorUuidString, SecondAnchorUuidString) to order anchors.
+    /// If UUIDs not available, falls back to sorting by UUID string comparison.
+    /// </summary>
+    protected void SortAnchorsConsistently()
+    {
+        if (currentAnchors == null || currentAnchors.Count < 2)
+        {
+            Debug.Log("[ColocationManager] SortAnchorsConsistently: Not enough anchors to sort");
+            return;
+        }
+
+#if FUSION2
+        string firstUuid = FirstAnchorUuidString.ToString();
+        string secondUuid = SecondAnchorUuidString.ToString();
+
+        if (!string.IsNullOrEmpty(firstUuid) && !string.IsNullOrEmpty(secondUuid))
+        {
+            // Reorder based on networked UUIDs from host
+            var sortedList = new List<OVRSpatialAnchor>();
+            OVRSpatialAnchor anchor1 = null;
+            OVRSpatialAnchor anchor2 = null;
+
+            foreach (var anchor in currentAnchors)
+            {
+                if (anchor == null) continue;
+                string anchorUuid = anchor.Uuid.ToString();
+                if (anchorUuid == firstUuid)
+                    anchor1 = anchor;
+                else if (anchorUuid == secondUuid)
+                    anchor2 = anchor;
+            }
+
+            if (anchor1 != null) sortedList.Add(anchor1);
+            if (anchor2 != null) sortedList.Add(anchor2);
+
+            // Add any remaining anchors that didn't match (shouldn't happen normally)
+            foreach (var anchor in currentAnchors)
+            {
+                if (anchor != null && !sortedList.Contains(anchor))
+                    sortedList.Add(anchor);
+            }
+
+            currentAnchors = sortedList;
+            Debug.Log($"[ColocationManager] SortAnchorsConsistently: Reordered by networked UUIDs. First={firstUuid.Substring(0, 8)}, Second={secondUuid.Substring(0, 8)}");
+            return;
+        }
+#endif
+
+        // Fallback: Sort by UUID string comparison for consistent ordering
+        currentAnchors.Sort((a, b) =>
+        {
+            if (a == null && b == null) return 0;
+            if (a == null) return 1;
+            if (b == null) return -1;
+            return string.Compare(a.Uuid.ToString(), b.Uuid.ToString(), StringComparison.Ordinal);
+        });
+        Debug.Log($"[ColocationManager] SortAnchorsConsistently: Sorted by UUID comparison. First={currentAnchors[0]?.Uuid.ToString().Substring(0, 8)}, Second={currentAnchors[1]?.Uuid.ToString().Substring(0, 8)}");
+    }
+
     /// <summary>
     /// Get the list of all current anchors
     /// </summary>

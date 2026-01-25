@@ -448,10 +448,8 @@ public class NetworkedBall : NetworkBehaviour
         }
 
         // Proximity-based racket hit detection (as fallback for collision issues)
-        if (Object.HasStateAuthority)
-        {
-            CheckProximityRacketHit();
-        }
+        // Runs on both host and client - client sends RPC to host
+        CheckProximityRacketHit();
 
         // Note: Client interpolation is handled in Render() for smoother updates
     }
@@ -888,6 +886,7 @@ public class NetworkedBall : NetworkBehaviour
 
     /// <summary>
     /// Proximity-based racket hit detection (fallback for collision issues with kinematic rigidbodies)
+    /// Works on both host and client - client sends RPC to host
     /// </summary>
     private void CheckProximityRacketHit()
     {
@@ -937,7 +936,7 @@ public class NetworkedBall : NetworkBehaviour
                 // Check if racket is moving fast enough
                 if (racketVelocity.magnitude > minRacketSpeed)
                 {
-                    Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, RacketVel: {racketVelocity.magnitude:F2}");
+                    Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, RacketVel: {racketVelocity.magnitude:F2}, IsHost: {Object.HasStateAuthority}");
 
                     // Calculate hit velocity
                     Vector3 racketToBall = (transform.position - racket.transform.position).normalized;
@@ -953,7 +952,17 @@ public class NetworkedBall : NetworkBehaviour
                         hitVelocity.y += 1f;
                     }
 
-                    OnRacketHit(hitVelocity, transform.position, 0);
+                    if (Object.HasStateAuthority)
+                    {
+                        // Host processes hit directly
+                        OnRacketHit(hitVelocity, transform.position, 0);
+                    }
+                    else
+                    {
+                        // Client sends RPC to host
+                        Debug.Log($"[NetworkedBall] CLIENT proximity hit - sending RPC. Velocity: {hitVelocity}");
+                        RPC_RequestHit(hitVelocity, transform.position);
+                    }
                     return;
                 }
             }
@@ -1097,6 +1106,13 @@ public class NetworkedBall : NetworkBehaviour
         Serve(serverPlayerNumber);
     }
 
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_RequestHit(Vector3 hitVelocity, Vector3 hitPoint)
+    {
+        Debug.Log($"[NetworkedBall] Received hit RPC from client. Velocity: {hitVelocity}, Point: {hitPoint}");
+        OnRacketHit(hitVelocity, hitPoint);
+    }
+
     private void Serve(int serverPlayerNumber)
     {
         currentServerSide = serverPlayerNumber;
@@ -1130,32 +1146,32 @@ public class NetworkedBall : NetworkBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (!Object.HasStateAuthority) return;
-
-        // Check for racket hit
+        // Check for racket hit BEFORE authority guard - clients need to detect this too
         if (collision.gameObject.CompareTag("Racket") ||
             collision.gameObject.layer == LayerMask.NameToLayer("Racket"))
         {
-            Rigidbody racketRb = collision.gameObject.GetComponent<Rigidbody>();
-            Vector3 hitVelocity;
-
-            if (racketRb != null)
-            {
-                // Use racket velocity for more responsive hits (increased from 1.5x to 2.2x)
-                hitVelocity = racketRb.velocity * racketHitMultiplier;
-            }
-            else
-            {
-                // Fallback to relative velocity (increased from 0.8x to 1.2x)
-                hitVelocity = collision.relativeVelocity * fallbackHitMultiplier;
-            }
+            Vector3 hitVelocity = CalculateRacketHitVelocity(collision.gameObject, collision.relativeVelocity);
+            Vector3 hitPoint = collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position;
 
             // Ensure minimum upward velocity for playability
             hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
 
-            OnRacketHit(hitVelocity, collision.contacts[0].point);
+            if (Object.HasStateAuthority)
+            {
+                // Host processes hit directly
+                OnRacketHit(hitVelocity, hitPoint);
+            }
+            else
+            {
+                // Client sends RPC to host
+                Debug.Log($"[NetworkedBall] CLIENT detected racket collision - sending RPC. Velocity: {hitVelocity}");
+                RPC_RequestHit(hitVelocity, hitPoint);
+            }
             return;
         }
+
+        // Remaining collision handling only on host
+        if (!Object.HasStateAuthority) return;
 
         // Check for table collision (bounce)
         if (collision.gameObject.CompareTag("Table") ||
@@ -1184,6 +1200,37 @@ public class NetworkedBall : NetworkBehaviour
             Debug.Log($"[NetworkedBall] Ball hit ground - Respawn needed");
             OnGroundHit();
         }
+    }
+
+    /// <summary>
+    /// Calculate hit velocity from racket collision
+    /// </summary>
+    private Vector3 CalculateRacketHitVelocity(GameObject racket, Vector3 relativeVelocity)
+    {
+        Vector3 hitVelocity;
+        Rigidbody racketRb = racket.GetComponent<Rigidbody>();
+
+        if (racketRb != null)
+        {
+            // Use racket velocity for more responsive hits
+            hitVelocity = racketRb.velocity * racketHitMultiplier;
+        }
+        else
+        {
+            // Try ControllerRacket for velocity
+            var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
+            if (controllerRacket != null)
+            {
+                hitVelocity = controllerRacket.GetRacketVelocity(racket) * racketHitMultiplier;
+            }
+            else
+            {
+                // Fallback to relative velocity
+                hitVelocity = relativeVelocity * fallbackHitMultiplier;
+            }
+        }
+
+        return hitVelocity;
     }
 
     /// <summary>
@@ -1264,6 +1311,30 @@ public class NetworkedBall : NetworkBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
+        // Check for racket hit BEFORE authority guard - clients need to detect this too
+        if (other.CompareTag("Racket"))
+        {
+            Vector3 hitVelocity = CalculateRacketHitVelocity(other.gameObject, Vector3.zero);
+            Vector3 hitPoint = other.ClosestPoint(transform.position);
+
+            // Ensure minimum upward velocity for playability
+            hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+
+            if (Object.HasStateAuthority)
+            {
+                // Host processes hit directly
+                OnRacketHit(hitVelocity, hitPoint);
+            }
+            else
+            {
+                // Client sends RPC to host
+                Debug.Log($"[NetworkedBall] CLIENT detected racket trigger - sending RPC. Velocity: {hitVelocity}");
+                RPC_RequestHit(hitVelocity, hitPoint);
+            }
+            return;
+        }
+
+        // Remaining trigger handling only on host
         if (!Object.HasStateAuthority) return;
 
         // Check for GROUND trigger (floor collider for ball out of play)
@@ -1272,19 +1343,6 @@ public class NetworkedBall : NetworkBehaviour
             Debug.Log($"[NetworkedBall] Ball hit floor trigger! Triggering ground hit reset.");
             OnGroundHit();
             return;
-        }
-
-        // Check for racket hit
-        if (other.CompareTag("Racket"))
-        {
-            Rigidbody racketRb = other.GetComponent<Rigidbody>();
-            if (racketRb != null)
-            {
-                // Use same multiplier as OnCollisionEnter for consistency
-                Vector3 hitVelocity = racketRb.velocity * racketHitMultiplier;
-                hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
-                OnRacketHit(hitVelocity, other.ClosestPoint(transform.position));
-            }
         }
     }
 
