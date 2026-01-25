@@ -45,6 +45,11 @@ public class NetworkedBall : NetworkBehaviour
     [Networked] public int ScorePlayer1 { get; set; }
     [Networked] public int ScorePlayer2 { get; set; }
 
+    // Direct world position sync for simpler alignment
+    [Networked] private Vector3 SyncedWorldPosition { get; set; }
+    [Networked] private Quaternion SyncedWorldRotation { get; set; }
+    [Networked] private Vector3 SyncedVelocity { get; set; }
+
     // Legacy - kept for compatibility but unused
     [Networked] private Vector3 AnchorRelativePosition { get; set; }
     [Networked] private Vector3 AnchorRelativeVelocity { get; set; }
@@ -110,6 +115,10 @@ public class NetworkedBall : NetworkBehaviour
                 CurrentAuthority = 1;
                 Debug.Log("[NetworkedBall] First serve - Player 1 gets initial authority");
             }
+            // Initialize synced world position
+            SyncedWorldPosition = transform.position;
+            SyncedWorldRotation = transform.rotation;
+            SyncedVelocity = Vector3.zero;
             StartCoroutine(TryFindAnchorAndInitialize());
         }
         else
@@ -336,11 +345,8 @@ public class NetworkedBall : NetworkBehaviour
             }
             else
             {
-                // Client: Initial position update
-                Debug.Log($"[NetworkedBall][INIT] Client: TableRelativePosition={TableRelativePosition}");
-                Debug.Log($"[NetworkedBall][INIT] Client: Table at {tableTransform.position}, rot={tableTransform.rotation.eulerAngles}");
-                UpdateLocalPositionFromNetwork();
-                Debug.Log($"[NetworkedBall][INIT] Client: Ball world position after update: {transform.position}");
+                // Client: Wait for initial sync
+                StartCoroutine(ClientSyncRoutine());
             }
         }
         else
@@ -362,6 +368,33 @@ public class NetworkedBall : NetworkBehaviour
                 tableTransform = new GameObject("FallbackTable_Origin").transform;
             }
             isInitialized = true;
+        }
+    }
+
+    private IEnumerator ClientSyncRoutine()
+    {
+        Debug.Log("[NetworkedBall] CLIENT waiting for sync...");
+
+        int attempts = 0;
+        while (SyncedWorldPosition == Vector3.zero && attempts < 50)
+        {
+            attempts++;
+            yield return new WaitForSeconds(0.1f);
+        }
+
+        if (SyncedWorldPosition != Vector3.zero)
+        {
+            transform.position = SyncedWorldPosition;
+            transform.rotation = SyncedWorldRotation;
+            targetPosition = transform.position;
+            previousPosition = transform.position;
+            isInitialized = true;
+
+            Debug.Log($"[NetworkedBall] CLIENT synced to {transform.position}");
+        }
+        else
+        {
+            Debug.LogError("[NetworkedBall] CLIENT sync failed!");
         }
     }
 
@@ -513,6 +546,9 @@ public class NetworkedBall : NetworkBehaviour
             {
                 TableRelativePosition = tableTransform.InverseTransformPoint(newPos);
             }
+            // Sync world position directly
+            SyncedWorldPosition = newPos;
+            SyncedVelocity = Vector3.zero;
         }
     }
 
@@ -610,7 +646,12 @@ public class NetworkedBall : NetworkBehaviour
         if (Time.time - lastSyncTime < 1f / syncRate) return;
         lastSyncTime = Time.time;
 
-        // Use table as reference frame - table is aligned to same world position on both devices
+        // Sync world position directly for simpler alignment
+        SyncedWorldPosition = transform.position;
+        SyncedWorldRotation = transform.rotation;
+        SyncedVelocity = rb != null ? rb.velocity : Vector3.zero;
+
+        // Also maintain table-relative for backwards compatibility during positioning
         if (tableTransform != null)
         {
             Vector3 oldRelPos = TableRelativePosition;
@@ -627,14 +668,9 @@ public class NetworkedBall : NetworkBehaviour
 
     private void UpdateLocalPositionFromNetwork()
     {
-        if (tableTransform == null)
-        {
-            Debug.LogWarning("[NetworkedBall] Client: tableTransform is null, cannot update position");
-            return;
-        }
-
+        // Use direct world position sync for simpler alignment
         previousPosition = targetPosition;
-        Vector3 newTargetPosition = tableTransform.TransformPoint(TableRelativePosition);
+        Vector3 newTargetPosition = SyncedWorldPosition;
 
         // Only update if position changed significantly (avoid jitter)
         if (Vector3.Distance(newTargetPosition, targetPosition) > 0.001f)
@@ -643,7 +679,7 @@ public class NetworkedBall : NetworkBehaviour
             interpolationTime = 0f;
 
             // Debug log when position changes
-            Debug.Log($"[NetworkedBall][CLIENT] Position updated: TableRelPos={TableRelativePosition}, WorldPos={targetPosition}, Table at pos={tableTransform.position} rot={tableTransform.rotation.eulerAngles}");
+            Debug.Log($"[NetworkedBall][CLIENT] Position updated: WorldPos={targetPosition}, Table at pos={tableTransform?.position ?? Vector3.zero} rot={tableTransform?.rotation.eulerAngles ?? Vector3.zero}");
         }
 
         // Actually move the ball to the target position
@@ -652,8 +688,6 @@ public class NetworkedBall : NetworkBehaviour
 
     private void InterpolatePosition()
     {
-        if (tableTransform == null) return;
-
         interpolationTime += Time.deltaTime * syncRate;
 
         if (interpolationTime <= 1f)
@@ -662,8 +696,8 @@ public class NetworkedBall : NetworkBehaviour
         }
         else
         {
-            Vector3 worldVelocity = tableTransform.TransformDirection(TableRelativeVelocity);
-            transform.position = targetPosition + worldVelocity * (interpolationTime - 1f) / syncRate;
+            // Predict based on velocity
+            transform.position = targetPosition + SyncedVelocity * (interpolationTime - 1f) / syncRate;
         }
     }
 
@@ -671,9 +705,12 @@ public class NetworkedBall : NetworkBehaviour
     {
         if (!Object.HasStateAuthority && isInitialized)
         {
-            // Client always follows the networked position
-            // During positioning mode, the host updates TableRelativePosition as they move the ball
-            UpdateLocalPositionFromNetwork();
+            // During positioning mode, use table-relative sync (handled in FixedUpdateNetwork)
+            // During gameplay, use direct world position sync for better alignment
+            if (!IsInPositioningMode)
+            {
+                UpdateLocalPositionFromNetwork();
+            }
         }
     }
 
@@ -807,7 +844,10 @@ public class NetworkedBall : NetworkBehaviour
         {
             TableRelativePosition = tableTransform.InverseTransformPoint(worldServePos);
         }
-        TableRelativeVelocity = Vector3.zero;
+        // Sync world position directly
+        SyncedWorldPosition = worldServePos;
+        SyncedWorldRotation = transform.rotation;
+        SyncedVelocity = Vector3.zero;
 
         Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber} (Authority: {CurrentAuthority}): {worldServePos} - IN POSITIONING MODE");
     }
@@ -1064,19 +1104,13 @@ public class NetworkedBall : NetworkBehaviour
             TableRelativePosition = tableTransform.InverseTransformPoint(worldPosition);
             Debug.Log($"[NetworkedBall] SetSpawnPosition: Set TableRelativePosition to {TableRelativePosition} (table at {tableTransform.position})");
         }
-        else
-        {
-            Debug.LogWarning($"[NetworkedBall] SetSpawnPosition: Table not found yet - TableRelativePosition will be set during async init");
-        }
+        // Sync world position directly
+        SyncedWorldPosition = worldPosition;
+        SyncedWorldRotation = transform.rotation;
+        SyncedVelocity = Vector3.zero;
+        Debug.Log($"[NetworkedBall] SetSpawnPosition: Set SyncedWorldPosition to {SyncedWorldPosition}");
 
-        // NOW start the initialization coroutine (only on host) - position is locked in
-        if (Object != null && Object.HasStateAuthority && !isInitialized)
-        {
-            Debug.Log($"[NetworkedBall] SetSpawnPosition: Starting initialization coroutine NOW that position is set");
-            StartCoroutine(TryFindAnchorAndInitialize());
-        }
-
-        Debug.Log($"[NetworkedBall] SetSpawnPosition complete: transform.position={transform.position}, TableRelativePosition={TableRelativePosition}");
+        Debug.Log($"[NetworkedBall] SetSpawnPosition complete: transform.position={transform.position}, TableRelativePosition={TableRelativePosition}, SyncedWorldPosition={SyncedWorldPosition}");
     }
     /// <summary>
     /// Request a serve (can be called by any player)
