@@ -173,27 +173,58 @@ public class NetworkedRacket : NetworkBehaviour
             Debug.Log($"[NetworkedRacket] Local player hit ball! Sending RPC...");
             lastHitTime = Time.time;
 
-            // Calculate hit velocity from racket
-            Vector3 hitVelocity = Vector3.zero;
-            if (GetComponent<Rigidbody>() != null)
-            {
-                hitVelocity = GetComponent<Rigidbody>().velocity * 2.2f; // Use same multiplier as ball
-            }
-            else
-            {
-                // Fallback: use controller velocity
-                hitVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch) * 2.2f;
-                if (hitVelocity.magnitude < 0.5f)
-                {
-                    hitVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch) * 2.2f;
-                }
-            }
+            // Calculate hit velocity in WORLD SPACE
+            Vector3 worldVelocity = GetWorldSpaceVelocity();
 
-            // Ensure minimum upward velocity
-            hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+            // Use racket face normal (world space)
+            Vector3 hitNormal = transform.up;
+            float swingSpeed = worldVelocity.magnitude;
+            Vector3 swingDir = swingSpeed > 0.1f ? worldVelocity.normalized : hitNormal;
+
+            // Blend swing direction with racket normal
+            Vector3 hitDir = swingSpeed > 0.5f
+                ? (swingDir * 0.8f + hitNormal * 0.2f).normalized
+                : hitNormal;
+
+            float hitSpeed = Mathf.Clamp(swingSpeed * 1.5f, 2f, 8f);
+            Vector3 hitVelocity = hitDir * hitSpeed;
+
+            // Ensure upward arc (world Y)
+            if (hitVelocity.y < 0.5f)
+            {
+                hitVelocity.y = 0.5f + swingSpeed * 0.2f;
+            }
 
             // Send RPC to ball to apply hit
             ball.RPC_RequestHit(hitVelocity, collision.contacts[0].point);
         }
+    }
+
+    /// <summary>
+    /// Get racket velocity in world space for accurate cross-device physics.
+    /// </summary>
+    private Vector3 GetWorldSpaceVelocity()
+    {
+        // Rigidbody velocity is already world space
+        var rb = GetComponent<Rigidbody>();
+        if (rb != null && rb.velocity.magnitude > 0.1f)
+        {
+            return rb.velocity;
+        }
+
+        // Convert local controller velocity to world space
+        Vector3 localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+        if (localVelocity.magnitude < 0.3f)
+        {
+            localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+        }
+
+        Transform cameraRig = Camera.main?.transform.parent;
+        if (cameraRig != null)
+        {
+            return cameraRig.TransformDirection(localVelocity);
+        }
+
+        return localVelocity;
     }
 }

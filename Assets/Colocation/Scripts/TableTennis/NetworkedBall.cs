@@ -4,7 +4,8 @@ using System.Collections;
 
 /// <summary>
 /// Networked ping pong ball for colocation table tennis.
-/// Host has physics authority, syncs anchor-relative position to clients.
+/// Host has physics authority, syncs world position directly to clients.
+/// Relies on colocation alignment to ensure world coordinates match on both devices.
 /// </summary>
 public class NetworkedBall : NetworkBehaviour
 {
@@ -36,27 +37,18 @@ public class NetworkedBall : NetworkBehaviour
     [SerializeField] private float positionMoveSpeed = 1.5f; // Speed of thumbstick movement
     [SerializeField] private float positionHeightSpeed = 0.8f; // Speed of vertical movement
 
-    // Networked state - table relative (table is aligned to same world position on both devices)
-    [Networked] private Vector3 TableRelativePosition { get; set; }
-    [Networked] private Vector3 TableRelativeVelocity { get; set; }
+    // Networked state - direct world position sync (relies on colocation alignment)
+    [Networked] private Vector3 SyncedWorldPosition { get; set; }
+    [Networked] private Quaternion SyncedWorldRotation { get; set; }
+    [Networked] private Vector3 SyncedVelocity { get; set; }
     [Networked] private NetworkBool IsInPlay { get; set; }
     [Networked] private NetworkBool IsInPositioningMode { get; set; } // Ball can be moved with thumbsticks
     [Networked] public int CurrentAuthority { get; set; } // 1 or 2 - which player has ball authority (service)
     [Networked] public int ScorePlayer1 { get; set; }
     [Networked] public int ScorePlayer2 { get; set; }
 
-    // Direct world position sync for simpler alignment
-    [Networked] private Vector3 SyncedWorldPosition { get; set; }
-    [Networked] private Quaternion SyncedWorldRotation { get; set; }
-    [Networked] private Vector3 SyncedVelocity { get; set; }
-
-    // Legacy - kept for compatibility but unused
-    [Networked] private Vector3 AnchorRelativePosition { get; set; }
-    [Networked] private Vector3 AnchorRelativeVelocity { get; set; }
-
     // Local state
-    private Transform tableTransform; // Use table as reference frame - it's aligned on both devices
-    private Transform sharedAnchor; // Kept for fallback
+    private Transform tableTransform; // Used for serve positioning and side detection
     private Rigidbody rb;
     private float lastSyncTime;
     private float lastHitTime;
@@ -66,11 +58,8 @@ public class NetworkedBall : NetworkBehaviour
     private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
     private bool localPositioningMode = true; // Local flag for positioning
     private bool ballAdjustModeActive = false; // Toggle with A button to enable ball movement
-    private Vector3 initialTablePosition; // Track initial table position for debugging
-    private Quaternion initialTableRotation;
     private GameObject floorPlane; // Floor collider for detecting ball out of play
     private float lastResetTime = 0f; // Cooldown to prevent reset loops
-    private bool isSpawnPositionSet = false;
 
     // For interpolation on clients
     private Vector3 targetPosition;
@@ -295,10 +284,9 @@ public class NetworkedBall : NetworkBehaviour
 
         int attempts = 0;
 
-        // First, try to find the table - this is our main reference frame
+        // Find the table - used for serve positioning and side detection
         while (tableTransform == null && attempts < 50)
         {
-            // Try various table naming conventions including pingpong_table (with underscore)
             var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
                         ?? GameObject.Find("pingpong_table") ?? GameObject.Find("pingpong")
                         ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis")
@@ -306,23 +294,7 @@ public class NetworkedBall : NetworkBehaviour
             if (table != null)
             {
                 tableTransform = table.transform;
-                Debug.Log($"[NetworkedBall][FIND] Found table: {table.name} at position {tableTransform.position}, rotation={tableTransform.rotation.eulerAngles}, parent={tableTransform.parent?.name ?? "none"}");
-            }
-
-            // Also try to find anchor as fallback
-            if (sharedAnchor == null)
-            {
-                var anchors = FindObjectsOfType<OVRSpatialAnchor>();
-                foreach (var anchor in anchors)
-                {
-                    if (anchor.gameObject.name.Contains("Shared") ||
-                        anchor.gameObject.name.Contains("Anchor"))
-                    {
-                        sharedAnchor = anchor.transform;
-                        Debug.Log($"[NetworkedBall] Found anchor: {anchor.gameObject.name} at position {anchor.transform.position}");
-                        break;
-                    }
-                }
+                Debug.Log($"[NetworkedBall][FIND] Found table: {table.name} at position {tableTransform.position}");
             }
 
             attempts++;
@@ -332,9 +304,7 @@ public class NetworkedBall : NetworkBehaviour
         if (tableTransform != null)
         {
             isInitialized = true;
-            initialTablePosition = tableTransform.position;
-            initialTableRotation = tableTransform.rotation;
-            Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}, rotation={tableTransform.rotation.eulerAngles}");
+            Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}");
 
             // Find game manager
             gameManager = FindObjectOfType<TableTennisGameManager>();
@@ -400,22 +370,22 @@ public class NetworkedBall : NetworkBehaviour
 
     public override void FixedUpdateNetwork()
     {
-        if (!isInitialized || tableTransform == null) return;
+        if (!isInitialized) return;
 
-        // SANITY CHECK: If ball is more than 5m from table, something is wrong - reset immediately
         if (Object.HasStateAuthority)
         {
-            float distFromTable = Vector3.Distance(transform.position, tableTransform.position);
-            if (distFromTable > 5f)
+            // SANITY CHECK: If ball is more than 5m from table, something is wrong - reset immediately
+            if (tableTransform != null)
             {
-                Debug.LogWarning($"[NetworkedBall] SANITY CHECK FAILED! Ball is {distFromTable:F1}m from table. Resetting!");
-                ResetToServePosition();
-                return;
+                float distFromTable = Vector3.Distance(transform.position, tableTransform.position);
+                if (distFromTable > 5f)
+                {
+                    Debug.LogWarning($"[NetworkedBall] SANITY CHECK FAILED! Ball is {distFromTable:F1}m from table. Resetting!");
+                    ResetToServePosition();
+                    return;
+                }
             }
-        }
 
-        if (Object.HasStateAuthority)
-        {
             // Skip physics simulation if in positioning mode
             if (!IsInPositioningMode && !localPositioningMode)
             {
@@ -424,19 +394,6 @@ public class NetworkedBall : NetworkBehaviour
             }
             // Always sync position to network (including during positioning)
             SyncToNetwork();
-        }
-        else
-        {
-            // CLIENT: Force immediate position sync during positioning mode for smooth updates
-            if (IsInPositioningMode && tableTransform != null)
-            {
-                Vector3 targetPosition = tableTransform.TransformPoint(TableRelativePosition);
-                transform.position = targetPosition; // Force immediate sync
-                if (rb != null)
-                {
-                    rb.position = targetPosition; // Also update rigidbody position
-                }
-            }
         }
     }
 
@@ -541,11 +498,6 @@ public class NetworkedBall : NetworkBehaviour
 
             transform.position = newPos;
 
-            // Update table-relative position for sync
-            if (tableTransform != null)
-            {
-                TableRelativePosition = tableTransform.InverseTransformPoint(newPos);
-            }
             // Sync world position directly
             SyncedWorldPosition = newPos;
             SyncedVelocity = Vector3.zero;
@@ -620,11 +572,10 @@ public class NetworkedBall : NetworkBehaviour
         localVelocity.y -= gravity * Runner.DeltaTime;
         rb.velocity = localVelocity;
 
-        // Simple table bounce - use tableTransform not sharedAnchor (which may be null)
-        Transform refTransform = tableTransform ?? sharedAnchor;
-        if (refTransform != null && transform.position.y <= tableHeight + 0.02f && localVelocity.y < 0)
+        // Simple table bounce
+        if (tableTransform != null && transform.position.y <= tableHeight + 0.02f && localVelocity.y < 0)
         {
-            Vector3 relPos = refTransform.InverseTransformPoint(transform.position);
+            Vector3 relPos = tableTransform.InverseTransformPoint(transform.position);
             // Standard table tennis table: 1.525m x 2.74m (half = 0.76m x 1.37m)
             if (Mathf.Abs(relPos.x) < 0.76f && Mathf.Abs(relPos.z) < 1.37f)
             {
@@ -646,29 +597,15 @@ public class NetworkedBall : NetworkBehaviour
         if (Time.time - lastSyncTime < 1f / syncRate) return;
         lastSyncTime = Time.time;
 
-        // Sync world position directly for simpler alignment
+        // Sync world position directly - relies on colocation alignment
         SyncedWorldPosition = transform.position;
         SyncedWorldRotation = transform.rotation;
         SyncedVelocity = rb != null ? rb.velocity : Vector3.zero;
-
-        // Also maintain table-relative for backwards compatibility during positioning
-        if (tableTransform != null)
-        {
-            Vector3 oldRelPos = TableRelativePosition;
-            TableRelativePosition = tableTransform.InverseTransformPoint(transform.position);
-            TableRelativeVelocity = tableTransform.InverseTransformDirection(rb.velocity);
-
-            // Log when position changes significantly (every sync)
-            if (Vector3.Distance(oldRelPos, TableRelativePosition) > 0.01f)
-            {
-                Debug.Log($"[NetworkedBall][HOST] SyncToNetwork: WorldPos={transform.position}, TablePos={tableTransform.position}, TableRelPos={TableRelativePosition}");
-            }
-        }
     }
 
     private void UpdateLocalPositionFromNetwork()
     {
-        // Use direct world position sync for simpler alignment
+        // Use direct world position sync
         previousPosition = targetPosition;
         Vector3 newTargetPosition = SyncedWorldPosition;
 
@@ -677,12 +614,9 @@ public class NetworkedBall : NetworkBehaviour
         {
             targetPosition = newTargetPosition;
             interpolationTime = 0f;
-
-            // Debug log when position changes
-            Debug.Log($"[NetworkedBall][CLIENT] Position updated: WorldPos={targetPosition}, Table at pos={tableTransform?.position ?? Vector3.zero} rot={tableTransform?.rotation.eulerAngles ?? Vector3.zero}");
         }
 
-        // Actually move the ball to the target position
+        // Move the ball to the target position
         transform.position = targetPosition;
     }
 
@@ -705,12 +639,8 @@ public class NetworkedBall : NetworkBehaviour
     {
         if (!Object.HasStateAuthority && isInitialized)
         {
-            // During positioning mode, use table-relative sync (handled in FixedUpdateNetwork)
-            // During gameplay, use direct world position sync for better alignment
-            if (!IsInPositioningMode)
-            {
-                UpdateLocalPositionFromNetwork();
-            }
+            // Always use direct world position sync
+            UpdateLocalPositionFromNetwork();
         }
     }
 
@@ -782,51 +712,19 @@ public class NetworkedBall : NetworkBehaviour
             serverPlayerNumber = CurrentAuthority;
         }
 
-        // Find table if not assigned
+        // Spawn ball between the two anchors, 0.5m up
+        Vector3 worldServePos = GetSpawnPositionBetweenAnchors();
+
+        Debug.Log($"[NetworkedBall] ResetToServePosition: worldServePos={worldServePos} (between anchors)");
+
+        // Find table for side detection (still needed for game logic)
         if (tableObject == null)
         {
             FindTableObject();
         }
-
-        // Also ensure tableTransform is set (for network sync)
         if (tableTransform == null && tableObject != null)
         {
             tableTransform = tableObject;
-        }
-
-        Vector3 worldServePos;
-        Transform refTransform = tableObject ?? tableTransform;
-
-        if (refTransform != null)
-        {
-            // IMPORTANT: Don't use TransformPoint for Y because table may be rotated 180° on X axis!
-            // Instead, calculate XZ position using table's forward/right, and add Y directly in world space
-
-            // Get horizontal offset (Z axis relative to table facing)
-            float zOffset = serverPlayerNumber == 1 ? -serveDistanceFromCenter : serveDistanceFromCenter;
-
-            // Calculate world XZ using only the table's forward direction (projected to horizontal)
-            Vector3 tableForward = refTransform.forward;
-            tableForward.y = 0;
-            tableForward.Normalize();
-
-            // Ball position = table center + offset along table's forward direction
-            Vector3 horizontalOffset = tableForward * zOffset;
-
-            // World position = table's XZ + horizontal offset + WORLD Y height (not local!)
-            worldServePos = new Vector3(
-                refTransform.position.x + horizontalOffset.x,
-                refTransform.position.y + tableHeight + serveHeight, // Use WORLD Y, not local!
-                refTransform.position.z + horizontalOffset.z
-            );
-
-            Debug.Log($"[NetworkedBall] ResetToServePosition: tablePos={refTransform.position}, worldServePos={worldServePos}, zOffset={zOffset}");
-        }
-        else
-        {
-            // Last resort fallback - 1.2m high at origin
-            worldServePos = new Vector3(0, 1.2f, serverPlayerNumber == 1 ? -1f : 1f);
-            Debug.LogWarning($"[NetworkedBall] ResetToServePosition NO TABLE FOUND - using fallback position {worldServePos}");
         }
 
         transform.position = worldServePos;
@@ -839,62 +737,75 @@ public class NetworkedBall : NetworkBehaviour
 
         lastHitTime = Time.time;
 
-        // Update table-relative position for sync
-        if (tableTransform != null)
-        {
-            TableRelativePosition = tableTransform.InverseTransformPoint(worldServePos);
-        }
         // Sync world position directly
         SyncedWorldPosition = worldServePos;
         SyncedWorldRotation = transform.rotation;
         SyncedVelocity = Vector3.zero;
 
-        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber} (Authority: {CurrentAuthority}): {worldServePos} - IN POSITIONING MODE");
+        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos}");
     }
 
     /// <summary>
     /// Called to refresh the table reference after alignment changes.
-    /// Useful for clients when the table position changes due to re-alignment.
     /// </summary>
     public void RefreshTableReference()
     {
-        // Re-find the table
         var table = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
                     ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
         if (table != null)
         {
-            Transform oldTable = tableTransform;
             tableTransform = table.transform;
-
-            bool positionChanged = oldTable == null || Vector3.Distance(oldTable.position, tableTransform.position) > 0.01f;
-            bool rotationChanged = oldTable == null || Quaternion.Angle(oldTable.rotation, tableTransform.rotation) > 1f;
-
-            Debug.Log($"[NetworkedBall][REFRESH] Table reference refreshed: {table.name} at pos={tableTransform.position}, rot={tableTransform.rotation.eulerAngles}");
-            if (positionChanged || rotationChanged)
-            {
-                Debug.Log($"[NetworkedBall][REFRESH] Table MOVED! Position changed: {positionChanged}, Rotation changed: {rotationChanged}");
-
-                // Immediately update ball position based on new table transform
-                if (!Object.HasStateAuthority)
-                {
-                    Vector3 newWorldPos = tableTransform.TransformPoint(TableRelativePosition);
-                    transform.position = newWorldPos;
-                    targetPosition = newWorldPos;
-                    previousPosition = newWorldPos;
-                    Debug.Log($"[NetworkedBall][REFRESH] Client ball position updated to {newWorldPos}");
-                }
-            }
-
-            // Track initial if not set
-            if (initialTablePosition == Vector3.zero)
-            {
-                initialTablePosition = tableTransform.position;
-                initialTableRotation = tableTransform.rotation;
-            }
+            Debug.Log($"[NetworkedBall] Table reference refreshed: {table.name} at {tableTransform.position}");
         }
         else
         {
-            Debug.LogWarning("[NetworkedBall][REFRESH] Could not find table to refresh reference");
+            Debug.LogWarning("[NetworkedBall] Could not find table to refresh reference");
+        }
+    }
+
+    /// <summary>
+    /// Calculate spawn position as the midpoint between the two anchors, 0.5m above.
+    /// Uses world coordinates since both devices have aligned world space through colocation.
+    /// </summary>
+    private Vector3 GetSpawnPositionBetweenAnchors()
+    {
+        Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
+        Vector3 secondAnchor = AnchorGUIManager_AutoAlignment.SecondAnchorPosition;
+
+        // Check if we have valid anchor positions
+        if (firstAnchor.sqrMagnitude > 0.01f && secondAnchor.sqrMagnitude > 0.01f)
+        {
+            // Calculate midpoint between anchors
+            Vector3 midpoint = (firstAnchor + secondAnchor) / 2f;
+            // Set Y to 0.5m above the midpoint's Y (or use fixed 0.5m if anchors are at floor level)
+            midpoint.y = Mathf.Max(firstAnchor.y, secondAnchor.y) + 0.5f;
+
+            Debug.Log($"[NetworkedBall] Spawn between anchors: first={firstAnchor}, second={secondAnchor}, midpoint={midpoint}");
+            return midpoint;
+        }
+        else if (firstAnchor.sqrMagnitude > 0.01f)
+        {
+            // Only first anchor available
+            Vector3 pos = firstAnchor;
+            pos.y += 0.5f;
+            Debug.Log($"[NetworkedBall] Spawn at first anchor + 0.5m: {pos}");
+            return pos;
+        }
+        else
+        {
+            // Fallback: use camera position
+            Camera cam = Camera.main;
+            if (cam != null)
+            {
+                Vector3 pos = cam.transform.position + cam.transform.forward * 0.5f;
+                pos.y = cam.transform.position.y; // Same height as camera
+                Debug.Log($"[NetworkedBall] Spawn at camera fallback: {pos}");
+                return pos;
+            }
+
+            // Last resort
+            Debug.LogWarning("[NetworkedBall] No anchors or camera found, using origin + 0.5m");
+            return new Vector3(0, 0.5f, 0);
         }
     }
 
@@ -978,19 +889,9 @@ public class NetworkedBall : NetworkBehaviour
                 {
                     Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, RacketVel: {racketVelocity.magnitude:F2}, IsHost: {Object.HasStateAuthority}");
 
-                    // Calculate hit velocity
-                    Vector3 racketToBall = (transform.position - racket.transform.position).normalized;
-                    Vector3 swingDir = racketVelocity.normalized;
-                    Vector3 hitDir = (swingDir * 0.7f + racketToBall * 0.3f).normalized;
-
-                    float hitSpeed = Mathf.Clamp(racketVelocity.magnitude * 2f, 2f, 12f);
-                    Vector3 hitVelocity = hitDir * hitSpeed;
-
-                    // Add slight upward arc
-                    if (hitVelocity.y < 0.5f && hitVelocity.y > -3f)
-                    {
-                        hitVelocity.y += 1f;
-                    }
+                    // Use racket face normal for hit direction
+                    Vector3 racketNormal = racket.transform.up;
+                    Vector3 hitVelocity = CalculateRacketHitVelocity(racket, Vector3.zero, racketNormal);
 
                     if (Object.HasStateAuthority)
                     {
@@ -1077,11 +978,7 @@ public class NetworkedBall : NetworkBehaviour
         targetPosition = worldPosition;
         previousPosition = worldPosition;
 
-        // Mark that spawn position has been set
-        isSpawnPositionSet = true;
-
-        // CRITICAL: Set table reference IMMEDIATELY if provided, or find it synchronously
-        // This prevents clients from receiving a stale/zero TableRelativePosition
+        // Set table reference if provided, or find it synchronously
         if (table != null)
         {
             tableTransform = table;
@@ -1098,19 +995,12 @@ public class NetworkedBall : NetworkBehaviour
             }
         }
 
-        // Update table-relative position for network sync
-        if (tableTransform != null)
-        {
-            TableRelativePosition = tableTransform.InverseTransformPoint(worldPosition);
-            Debug.Log($"[NetworkedBall] SetSpawnPosition: Set TableRelativePosition to {TableRelativePosition} (table at {tableTransform.position})");
-        }
         // Sync world position directly
         SyncedWorldPosition = worldPosition;
         SyncedWorldRotation = transform.rotation;
         SyncedVelocity = Vector3.zero;
-        Debug.Log($"[NetworkedBall] SetSpawnPosition: Set SyncedWorldPosition to {SyncedWorldPosition}");
 
-        Debug.Log($"[NetworkedBall] SetSpawnPosition complete: transform.position={transform.position}, TableRelativePosition={TableRelativePosition}, SyncedWorldPosition={SyncedWorldPosition}");
+        Debug.Log($"[NetworkedBall] SetSpawnPosition complete: {transform.position}");
     }
     /// <summary>
     /// Request a serve (can be called by any player)
@@ -1166,9 +1056,9 @@ public class NetworkedBall : NetworkBehaviour
         {
             serveDir = serverPlayerNumber == 1 ? tableObject.forward : -tableObject.forward;
         }
-        else if (sharedAnchor != null)
+        else if (tableTransform != null)
         {
-            serveDir = serverPlayerNumber == 1 ? sharedAnchor.forward : -sharedAnchor.forward;
+            serveDir = serverPlayerNumber == 1 ? tableTransform.forward : -tableTransform.forward;
         }
 
         Vector3 velocity = serveDir * serveForce;
@@ -1184,11 +1074,9 @@ public class NetworkedBall : NetworkBehaviour
         if (collision.gameObject.CompareTag("Racket") ||
             collision.gameObject.layer == LayerMask.NameToLayer("Racket"))
         {
-            Vector3 hitVelocity = CalculateRacketHitVelocity(collision.gameObject, collision.relativeVelocity);
             Vector3 hitPoint = collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position;
-
-            // Ensure minimum upward velocity for playability
-            hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+            Vector3 contactNormal = collision.contacts.Length > 0 ? collision.contacts[0].normal : collision.gameObject.transform.up;
+            Vector3 hitVelocity = CalculateRacketHitVelocity(collision.gameObject, collision.relativeVelocity, contactNormal);
 
             if (Object.HasStateAuthority)
             {
@@ -1237,34 +1125,88 @@ public class NetworkedBall : NetworkBehaviour
     }
 
     /// <summary>
-    /// Calculate hit velocity from racket collision
+    /// Calculate hit velocity from racket collision using WORLD SPACE physics.
+    /// Since both VR devices have aligned world coordinates through colocation,
+    /// all calculations use world space for accurate cross-device hit detection.
     /// </summary>
-    private Vector3 CalculateRacketHitVelocity(GameObject racket, Vector3 relativeVelocity)
+    private Vector3 CalculateRacketHitVelocity(GameObject racket, Vector3 relativeVelocity, Vector3 contactNormal)
     {
-        Vector3 hitVelocity;
-        Rigidbody racketRb = racket.GetComponent<Rigidbody>();
+        // Get racket swing velocity in WORLD SPACE
+        Vector3 worldRacketVelocity = GetWorldSpaceRacketVelocity(racket);
 
-        if (racketRb != null)
+        // Racket face normal is already in world space (transform.up returns world direction)
+        Vector3 worldHitNormal = contactNormal;
+        if (worldHitNormal == Vector3.zero || worldHitNormal.magnitude < 0.1f)
         {
-            // Use racket velocity for more responsive hits
-            hitVelocity = racketRb.velocity * racketHitMultiplier;
+            worldHitNormal = racket.transform.up;
+        }
+
+        // Calculate hit direction based on swing
+        float swingSpeed = worldRacketVelocity.magnitude;
+        Vector3 swingDirection = swingSpeed > 0.1f ? worldRacketVelocity.normalized : worldHitNormal;
+
+        // Blend swing direction with racket face normal
+        Vector3 hitDirection;
+        if (swingSpeed > 0.5f)
+        {
+            // Strong swing - primarily use swing direction
+            hitDirection = (swingDirection * 0.8f + worldHitNormal * 0.2f).normalized;
         }
         else
         {
-            // Try ControllerRacket for velocity
-            var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
-            if (controllerRacket != null)
-            {
-                hitVelocity = controllerRacket.GetRacketVelocity(racket) * racketHitMultiplier;
-            }
-            else
-            {
-                // Fallback to relative velocity
-                hitVelocity = relativeVelocity * fallbackHitMultiplier;
-            }
+            // Weak swing - use racket face normal
+            hitDirection = worldHitNormal;
         }
 
+        // Calculate final speed
+        float hitSpeed = Mathf.Clamp(swingSpeed * 1.5f, 2f, 8f);
+        Vector3 hitVelocity = hitDirection * hitSpeed;
+
+        // Ensure upward arc for table tennis (world Y axis)
+        if (hitVelocity.y < 0.5f)
+        {
+            hitVelocity.y = 0.5f + swingSpeed * 0.2f;
+        }
+
+        Debug.Log($"[NetworkedBall] Hit calc (world): swingSpeed={swingSpeed:F2}, hitSpeed={hitSpeed:F2}, dir={hitDirection}");
+
         return hitVelocity;
+    }
+
+    /// <summary>
+    /// Get racket velocity in world space coordinates.
+    /// ControllerRacket now provides world-space velocity directly.
+    /// </summary>
+    private Vector3 GetWorldSpaceRacketVelocity(GameObject racket)
+    {
+        // ControllerRacket.GetRacketVelocity now returns world-space velocity
+        var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
+        if (controllerRacket != null)
+        {
+            return controllerRacket.GetRacketVelocity(racket);
+        }
+
+        // Rigidbody velocity is already in world space
+        Rigidbody racketRb = racket.GetComponent<Rigidbody>();
+        if (racketRb != null)
+        {
+            return racketRb.velocity;
+        }
+
+        // Fallback: Convert local controller velocity to world space
+        Vector3 localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+        if (localVelocity.magnitude < 0.3f)
+        {
+            localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+        }
+
+        Transform cameraRig = Camera.main?.transform.parent;
+        if (cameraRig != null)
+        {
+            return cameraRig.TransformDirection(localVelocity);
+        }
+
+        return localVelocity;
     }
 
     /// <summary>
@@ -1348,11 +1290,9 @@ public class NetworkedBall : NetworkBehaviour
         // Check for racket hit BEFORE authority guard - clients need to detect this too
         if (other.CompareTag("Racket"))
         {
-            Vector3 hitVelocity = CalculateRacketHitVelocity(other.gameObject, Vector3.zero);
             Vector3 hitPoint = other.ClosestPoint(transform.position);
-
-            // Ensure minimum upward velocity for playability
-            hitVelocity.y = Mathf.Max(hitVelocity.y, 1f);
+            Vector3 contactNormal = other.transform.up; // Use racket face normal
+            Vector3 hitVelocity = CalculateRacketHitVelocity(other.gameObject, Vector3.zero, contactNormal);
 
             if (Object.HasStateAuthority)
             {

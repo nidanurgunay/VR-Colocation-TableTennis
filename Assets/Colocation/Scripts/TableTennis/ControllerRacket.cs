@@ -33,12 +33,11 @@ public class ControllerRacket : MonoBehaviour
     private bool leftRacketActive = false;
     private bool rightRacketActive = false;
     
-    // Velocity tracking for ball collision
-    private Vector3 lastRacketPosition;
-    private Vector3 racketVelocity;
-    
-    // Rigidbody for collision detection
-    private Rigidbody activeRb;
+    // Velocity tracking for ball collision (in WORLD SPACE)
+    private Vector3 lastLeftRacketWorldPos;
+    private Vector3 lastRightRacketWorldPos;
+    private Vector3 leftRacketWorldVelocity;
+    private Vector3 rightRacketWorldVelocity;
     
     private void Start()
     {
@@ -360,6 +359,32 @@ public class ControllerRacket : MonoBehaviour
         }
         
         UpdateRacketVisibility(leftRacketActive, rightRacketActive);
+
+        // Track world-space velocity for physics calculations
+        UpdateRacketVelocities();
+    }
+
+    /// Track racket velocities in world space (for accurate cross-device physics)
+    private void UpdateRacketVelocities()
+    {
+        float dt = Time.deltaTime;
+        if (dt < 0.001f) return; // Avoid division by zero
+
+        // Track left racket world velocity
+        if (leftRacket != null && leftRacket.activeInHierarchy)
+        {
+            Vector3 currentPos = leftRacket.transform.position;
+            leftRacketWorldVelocity = (currentPos - lastLeftRacketWorldPos) / dt;
+            lastLeftRacketWorldPos = currentPos;
+        }
+
+        // Track right racket world velocity
+        if (rightRacket != null && rightRacket.activeInHierarchy)
+        {
+            Vector3 currentPos = rightRacket.transform.position;
+            rightRacketWorldVelocity = (currentPos - lastRightRacketWorldPos) / dt;
+            lastRightRacketWorldPos = currentPos;
+        }
     }
 
     /// Update which racket is visible based on active states
@@ -490,29 +515,41 @@ public class ControllerRacket : MonoBehaviour
         return false;
     }
 
-    /// Get the velocity of a racket for physics calculations (e.g., ball collision)
+    /// Get the velocity of a racket in WORLD SPACE for physics calculations.
+    /// Since both VR devices have aligned world coordinates through colocation,
+    /// world-space velocity ensures accurate cross-device hit physics.
     public Vector3 GetRacketVelocity(GameObject racketObject)
     {
-        // Use tracked velocity if this is our active racket
-        if (racketObject == leftRacket || racketObject == rightRacket)
+        // Return tracked world-space velocity for our rackets
+        if (racketObject == leftRacket && leftRacketWorldVelocity.magnitude > 0.1f)
         {
-            if (racketVelocity.magnitude > 0.1f)
-            {
-                return racketVelocity;
-            }
+            return leftRacketWorldVelocity;
         }
-        
-        // Fallback: use controller velocity from OVRInput
+        if (racketObject == rightRacket && rightRacketWorldVelocity.magnitude > 0.1f)
+        {
+            return rightRacketWorldVelocity;
+        }
+
+        // Fallback: Convert local controller velocity to world space
+        Transform cameraRig = Camera.main?.transform.parent;
+        Vector3 localVelocity;
+
         if (racketObject == leftRacket)
         {
-            return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+            localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
         }
-        if (racketObject == rightRacket)
+        else
         {
-            return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+            localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
         }
-        
-        return OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+
+        // Transform to world space if we have camera rig
+        if (cameraRig != null)
+        {
+            return cameraRig.TransformDirection(localVelocity);
+        }
+
+        return localVelocity;
     }
     
     /// <summary>
