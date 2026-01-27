@@ -1,0 +1,280 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+
+/// <summary>
+/// Displays a welcome popup at application start with instructions for the user.
+/// Follows the user's head (screen space style) until dismissed.
+/// Dismisses on button click or controller input.
+/// </summary>
+public class WelcomePopup : MonoBehaviour
+{
+    [Header("Role (set externally if needed)")]
+    [SerializeField] private bool isHost = true; // Default to host for editor, set at runtime for real sessions
+    [Header("UI References (Auto-created if not assigned)")]
+    [SerializeField] private Canvas popupCanvas;
+    [SerializeField] private GameObject popupPanel;
+    [SerializeField] private TextMeshProUGUI titleText;
+    [SerializeField] private TextMeshProUGUI messageText;
+    [SerializeField] private Button okButton;
+
+    [Header("Settings")]
+    [SerializeField] private bool showOnStart = true;
+    [SerializeField] private float distanceFromCamera = 1.5f; // Distance in front of camera
+    [SerializeField] private float followSpeed = 5f; // How fast the popup follows head movement
+    [SerializeField] private float verticalOffset = -0.1f; // Slight offset below eye level
+
+    private bool isShowing = false;
+    private Transform cameraTransform;
+    private Vector3 targetPosition;
+    private Quaternion targetRotation;
+
+    private void Start()
+    {
+        // Find main camera
+        cameraTransform = Camera.main?.transform;
+
+        if (showOnStart)
+        {
+            ShowPopup();
+        }
+    }
+
+    private void Update()
+    {
+        if (!isShowing) return;
+
+        // Follow the camera (head tracking)
+        FollowCamera();
+
+        // Dismiss with any button press (A, B, X, Y, or triggers)
+        if (OVRInput.GetDown(OVRInput.Button.One) ||      // A
+            OVRInput.GetDown(OVRInput.Button.Two) ||      // B
+            OVRInput.GetDown(OVRInput.Button.Three) ||    // X
+            OVRInput.GetDown(OVRInput.Button.Four) ||     // Y
+            OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger) ||
+            OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger))
+        {
+            HidePopup();
+        }
+    }
+
+    private void FollowCamera()
+    {
+        if (cameraTransform == null || popupCanvas == null) return;
+
+        // Calculate target position in front of camera
+        Vector3 forward = cameraTransform.forward;
+        Vector3 up = cameraTransform.up;
+
+        targetPosition = cameraTransform.position + forward * distanceFromCamera + up * verticalOffset;
+        targetRotation = Quaternion.LookRotation(targetPosition - cameraTransform.position);
+
+        // Smoothly follow
+        popupCanvas.transform.position = Vector3.Lerp(popupCanvas.transform.position, targetPosition, Time.deltaTime * followSpeed);
+        popupCanvas.transform.rotation = Quaternion.Slerp(popupCanvas.transform.rotation, targetRotation, Time.deltaTime * followSpeed);
+    }
+
+    public void ShowPopup()
+    {
+        // Ensure we have camera reference
+        if (cameraTransform == null)
+        {
+            cameraTransform = Camera.main?.transform;
+        }
+
+        // Create UI if not assigned
+        if (popupCanvas == null)
+        {
+            CreatePopupUI();
+        }
+
+        // Snap to position in front of camera immediately
+        if (cameraTransform != null && popupCanvas != null)
+        {
+            Vector3 forward = cameraTransform.forward;
+            Vector3 up = cameraTransform.up;
+            popupCanvas.transform.position = cameraTransform.position + forward * distanceFromCamera + up * verticalOffset;
+            popupCanvas.transform.rotation = Quaternion.LookRotation(popupCanvas.transform.position - cameraTransform.position);
+        }
+
+        // Update message for host/client
+        if (messageText != null)
+        {
+            messageText.text = isHost ? GetHostWelcomeMessage() : GetClientWelcomeMessage();
+        }
+
+        popupCanvas.gameObject.SetActive(true);
+        if (popupPanel != null) popupPanel.SetActive(true);
+        isShowing = true;
+
+        Debug.Log("[WelcomePopup] Showing welcome popup (follows head)");
+    }
+
+    public void HidePopup()
+    {
+        if (popupCanvas != null)
+        {
+            popupCanvas.gameObject.SetActive(false);
+        }
+        if (popupPanel != null)
+        {
+            popupPanel.SetActive(false);
+        }
+        isShowing = false;
+
+        Debug.Log("[WelcomePopup] Welcome popup dismissed");
+    }
+
+    private void CreatePopupUI()
+    {
+        // Create Canvas
+        GameObject canvasObj = new GameObject("WelcomePopupCanvas");
+        popupCanvas = canvasObj.AddComponent<Canvas>();
+        popupCanvas.renderMode = RenderMode.WorldSpace;
+
+        // Add Canvas Scaler
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.dynamicPixelsPerUnit = 100f;
+
+        // Add Graphic Raycaster for button interaction
+        canvasObj.AddComponent<GraphicRaycaster>();
+
+        // Initial position in front of camera (will follow via Update)
+        if (cameraTransform != null)
+        {
+            canvasObj.transform.position = cameraTransform.position + cameraTransform.forward * distanceFromCamera;
+            canvasObj.transform.rotation = Quaternion.LookRotation(canvasObj.transform.position - cameraTransform.position);
+        }
+        else
+        {
+            canvasObj.transform.position = new Vector3(0, 1.5f, 1.5f);
+            canvasObj.transform.rotation = Quaternion.identity;
+        }
+
+        // Scale canvas for VR (slightly smaller for closer viewing)
+        canvasObj.transform.localScale = Vector3.one * 0.0015f;
+
+        // Create Panel (background)
+        popupPanel = new GameObject("Panel");
+        popupPanel.transform.SetParent(canvasObj.transform, false);
+        RectTransform panelRect = popupPanel.AddComponent<RectTransform>();
+        panelRect.sizeDelta = new Vector2(800, 750);
+
+        Image panelImage = popupPanel.AddComponent<Image>();
+        ColorUtility.TryParseHtmlString("#001F41", out Color bgColor);
+        panelImage.color = new Color(bgColor.r, bgColor.g, bgColor.b, 0.95f); // Background #001F41
+
+        // Add rounded corners effect via outline
+        Outline outline = popupPanel.AddComponent<Outline>();
+        ColorUtility.TryParseHtmlString("#00938A", out Color outlineColor);
+        outline.effectColor = outlineColor; // Outline #00938A
+        outline.effectDistance = new Vector2(3, 3);
+
+        // Create Title
+        GameObject titleObj = new GameObject("Title");
+        titleObj.transform.SetParent(popupPanel.transform, false);
+        RectTransform titleRect = titleObj.AddComponent<RectTransform>();
+        titleRect.anchorMin = new Vector2(0.5f, 1f);
+        titleRect.anchorMax = new Vector2(0.5f, 1f);
+        titleRect.pivot = new Vector2(0.5f, 1f);
+        titleRect.anchoredPosition = new Vector2(0, -30);
+        titleRect.sizeDelta = new Vector2(750, 60);
+
+        titleText = titleObj.AddComponent<TextMeshProUGUI>();
+        titleText.text = "Welcome to Colocation Table Tennis!";
+        titleText.fontSize = 42;
+        titleText.fontStyle = FontStyles.Bold;
+        ColorUtility.TryParseHtmlString("#01B4A9", out Color titleColor);
+        titleText.color = titleColor; // Title #01B4A9
+        titleText.alignment = TextAlignmentOptions.Center;
+
+        // Create Message
+        GameObject messageObj = new GameObject("Message");
+        messageObj.transform.SetParent(popupPanel.transform, false);
+        RectTransform messageRect = messageObj.AddComponent<RectTransform>();
+        messageRect.anchorMin = new Vector2(0.5f, 0.5f);
+        messageRect.anchorMax = new Vector2(0.5f, 0.5f);
+        messageRect.pivot = new Vector2(0.5f, 0.5f);
+        messageRect.anchoredPosition = new Vector2(0, 30);
+        messageRect.sizeDelta = new Vector2(720, 350);
+
+        messageText = messageObj.AddComponent<TextMeshProUGUI>();
+        messageText.text = GetWelcomeMessage();
+        messageText.fontSize = 28;
+        messageText.color = Color.white;
+        messageText.alignment = TextAlignmentOptions.Left;
+        messageText.lineSpacing = 5f;
+
+        // Create OK Button
+        GameObject buttonObj = new GameObject("OKButton");
+        buttonObj.transform.SetParent(popupPanel.transform, false);
+        RectTransform buttonRect = buttonObj.AddComponent<RectTransform>();
+        buttonRect.anchorMin = new Vector2(0.5f, 0f);
+        buttonRect.anchorMax = new Vector2(0.5f, 0f);
+        buttonRect.pivot = new Vector2(0.5f, 0f);
+        buttonRect.anchoredPosition = new Vector2(0, 30);
+        buttonRect.sizeDelta = new Vector2(200, 60);
+
+        Image buttonImage = buttonObj.AddComponent<Image>();
+        ColorUtility.TryParseHtmlString("#00938A", out Color buttonColor);
+        buttonImage.color = buttonColor; // Button #00938A
+
+        okButton = buttonObj.AddComponent<Button>();
+        okButton.targetGraphic = buttonImage;
+        okButton.onClick.AddListener(HidePopup);
+
+        // Button hover colors - using provided color variations
+        ColorBlock colors = okButton.colors;
+        colors.normalColor = buttonColor; // #00938A
+        ColorUtility.TryParseHtmlString("#12FFE8", out Color highlightColor);
+        colors.highlightedColor = highlightColor; // #12FFE8
+        ColorUtility.TryParseHtmlString("#01B4A9", out Color pressedColor);
+        colors.pressedColor = pressedColor; // #01B4A9
+        okButton.colors = colors;
+
+        // Button Text
+        GameObject buttonTextObj = new GameObject("Text");
+        buttonTextObj.transform.SetParent(buttonObj.transform, false);
+        RectTransform buttonTextRect = buttonTextObj.AddComponent<RectTransform>();
+        buttonTextRect.anchorMin = Vector2.zero;
+        buttonTextRect.anchorMax = Vector2.one;
+        buttonTextRect.sizeDelta = Vector2.zero;
+
+        TextMeshProUGUI buttonText = buttonTextObj.AddComponent<TextMeshProUGUI>();
+        buttonText.text = "Let's Play!";
+        buttonText.fontSize = 32;
+        buttonText.fontStyle = FontStyles.Bold;
+        buttonText.color = Color.white;
+        buttonText.alignment = TextAlignmentOptions.Center;
+
+        Debug.Log("[WelcomePopup] Created popup UI programmatically");
+    }
+
+    private string GetWelcomeMessage()
+    {
+        return isHost ? GetHostWelcomeMessage() : GetClientWelcomeMessage();
+    }
+
+    private string GetHostWelcomeMessage()
+    {
+        return @"This VR experience uses <color=#12FFE8>Spatial Anchors</color> (Meta/Oculus) to align all players in the same physical space. <b>As the host, you will place 2 anchors—ideally at least 2.5 meters apart—to ensure accurate and stable alignment for everyone.</b> Real-time multiplayer gameplay is powered by <color=#12FFE8>Photon Fusion</color>.
+
+<color=#FFD700>For the best experience:</color>
+
+<color=#01B4A9>•</color> Thoroughly map your environment in VR before starting, for better spatial alignment.
+<color=#01B4A9>•</color> Ensure good lighting for optimal tracking and anchor stability.";
+    }
+
+    private string GetClientWelcomeMessage()
+    {
+        return @"This VR experience uses <color=#12FFE8>Spatial Anchors</color> (Meta/Oculus) to align all players in the same physical space. <b>As a client, you will load 2 anchors created by the host to join the shared space and ensure accurate alignment.</b> Real-time multiplayer gameplay is powered by <color=#12FFE8>Photon Fusion</color>.
+
+<color=#FFD700>For the best experience:</color>
+
+<color=#01B4A9>•</color> Thoroughly map your environment in VR before starting, for better spatial alignment.
+<color=#01B4A9>•</color> Ensure good lighting for optimal tracking and anchor stability.";
+    }
+}
+
+

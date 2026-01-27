@@ -7923,6 +7923,59 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _controller: {fileID: 368277105}
   _ovrControllerHelper: {fileID: 1677033205}
+--- !u!1 &305522184
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 305522186}
+  - component: {fileID: 305522185}
+  m_Layer: 0
+  m_Name: WelcomePop
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &305522185
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 305522184}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 58ac8c0efef5f4363b38f2a91def7a40, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  popupCanvas: {fileID: 0}
+  popupPanel: {fileID: 0}
+  titleText: {fileID: 0}
+  messageText: {fileID: 0}
+  okButton: {fileID: 0}
+  showOnStart: 1
+  distanceFromCamera: 1.5
+  followSpeed: 5
+  verticalOffset: -0.1
+--- !u!4 &305522186
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 305522184}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -0.20999998, y: 1.685, z: 2}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &306563951
 GameObject:
   m_ObjectHideFlags: 0
@@ -30746,7 +30799,7 @@ GameObject:
   - component: {fileID: 1320675425}
   - component: {fileID: 1320675424}
   m_Layer: 5
-  m_Name: AnchorPanel
+  m_Name: ButtonPanel
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -40656,7 +40709,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Material: {fileID: 0}
-  m_Color: {r: 0.14509805, g: 0.19215687, b: 0.3529412, a: 0.9019608}
+  m_Color: {r: 0, g: 0.11986681, b: 0.254717, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -49057,3 +49110,4 @@ SceneRoots:
   - {fileID: 1520967113}
   - {fileID: 1453752134}
   - {fileID: 1131986596}
+  - {fileID: 305522186}
