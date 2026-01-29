@@ -218,6 +218,25 @@ public class NetworkedBall : NetworkBehaviour
             collider = gameObject.AddComponent<SphereCollider>();
             collider.radius = 0.5f; // Normalized to scale
         }
+    
+        PhysicMaterial ballMaterial = Resources.Load<PhysicMaterial>("PingPongBall");
+        if (ballMaterial != null)
+        {
+            collider.material = ballMaterial;
+            Debug.Log("[NetworkedBall] Assigned PingPongBall physics material to collider");
+        }
+        else
+        {
+            // Fallback: Create bouncy material dynamically
+            PhysicMaterial bouncyMat = new PhysicMaterial("BallMaterial");
+            bouncyMat.bounciness = 0.95f;
+            bouncyMat.dynamicFriction = 0.1f;
+            bouncyMat.staticFriction = 0.1f;
+            bouncyMat.frictionCombine = PhysicMaterialCombine.Minimum;
+            bouncyMat.bounceCombine = PhysicMaterialCombine.Maximum;
+            collider.material = bouncyMat;
+            Debug.Log("[NetworkedBall] Created dynamic bouncy physics material for collider");
+        }
 
         Debug.Log($"[NetworkedBall] Ball visual ensured. Scale: {transform.localScale}, Position: {transform.position}");
     }
@@ -1106,17 +1125,22 @@ public class NetworkedBall : NetworkBehaviour
             collision.gameObject.CompareTag(tableTag) ||
             (tableObject != null && collision.gameObject == tableObject.gameObject))
         {
-            // Bounce off table with bounciness factor
-            Vector3 normal = collision.contacts[0].normal;
-            Vector3 velocity = rb.velocity;
+            // // Bounce off table with bounciness factor
+            // Vector3 normal = collision.contacts[0].normal;
+            // Vector3 velocity = rb.velocity;
 
-            // Reflect velocity with bounciness
-            Vector3 reflectedVelocity = Vector3.Reflect(velocity, normal) * bounciness;
+            // // Reflect velocity with bounciness
+            // Vector3 reflectedVelocity = Vector3.Reflect(velocity, normal) * bounciness;
 
-            rb.velocity = reflectedVelocity;
-            localVelocity = reflectedVelocity;
+            // rb.velocity = reflectedVelocity;
+            // localVelocity = reflectedVelocity;
 
-            Debug.Log($"[NetworkedBall] Ball bounced on table - New velocity: {reflectedVelocity}");
+            // Debug.Log($"[NetworkedBall] Ball bounced on table - New velocity: {reflectedVelocity}");
+             if (gameManager != null)
+            {
+                gameManager.OnBallBounce(transform.position);
+            }
+
             return;
         }
 
@@ -1228,25 +1252,10 @@ public class NetworkedBall : NetworkBehaviour
         rb.isKinematic = true;
         IsInPlay = false;
 
-        // Determine which side the ball hit (winner is opposite side)
-        int loserSide = DetermineHitSide();
-        int winnerSide = loserSide == 1 ? 2 : 1;
-
-        // Award point to winner
-        if (winnerSide == 1)
-        {
-            ScorePlayer1++;
-            Debug.Log($"[NetworkedBall] Ground hit on Player 2 side - Player 1 wins point! Score: {ScorePlayer1}-{ScorePlayer2}");
-        }
-        else
-        {
-            ScorePlayer2++;
-            Debug.Log($"[NetworkedBall] Ground hit on Player 1 side - Player 2 wins point! Score: {ScorePlayer1}-{ScorePlayer2}");
-        }
-
-        // Winner gets ball authority (service)
-        CurrentAuthority = winnerSide;
-        Debug.Log($"[NetworkedBall] SERVICE RULE: Player {winnerSide} gets ball authority");
+        // Alternate authority: swap to the other player each round
+        int nextAuthority = CurrentAuthority == 1 ? 2 : 1;
+        CurrentAuthority = nextAuthority;
+        Debug.Log($"[NetworkedBall] Round ended - authority switched to Player {nextAuthority}");
 
         // Notify game managers
         var passthroughManager = FindObjectOfType<PassthroughGameManager>();
@@ -1262,12 +1271,11 @@ public class NetworkedBall : NetworkBehaviour
         }
 
         // Notify via RPC for UI updates
-        RPC_NotifyRoundEnd(winnerSide, ScorePlayer1, ScorePlayer2);
+        RPC_NotifyRoundEnd(nextAuthority);
 
-        // CRITICAL FIX: Reset ball to serve position for the winner
-        // This was missing - ball was staying where it fell (invisible)
-        Debug.Log($"[NetworkedBall] Resetting ball to serve position for Player {winnerSide}");
-        ResetToServePosition(winnerSide);
+        // Reset ball to serve position for next player
+        Debug.Log($"[NetworkedBall] Resetting ball to serve position for Player {nextAuthority}");
+        ResetToServePosition(nextAuthority);
     }
 
     /// <summary>
@@ -1286,9 +1294,9 @@ public class NetworkedBall : NetworkBehaviour
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_NotifyRoundEnd(int winnerSide, int score1, int score2)
+    private void RPC_NotifyRoundEnd(int nextAuthority)
     {
-        Debug.Log($"[NetworkedBall] Round end - Winner: Player {winnerSide}, Score: {score1}-{score2}");
+        Debug.Log($"[NetworkedBall] Round end - next serve: Player {nextAuthority}");
     }
 
     private void OnTriggerEnter(Collider other)

@@ -44,6 +44,8 @@ public class PassthroughGameManager : NetworkBehaviour
     private bool isGameMenuOpen = false;
     private bool racketsVisible = true;
     private bool ballNeedsRespawn = false;
+    private int lastBallAuthority = 1; // Track last authority to swap on respawn (1=Host, 2=Client)
+    private int currentRound = 0; // Tracks the current round number
     
     // // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
     // private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
@@ -57,8 +59,8 @@ public class PassthroughGameManager : NetworkBehaviour
     private GameObject rightRacket;
     private GameObject runtimeMenuPanel;
     private GameObject gameUIPanel;
-    private TextMesh scoreText;
     private TextMesh roleText;          // Shows Client/Host
+    private TextMesh roundText;         // Shows current round number
     private TextMesh phaseText;         // Shows current game phase
     private TextMesh authorityText;     // Shows active authority (Host Only / Your Turn / Opponent's Turn)
     private TextMesh controlsText;      // Shows controller instructions
@@ -355,8 +357,8 @@ public class PassthroughGameManager : NetworkBehaviour
         if (runtimeMenuPanel != null) Destroy(runtimeMenuPanel);
 
         // Clear UI references
-        scoreText = null;
         roleText = null;
+        roundText = null;
         phaseText = null;
         authorityText = null;
         controlsText = null;
@@ -465,12 +467,16 @@ public class PassthroughGameManager : NetworkBehaviour
         Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
         Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
 
-        bool hasInput = Mathf.Abs(rightStick.y) > 0.05f || Mathf.Abs(leftStick.x) > 0.05f;
-        if (!hasInput) return;
+        // Apply per-axis dead zones to prevent cross-axis bleed
+        float deadZone = 0.15f;
+        float leftX = Mathf.Abs(leftStick.x) > deadZone ? leftStick.x : 0f;
+        float rightY = Mathf.Abs(rightStick.y) > deadZone ? rightStick.y : 0f;
+
+        if (leftX == 0f && rightY == 0f) return;
 
         // Right stick Y = Height, Left stick X = Rotation
-        float rotationDelta = leftStick.x * TableRotateSpeed * Time.deltaTime;
-        float heightDelta = rightStick.y * TableMoveSpeed * Time.deltaTime;
+        float rotationDelta = leftX * TableRotateSpeed * Time.deltaTime;
+        float heightDelta = rightY * TableMoveSpeed * Time.deltaTime;
 
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
@@ -800,6 +806,18 @@ public class PassthroughGameManager : NetworkBehaviour
                 var networkedBall = ball.GetComponent<NetworkedBall>();
                 if (networkedBall != null)
                 {
+                    // Set authority to Player 1 (host) on first spawn only
+                    // Subsequent rounds: authority is set by NetworkedBall.OnGroundHit
+                    if (networkedBall.CurrentAuthority == 0)
+                    {
+                        networkedBall.CurrentAuthority = 1;
+                        Debug.Log($"{LOG_TAG} SpawnBall First spawn - authority set to Player 1 (Host)");
+                    }
+                    else
+                    {
+                        Debug.Log($"{LOG_TAG} SpawnBall Authority already set to Player {networkedBall.CurrentAuthority}");
+                    }
+
                     // Disable the initialization coroutine from moving the ball
                     // CRITICAL: Pass table reference so TableRelativePosition can be set immediately
                     Debug.Log($"{LOG_TAG} SpawnBall Calling SetSpawnPosition to lock position at {spawnPos}, table={spawnedTable.name}");
@@ -856,9 +874,10 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         if (currentPhase == GamePhase.Playing) return;
 
+        if (currentRound == 0) currentRound = 1;
         currentPhase = GamePhase.Playing;
         Time.timeScale = 0.5f;
-        Debug.Log($"{LOG_TAG} OnBallHit by player {playerNumber} - Phase: Playing, TimeScale: 0.5");
+        Debug.Log($"{LOG_TAG} OnBallHit by player {playerNumber} - Round: {currentRound}, Phase: Playing, TimeScale: 0.5");
 
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
@@ -877,6 +896,7 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         Debug.Log($"{LOG_TAG} OnBallGroundHit called - transitioning to BallPosition for next serve");
         ballNeedsRespawn = true;
+        currentRound++;
         currentPhase = GamePhase.BallPosition;
         Time.timeScale = 1.0f;
 #if FUSION2
@@ -886,7 +906,6 @@ public class PassthroughGameManager : NetworkBehaviour
             RPC_NotifyPhaseChange(GamePhase.BallPosition);
         }
 #endif
-        UpdateScoreDisplay();
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ready for next serve");
     }
@@ -898,7 +917,6 @@ public class PassthroughGameManager : NetworkBehaviour
     public void OnAuthorityChanged(int newAuthority)
     {
         Debug.Log($"{LOG_TAG} OnAuthorityChanged called - new authority: Player {newAuthority}");
-        UpdateScoreDisplay();
         UpdateInstructions();
     }
 
@@ -936,21 +954,6 @@ public class PassthroughGameManager : NetworkBehaviour
         }
 
         Debug.Log($"{LOG_TAG} EnsureBallPositionAfterInit: Complete. Final position: {ball.transform.position}");
-    }
-
-    /// <summary>
-    /// Update score display from NetworkedBall
-    /// </summary>
-    private void UpdateScoreDisplay()
-    {
-        if (scoreText == null || spawnedBall == null) return;
-
-        var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
-        if (networkedBall != null)
-        {
-            scoreText.text = $"{networkedBall.ScorePlayer1} - {networkedBall.ScorePlayer2}";
-            Debug.Log($"{LOG_TAG} Score updated: {scoreText.text}, Authority: Player {networkedBall.CurrentAuthority}");
-        }
     }
 
     /// <summary>
@@ -1042,7 +1045,6 @@ public class PassthroughGameManager : NetworkBehaviour
         currentPhase = GamePhase.BallPosition;
 
         // Update UI
-        UpdateScoreDisplay();
         UpdateInstructions();
 
         Debug.Log($"{LOG_TAG} Table adjustment confirmed by host - ball should now be visible at spawn position");
@@ -1106,6 +1108,10 @@ public class PassthroughGameManager : NetworkBehaviour
 #endif
             spawnedBall = null;
         }
+
+        // Reset authority and round tracking for fresh game
+        lastBallAuthority = 1;
+        currentRound = 0;
 
         currentPhase = GamePhase.TableAdjust;
 #if FUSION2
@@ -1307,18 +1313,17 @@ public class PassthroughGameManager : NetworkBehaviour
             return tm;
         }
 
-        // NEW LAYOUT MATCHING TABLETENNISMANAGER:
-        // Top: Large Score (yellow)
-        scoreText = CreateText("ScoreText", new Vector3(0, 0.85f, -0.05f), 450, Color.yellow);
-        scoreText.text = "0 - 0";
-
-        // Role: Client/Host (green)
-        roleText = CreateText("RoleText", new Vector3(0, 0.5f, -0.05f), 180, Color.green);
+        // Role: Client/Host (green) - at top
+        roleText = CreateText("RoleText", new Vector3(0, 0.85f, -0.05f), 180, Color.green);
 #if FUSION2
         roleText.text = Object != null && Object.HasStateAuthority ? "HOST" : "CLIENT";
 #else
         roleText.text = "SOLO";
 #endif
+
+        // Round display (yellow, large)
+        roundText = CreateText("RoundText", new Vector3(0, 0.55f, -0.05f), 300, Color.yellow);
+        roundText.text = "";
 
         // Game Phase (white)
         phaseText = CreateText("PhaseText", new Vector3(0, 0.2f, -0.05f), 200, Color.white);
@@ -1338,6 +1343,12 @@ public class PassthroughGameManager : NetworkBehaviour
 
         // Update phase display
         phaseText.text = currentPhase.GetDisplayName();
+
+        // Update round display
+        if (roundText != null)
+        {
+            roundText.text = currentRound > 0 ? $"Round {currentRound}" : "";
+        }
 
         // Get current ball authority
         int ballAuthority = 0;
@@ -1449,19 +1460,8 @@ public class PassthroughGameManager : NetworkBehaviour
 
             case GamePhase.BallGrounded:
                 // BallGrounded: No longer used, but keep for compatibility
-                if (ballAuthority > 0)
-                {
-                    if (isLocalPlayerAuthority)
-                    {
-                        authorityText.text = "YOU WON ROUND";
-                        authorityText.color = Color.yellow;
-                    }
-                    else
-                    {
-                        authorityText.text = $"OPPONENT WON (P{ballAuthority})";
-                        authorityText.color = Color.gray;
-                    }
-                }
+                authorityText.text = "ROUND ENDED";
+                authorityText.color = Color.cyan;
                 if (controlsText) controlsText.text = "Transitioning...";
                 break;
 
