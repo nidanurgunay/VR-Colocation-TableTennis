@@ -313,6 +313,7 @@ public class PassthroughGameManager : NetworkBehaviour
         isActive = false;
         currentPhase = GamePhase.Idle;
         isGameMenuOpen = false;
+        Time.timeScale = 1.0f;
 
         // Cleanup spawned objects
         if (spawnedBall != null)
@@ -848,6 +849,27 @@ public class PassthroughGameManager : NetworkBehaviour
     }
 
     /// <summary>
+    /// Called by NetworkedBall when ball is hit by racket - transitions to Playing phase
+    /// Sets timeScale to 0.5 for slow-motion gameplay
+    /// </summary>
+    public void OnBallHit(int playerNumber)
+    {
+        if (currentPhase == GamePhase.Playing) return;
+
+        currentPhase = GamePhase.Playing;
+        Time.timeScale = 0.5f;
+        Debug.Log($"{LOG_TAG} OnBallHit by player {playerNumber} - Phase: Playing, TimeScale: 0.5");
+
+#if FUSION2
+        if (Object != null && Object.HasStateAuthority)
+        {
+            RPC_NotifyPhaseChange(GamePhase.Playing);
+        }
+#endif
+        UpdateInstructions();
+    }
+
+    /// <summary>
     /// Called by NetworkedBall when ball hits ground
     /// Authority is swapped by NetworkedBall, so transition to BallPosition for next serve
     /// </summary>
@@ -856,6 +878,7 @@ public class PassthroughGameManager : NetworkBehaviour
         Debug.Log($"{LOG_TAG} OnBallGroundHit called - transitioning to BallPosition for next serve");
         ballNeedsRespawn = true;
         currentPhase = GamePhase.BallPosition;
+        Time.timeScale = 1.0f;
 #if FUSION2
         // Notify peer of phase change
         if (Object != null && Object.HasStateAuthority)
@@ -1068,6 +1091,7 @@ public class PassthroughGameManager : NetworkBehaviour
     private void RestartGame()
     {
         isGameMenuOpen = false;
+        Time.timeScale = 1.0f;
         if (runtimeMenuPanel != null) runtimeMenuPanel.SetActive(false);
 
         // Cleanup ball

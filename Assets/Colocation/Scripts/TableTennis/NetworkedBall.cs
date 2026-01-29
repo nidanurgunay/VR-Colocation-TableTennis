@@ -845,7 +845,6 @@ public class NetworkedBall : NetworkBehaviour
         if (Time.time - lastHitTime < 0.3f) return;
 
         float hitDistance = 0.12f; // 12cm proximity threshold
-        float minRacketSpeed = 0.5f; // Minimum racket speed to register hit
 
         // Find all rackets by tag
         GameObject[] rackets = GameObject.FindGameObjectsWithTag("Racket");
@@ -856,56 +855,53 @@ public class NetworkedBall : NetworkBehaviour
             float distance = Vector3.Distance(transform.position, racket.transform.position);
             if (distance < hitDistance)
             {
-                // Get racket velocity
-                Vector3 racketVelocity = Vector3.zero;
+                Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, IsHost: {Object.HasStateAuthority}");
 
-                // Try ControllerRacket first
-                var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
-                if (controllerRacket != null)
+                if (Object.HasStateAuthority)
                 {
-                    racketVelocity = controllerRacket.GetRacketVelocity(racket);
+                    OnRacketHit(Vector3.zero, transform.position, 0);
                 }
                 else
                 {
-                    // Try Rigidbody
-                    var racketRb = racket.GetComponent<Rigidbody>();
-                    if (racketRb != null)
-                    {
-                        racketVelocity = racketRb.velocity;
-                    }
-                    else
-                    {
-                        // Fallback: use controller velocity
-                        racketVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
-                        if (racketVelocity.magnitude < minRacketSpeed)
-                        {
-                            racketVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
-                        }
-                    }
+                    Debug.Log($"[NetworkedBall] CLIENT proximity hit - sending RPC");
+                    RPC_RequestHit(Vector3.zero, transform.position);
                 }
+                return;
 
-                // Check if racket is moving fast enough
-                if (racketVelocity.magnitude > minRacketSpeed)
-                {
-                    Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, RacketVel: {racketVelocity.magnitude:F2}, IsHost: {Object.HasStateAuthority}");
-
-                    // Use racket face normal for hit direction
-                    Vector3 racketNormal = racket.transform.up;
-                    Vector3 hitVelocity = CalculateRacketHitVelocity(racket, Vector3.zero, racketNormal);
-
-                    if (Object.HasStateAuthority)
-                    {
-                        // Host processes hit directly
-                        OnRacketHit(hitVelocity, transform.position, 0);
-                    }
-                    else
-                    {
-                        // Client sends RPC to host
-                        Debug.Log($"[NetworkedBall] CLIENT proximity hit - sending RPC. Velocity: {hitVelocity}");
-                        RPC_RequestHit(hitVelocity, transform.position);
-                    }
-                    return;
-                }
+                // // OLD: Complex racket velocity calculation and speed threshold
+                // float minRacketSpeed = 0.5f;
+                // Vector3 racketVelocity = Vector3.zero;
+                // var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
+                // if (controllerRacket != null)
+                // {
+                //     racketVelocity = controllerRacket.GetRacketVelocity(racket);
+                // }
+                // else
+                // {
+                //     var racketRb = racket.GetComponent<Rigidbody>();
+                //     if (racketRb != null)
+                //     {
+                //         racketVelocity = racketRb.velocity;
+                //     }
+                //     else
+                //     {
+                //         racketVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+                //         if (racketVelocity.magnitude < minRacketSpeed)
+                //         {
+                //             racketVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+                //         }
+                //     }
+                // }
+                // if (racketVelocity.magnitude > minRacketSpeed)
+                // {
+                //     Vector3 racketNormal = racket.transform.up;
+                //     Vector3 hitVelocity = CalculateRacketHitVelocity(racket, Vector3.zero, racketNormal);
+                //     if (Object.HasStateAuthority)
+                //         OnRacketHit(hitVelocity, transform.position, 0);
+                //     else
+                //         RPC_RequestHit(hitVelocity, transform.position);
+                //     return;
+                // }
             }
         }
     }
@@ -924,38 +920,50 @@ public class NetworkedBall : NetworkBehaviour
             Debug.Log("[NetworkedBall] Ball hit in positioning mode - starting game!");
         }
 
-        // CLAMP velocity to prevent ball from flying off to infinity
-        float maxSpeed = 8f; // Max 8 m/s - reasonable for table tennis in VR
-        if (hitVelocity.magnitude > maxSpeed)
-        {
-            Debug.Log($"[NetworkedBall] Clamping velocity from {hitVelocity.magnitude:F1} to {maxSpeed}");
-            hitVelocity = hitVelocity.normalized * maxSpeed;
-        }
-
-        // Ensure some upward component so ball arcs nicely
-        if (hitVelocity.y < 0.5f)
-        {
-            hitVelocity.y = 0.5f;
-        }
-
         // Enable physics
         if (rb != null && rb.isKinematic)
         {
             rb.isKinematic = false;
         }
 
-        rb.velocity = hitVelocity;
-        localVelocity = hitVelocity;
+        // Simple velocity inversion: flip X, keep Y arc, preserve Z direction
+        Vector3 currentVel = rb.velocity;
+        Vector3 newVelocity = new Vector3(-1f, 1f, currentVel.z != 0 ? -currentVel.z : 1f);
+        rb.velocity = newVelocity;
+        localVelocity = newVelocity;
+
+        // // OLD: Complex physics-based velocity calculation
+        // // CLAMP velocity to prevent ball from flying off to infinity
+        // float maxSpeed = 8f; // Max 8 m/s - reasonable for table tennis in VR
+        // if (hitVelocity.magnitude > maxSpeed)
+        // {
+        //     Debug.Log($"[NetworkedBall] Clamping velocity from {hitVelocity.magnitude:F1} to {maxSpeed}");
+        //     hitVelocity = hitVelocity.normalized * maxSpeed;
+        // }
+        // // Ensure some upward component so ball arcs nicely
+        // if (hitVelocity.y < 0.5f)
+        // {
+        //     hitVelocity.y = 0.5f;
+        // }
+        // rb.velocity = hitVelocity;
+        // localVelocity = hitVelocity;
+
         IsInPlay = true;
         lastHitTime = Time.time;
 
-        // Notify game manager
+        // Notify game managers
         if (gameManager != null)
         {
             gameManager.OnBallHit(playerNumber);
         }
 
-        Debug.Log($"[NetworkedBall] Hit by player {playerNumber} - velocity: {hitVelocity}, speed: {hitVelocity.magnitude:F1}, ball pos: {transform.position}");
+        var passthroughManager = FindObjectOfType<PassthroughGameManager>();
+        if (passthroughManager != null)
+        {
+            passthroughManager.OnBallHit(playerNumber);
+        }
+
+        Debug.Log($"[NetworkedBall] Hit by player {playerNumber} - velocity: {newVelocity}, ball pos: {transform.position}");
     }
 
     /// <summary>
@@ -1075,19 +1083,19 @@ public class NetworkedBall : NetworkBehaviour
             collision.gameObject.layer == LayerMask.NameToLayer("Racket"))
         {
             Vector3 hitPoint = collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position;
-            Vector3 contactNormal = collision.contacts.Length > 0 ? collision.contacts[0].normal : collision.gameObject.transform.up;
-            Vector3 hitVelocity = CalculateRacketHitVelocity(collision.gameObject, collision.relativeVelocity, contactNormal);
+
+            // // OLD: Complex velocity calculation from racket physics
+            // Vector3 contactNormal = collision.contacts.Length > 0 ? collision.contacts[0].normal : collision.gameObject.transform.up;
+            // Vector3 hitVelocity = CalculateRacketHitVelocity(collision.gameObject, collision.relativeVelocity, contactNormal);
 
             if (Object.HasStateAuthority)
             {
-                // Host processes hit directly
-                OnRacketHit(hitVelocity, hitPoint);
+                OnRacketHit(Vector3.zero, hitPoint);
             }
             else
             {
-                // Client sends RPC to host
-                Debug.Log($"[NetworkedBall] CLIENT detected racket collision - sending RPC. Velocity: {hitVelocity}");
-                RPC_RequestHit(hitVelocity, hitPoint);
+                Debug.Log($"[NetworkedBall] CLIENT detected racket collision - sending RPC");
+                RPC_RequestHit(Vector3.zero, hitPoint);
             }
             return;
         }
@@ -1124,90 +1132,49 @@ public class NetworkedBall : NetworkBehaviour
         }
     }
 
-    /// <summary>
-    /// Calculate hit velocity from racket collision using WORLD SPACE physics.
-    /// Since both VR devices have aligned world coordinates through colocation,
-    /// all calculations use world space for accurate cross-device hit detection.
-    /// </summary>
-    private Vector3 CalculateRacketHitVelocity(GameObject racket, Vector3 relativeVelocity, Vector3 contactNormal)
-    {
-        // Get racket swing velocity in WORLD SPACE
-        Vector3 worldRacketVelocity = GetWorldSpaceRacketVelocity(racket);
-
-        // Racket face normal is already in world space (transform.up returns world direction)
-        Vector3 worldHitNormal = contactNormal;
-        if (worldHitNormal == Vector3.zero || worldHitNormal.magnitude < 0.1f)
-        {
-            worldHitNormal = racket.transform.up;
-        }
-
-        // Calculate hit direction based on swing
-        float swingSpeed = worldRacketVelocity.magnitude;
-        Vector3 swingDirection = swingSpeed > 0.1f ? worldRacketVelocity.normalized : worldHitNormal;
-
-        // Blend swing direction with racket face normal
-        Vector3 hitDirection;
-        if (swingSpeed > 0.5f)
-        {
-            // Strong swing - primarily use swing direction
-            hitDirection = (swingDirection * 0.8f + worldHitNormal * 0.2f).normalized;
-        }
-        else
-        {
-            // Weak swing - use racket face normal
-            hitDirection = worldHitNormal;
-        }
-
-        // Calculate final speed
-        float hitSpeed = Mathf.Clamp(swingSpeed * 1.5f, 2f, 8f);
-        Vector3 hitVelocity = hitDirection * hitSpeed;
-
-        // Ensure upward arc for table tennis (world Y axis)
-        if (hitVelocity.y < 0.5f)
-        {
-            hitVelocity.y = 0.5f + swingSpeed * 0.2f;
-        }
-
-        Debug.Log($"[NetworkedBall] Hit calc (world): swingSpeed={swingSpeed:F2}, hitSpeed={hitSpeed:F2}, dir={hitDirection}");
-
-        return hitVelocity;
-    }
-
-    /// <summary>
-    /// Get racket velocity in world space coordinates.
-    /// ControllerRacket now provides world-space velocity directly.
-    /// </summary>
-    private Vector3 GetWorldSpaceRacketVelocity(GameObject racket)
-    {
-        // ControllerRacket.GetRacketVelocity now returns world-space velocity
-        var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
-        if (controllerRacket != null)
-        {
-            return controllerRacket.GetRacketVelocity(racket);
-        }
-
-        // Rigidbody velocity is already in world space
-        Rigidbody racketRb = racket.GetComponent<Rigidbody>();
-        if (racketRb != null)
-        {
-            return racketRb.velocity;
-        }
-
-        // Fallback: Convert local controller velocity to world space
-        Vector3 localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
-        if (localVelocity.magnitude < 0.3f)
-        {
-            localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
-        }
-
-        Transform cameraRig = Camera.main?.transform.parent;
-        if (cameraRig != null)
-        {
-            return cameraRig.TransformDirection(localVelocity);
-        }
-
-        return localVelocity;
-    }
+    // // OLD: Complex physics-based racket hit velocity calculation (commented out - replaced by simple inversion in OnRacketHit)
+    // /// <summary>
+    // /// Calculate hit velocity from racket collision using WORLD SPACE physics.
+    // /// </summary>
+    // private Vector3 CalculateRacketHitVelocity(GameObject racket, Vector3 relativeVelocity, Vector3 contactNormal)
+    // {
+    //     Vector3 worldRacketVelocity = GetWorldSpaceRacketVelocity(racket);
+    //     Vector3 worldHitNormal = contactNormal;
+    //     if (worldHitNormal == Vector3.zero || worldHitNormal.magnitude < 0.1f)
+    //         worldHitNormal = racket.transform.up;
+    //     float swingSpeed = worldRacketVelocity.magnitude;
+    //     Vector3 swingDirection = swingSpeed > 0.1f ? worldRacketVelocity.normalized : worldHitNormal;
+    //     Vector3 hitDirection;
+    //     if (swingSpeed > 0.5f)
+    //         hitDirection = (swingDirection * 0.8f + worldHitNormal * 0.2f).normalized;
+    //     else
+    //         hitDirection = worldHitNormal;
+    //     float hitSpeed = Mathf.Clamp(swingSpeed * 1.5f, 2f, 8f);
+    //     Vector3 hitVelocity = hitDirection * hitSpeed;
+    //     if (hitVelocity.y < 0.5f)
+    //         hitVelocity.y = 0.5f + swingSpeed * 0.2f;
+    //     return hitVelocity;
+    // }
+    //
+    // /// <summary>
+    // /// Get racket velocity in world space coordinates.
+    // /// </summary>
+    // private Vector3 GetWorldSpaceRacketVelocity(GameObject racket)
+    // {
+    //     var controllerRacket = racket.GetComponentInParent<ControllerRacket>();
+    //     if (controllerRacket != null)
+    //         return controllerRacket.GetRacketVelocity(racket);
+    //     Rigidbody racketRb = racket.GetComponent<Rigidbody>();
+    //     if (racketRb != null)
+    //         return racketRb.velocity;
+    //     Vector3 localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.RTouch);
+    //     if (localVelocity.magnitude < 0.3f)
+    //         localVelocity = OVRInput.GetLocalControllerVelocity(OVRInput.Controller.LTouch);
+    //     Transform cameraRig = Camera.main?.transform.parent;
+    //     if (cameraRig != null)
+    //         return cameraRig.TransformDirection(localVelocity);
+    //     return localVelocity;
+    // }
 
     /// <summary>
     /// Called when ball hits the ground - triggers round end and authority switch
@@ -1291,19 +1258,19 @@ public class NetworkedBall : NetworkBehaviour
         if (other.CompareTag("Racket"))
         {
             Vector3 hitPoint = other.ClosestPoint(transform.position);
-            Vector3 contactNormal = other.transform.up; // Use racket face normal
-            Vector3 hitVelocity = CalculateRacketHitVelocity(other.gameObject, Vector3.zero, contactNormal);
+
+            // // OLD: Complex velocity calculation from racket physics
+            // Vector3 contactNormal = other.transform.up;
+            // Vector3 hitVelocity = CalculateRacketHitVelocity(other.gameObject, Vector3.zero, contactNormal);
 
             if (Object.HasStateAuthority)
             {
-                // Host processes hit directly
-                OnRacketHit(hitVelocity, hitPoint);
+                OnRacketHit(Vector3.zero, hitPoint);
             }
             else
             {
-                // Client sends RPC to host
-                Debug.Log($"[NetworkedBall] CLIENT detected racket trigger - sending RPC. Velocity: {hitVelocity}");
-                RPC_RequestHit(hitVelocity, hitPoint);
+                Debug.Log($"[NetworkedBall] CLIENT detected racket trigger - sending RPC");
+                RPC_RequestHit(Vector3.zero, hitPoint);
             }
             return;
         }
