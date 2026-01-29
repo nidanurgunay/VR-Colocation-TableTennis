@@ -44,6 +44,7 @@ public class PassthroughGameManager : NetworkBehaviour
     private bool isGameMenuOpen = false;
     private bool racketsVisible = true;
     private bool ballNeedsRespawn = false;
+    private int lastBallAuthority = 1; // Track last authority to swap on respawn (1=Host, 2=Client)
     
     // // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
     // private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
@@ -57,7 +58,6 @@ public class PassthroughGameManager : NetworkBehaviour
     private GameObject rightRacket;
     private GameObject runtimeMenuPanel;
     private GameObject gameUIPanel;
-    private TextMesh scoreText;
     private TextMesh roleText;          // Shows Client/Host
     private TextMesh phaseText;         // Shows current game phase
     private TextMesh authorityText;     // Shows active authority (Host Only / Your Turn / Opponent's Turn)
@@ -354,7 +354,6 @@ public class PassthroughGameManager : NetworkBehaviour
         if (runtimeMenuPanel != null) Destroy(runtimeMenuPanel);
 
         // Clear UI references
-        scoreText = null;
         roleText = null;
         phaseText = null;
         authorityText = null;
@@ -799,6 +798,12 @@ public class PassthroughGameManager : NetworkBehaviour
                 var networkedBall = ball.GetComponent<NetworkedBall>();
                 if (networkedBall != null)
                 {
+                    // Swap authority on respawn: alternate between Player 1 and Player 2
+                    int newAuthority = (lastBallAuthority == 1) ? 2 : 1;
+                    networkedBall.CurrentAuthority = newAuthority;
+                    lastBallAuthority = newAuthority;
+                    Debug.Log($"{LOG_TAG} SpawnBall Authority swapped to Player {newAuthority}");
+
                     // Disable the initialization coroutine from moving the ball
                     // CRITICAL: Pass table reference so TableRelativePosition can be set immediately
                     Debug.Log($"{LOG_TAG} SpawnBall Calling SetSpawnPosition to lock position at {spawnPos}, table={spawnedTable.name}");
@@ -863,7 +868,6 @@ public class PassthroughGameManager : NetworkBehaviour
             RPC_NotifyPhaseChange(GamePhase.BallPosition);
         }
 #endif
-        UpdateScoreDisplay();
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Ball hit ground - Phase: {currentPhase}, ready for next serve");
     }
@@ -875,7 +879,6 @@ public class PassthroughGameManager : NetworkBehaviour
     public void OnAuthorityChanged(int newAuthority)
     {
         Debug.Log($"{LOG_TAG} OnAuthorityChanged called - new authority: Player {newAuthority}");
-        UpdateScoreDisplay();
         UpdateInstructions();
     }
 
@@ -913,21 +916,6 @@ public class PassthroughGameManager : NetworkBehaviour
         }
 
         Debug.Log($"{LOG_TAG} EnsureBallPositionAfterInit: Complete. Final position: {ball.transform.position}");
-    }
-
-    /// <summary>
-    /// Update score display from NetworkedBall
-    /// </summary>
-    private void UpdateScoreDisplay()
-    {
-        if (scoreText == null || spawnedBall == null) return;
-
-        var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
-        if (networkedBall != null)
-        {
-            scoreText.text = $"{networkedBall.ScorePlayer1} - {networkedBall.ScorePlayer2}";
-            Debug.Log($"{LOG_TAG} Score updated: {scoreText.text}, Authority: Player {networkedBall.CurrentAuthority}");
-        }
     }
 
     /// <summary>
@@ -1019,7 +1007,6 @@ public class PassthroughGameManager : NetworkBehaviour
         currentPhase = GamePhase.BallPosition;
 
         // Update UI
-        UpdateScoreDisplay();
         UpdateInstructions();
 
         Debug.Log($"{LOG_TAG} Table adjustment confirmed by host - ball should now be visible at spawn position");
@@ -1082,6 +1069,9 @@ public class PassthroughGameManager : NetworkBehaviour
 #endif
             spawnedBall = null;
         }
+
+        // Reset authority tracking for fresh game
+        lastBallAuthority = 1;
 
         currentPhase = GamePhase.TableAdjust;
 #if FUSION2
@@ -1283,13 +1273,8 @@ public class PassthroughGameManager : NetworkBehaviour
             return tm;
         }
 
-        // NEW LAYOUT MATCHING TABLETENNISMANAGER:
-        // Top: Large Score (yellow)
-        scoreText = CreateText("ScoreText", new Vector3(0, 0.85f, -0.05f), 450, Color.yellow);
-        scoreText.text = "0 - 0";
-
-        // Role: Client/Host (green)
-        roleText = CreateText("RoleText", new Vector3(0, 0.5f, -0.05f), 180, Color.green);
+        // Role: Client/Host (green) - at top since score removed
+        roleText = CreateText("RoleText", new Vector3(0, 0.7f, -0.05f), 180, Color.green);
 #if FUSION2
         roleText.text = Object != null && Object.HasStateAuthority ? "HOST" : "CLIENT";
 #else

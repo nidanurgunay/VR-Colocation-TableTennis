@@ -7952,6 +7952,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 58ac8c0efef5f4363b38f2a91def7a40, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  isHost: 1
   popupCanvas: {fileID: 0}
   popupPanel: {fileID: 0}
   titleText: {fileID: 0}
@@ -23860,7 +23861,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Auto Align
+  m_text: Start Alignment
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
@@ -31315,7 +31316,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Start AR Game
+  m_text: Start Table Tennis
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}

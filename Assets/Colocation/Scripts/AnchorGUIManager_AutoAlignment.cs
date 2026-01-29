@@ -145,10 +145,17 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             passthroughGameManager = FindObjectOfType<PassthroughGameManager>();
         }
+
+#if FUSION2
+        // Cache NetworkRunner early if available
+        if (networkRunner == null)
+        {
+            networkRunner = FindObjectOfType<NetworkRunner>();
+        }
+#endif
         // Hide and disable the Start VR Game button (not currently used)
         if (startGameButton != null)
         {
-            Debug.Log($"{LOG_TAG} Hiding startGameButton (assigned in Inspector)");
             startGameButton.gameObject.SetActive(false);
             startGameButton = null;
         }
@@ -158,7 +165,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             var vrButton = GameObject.Find("StartGameButton") ?? GameObject.Find("Start VR Game") ?? GameObject.Find("StartVRGame");
             if (vrButton != null)
             {
-                Debug.Log($"{LOG_TAG} Hiding startGameButton found by name: {vrButton.name}");
                 vrButton.SetActive(false);
             }
         }
@@ -171,7 +177,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Initialize status text BEFORE UpdateAllUI to prevent "Ready to play!" showing at start
         if (guiStatusText != null)
         {
-            SetStatusText("Click Auto Align to start", "Start");
+            SetStatusText("Click Start Alignment to start", "Start");
         }
 
         UpdateAllUI();
@@ -210,7 +216,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         rightDistanceText.text = "";
         rightDistanceDisplay.SetActive(false);
 
-        Debug.Log($"{LOG_TAG} CreateDistanceDisplays: Created left={leftDistanceDisplay != null}, right={rightDistanceDisplay != null}");
     }
 
     private void UpdateAnchorText()
@@ -292,7 +297,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 #if FUSION2
         bool hasNetwork = networkRunner != null && networkRunner.IsRunning;
 
-        Debug.Log($"{LOG_TAG} UpdateButtonStates isHost={isHost} isAligned={isAligned} bothAligned={bothAligned} ClientAlignedToAnchors={ClientAlignedToAnchors} currentState={currentState}");
 
         // Debug mode: enable start buttons if host has network (skip alignment checks)
         bool debugModeEnabled = skipAlignmentForDebug && isHost && hasNetwork;
@@ -440,7 +444,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         }
     }
 
-    private bool IsAlignmentComplete()
+    public override bool IsAlignmentComplete()
     {
         // Check if THIS device is aligned (either host or client)
         bool thisDeviceAligned = currentState == ColocationState.HostAligned ||
@@ -493,7 +497,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 break;
 
             case ColocationState.PlaceAnchor1:
-                SetStatusText("Grip to place anchors.\n The table will be positioned between them and aligned to their direction.", "UpdateUIWizard");
+                SetStatusText("Grip to place anchors.\nThe table will appear between them, aligned to their direction. Recommended distance: 2.5 meters.", "UpdateUIWizard");
 
                 // Show progress based on anchors placed
                 int anchorsPlaced = currentAnchors != null ? currentAnchors.Count : 0;
@@ -528,6 +532,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 {
                     SetStatusText("Sharing Anchors...", "UpdateUIWizard");
                     btnText.text = "Sharing...";
+                    autoAlignButton.interactable = false;
                 }
                 else
                     btnText.text = "Discovering Anchors...";
@@ -558,7 +563,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                     // Host: show waiting until client has aligned
                     if (ClientAlignedToAnchors)
                     {
-                        SetStatusText("Client aligned to anchors.", "UpdateUIWizard");
+                        SetStatusText("Client aligned to anchors. You can start the colocation session.", "UpdateUIWizard");
                         btnText.text = "Both Aligned";
                         autoAlignButton.interactable = false;
                     }
@@ -591,6 +596,56 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private bool guiDiscoveryStarted = false;
     private float guiLastDiscoveryTime = 0f;
     private const float DISCOVERY_RETRY_INTERVAL = 15f; // Retry every 15 seconds if no anchors found
+    private ColocationState _lastKnownState = ColocationState.Idle; // Track state changes for event-driven UI updates
+    private bool _lastClientAlignedState = false; // Track ClientAlignedToAnchors changes
+    private bool _lastHostAnchorsSharedState = false; // Track HostAnchorsShared changes for client auto-discovery
+
+    /// <summary>
+    /// Called when colocation state changes - updates UI only when needed (event-driven)
+    /// </summary>
+    private void OnStateChanged(ColocationState newState)
+    {
+        if (_lastKnownState == newState) return;
+
+        _lastKnownState = newState;
+
+        // Update all UI components on state change
+        UpdateStatusIndicator();
+        UpdateButtonStates();
+        UpdateAnchorText();
+        UpdateUIWizard();
+    }
+
+    /// <summary>
+    /// Check if state has changed and trigger UI update if needed
+    /// </summary>
+    private void CheckStateChanged()
+    {
+        if (currentState != _lastKnownState)
+        {
+            OnStateChanged(currentState);
+        }
+
+#if FUSION2
+        // Also check if ClientAlignedToAnchors changed
+        if (_lastClientAlignedState != ClientAlignedToAnchors)
+        {
+            _lastClientAlignedState = ClientAlignedToAnchors;
+            UpdateButtonStates();
+            UpdateUIWizard();
+        }
+
+        // Check if HostAnchorsShared changed - trigger client discovery automatically
+        if (!isHost && _lastHostAnchorsSharedState != HostAnchorsShared)
+        {
+            _lastHostAnchorsSharedState = HostAnchorsShared;
+            if (HostAnchorsShared && !guiDiscoveryStarted)
+            {
+                TryStartClientDiscovery();
+            }
+        }
+#endif
+    }
 
     private void Update()
     {
@@ -617,94 +672,78 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Don't access networked properties if not spawned
         if (!Object.IsValid) return;
 
-        UpdateStatusIndicator();
-        UpdateButtonStates();
-        UpdateAnchorText(); // Update anchor status display every frame for real-time feedback
+        // Event-driven UI updates - only update when state changes (not every frame)
+        CheckStateChanged();
+    }
 
-        try
-        {
-
+    /// <summary>
+    /// Called when HostAnchorsShared networked property changes - triggers client discovery
+    /// </summary>
+    private void OnHostAnchorsSharedChanged()
+    {
 #if FUSION2
-            // Auto-detect role and update UI text for Client
-            if (networkRunner == null) networkRunner = FindObjectOfType<NetworkRunner>();
+        if (isHost) return; // Only clients need to respond
 
-            if (networkRunner != null && networkRunner.IsRunning)
-            {
-                // Update role variable - ALWAYS update based on actual network role
-                bool localIsHost = networkRunner.IsServer || networkRunner.IsSharedModeMasterClient;
 
-                // Update isHost if it doesn't match the actual network role
-                if (isHost != localIsHost)
-                {
-                    isHost = localIsHost;
-                    UpdateUIWizard();
-                }
-
-                // If we are a client and NOT aligned yet, handle discovery
-                if (!localIsHost && currentState != ColocationState.Done && currentState != ColocationState.ClientAligned)
-                {
-                    // Client-specific UI updates
-                    if (guiStatusText != null && !guiStatusText.text.Contains("Client Mode"))
-                    {
-                        SetStatusText("Client Mode\nSearching for host session...", "Update-Client");
-                    }
-
-                    // Auto-start or retry discovery if not aligned
-                    // BUT skip if we already have 2 anchors localized
-                    if (!IsAlignmentComplete() && guiClientLocalizedAnchorCount < 2)
-                    {
-                        // FAST PATH: Check if host has shared anchors via network (no discovery needed)
-                        if (HostAnchorsShared && !string.IsNullOrEmpty(SharedAnchorGroupUuidString.ToString()))
-                        {
-                            if (!guiDiscoveryStarted)
-                            {
-                                guiDiscoveryStarted = true;
-                                guiLastDiscoveryTime = Time.time;
-
-                                // Parse the UUID from networked string
-                                if (Guid.TryParse(SharedAnchorGroupUuidString.ToString(), out Guid groupUuid))
-                                {
-                                    _sharedAnchorGroupId = groupUuid;
-                                    LoadAndAlignToAnchor(groupUuid);
-                                }
-                                else
-                                {
-                                    // Failed to parse UUID
-                                }
-                            }
-                        }
-                        // FALLBACK: Use OVR discovery (slower but works without network sync)
-                        else if (!guiDiscoveryStarted || (Time.time - guiLastDiscoveryTime > DISCOVERY_RETRY_INTERVAL))
-                        {
-
-                            // Show status on UI
-                            if (guiStatusText != null && !guiStatusText.text.Contains("Loading"))
-                            {
-                                SetStatusText("Client Mode\nSearching for host...\n\nMake sure host has:\n1. Placed 2 anchors\n2. Shared them", "Update-Discovery");
-                            }
-
-                            guiDiscoveryStarted = true;
-                            guiLastDiscoveryTime = Time.time;
-                            PrepareColocation();
-                        }
-                    }
-                }
-                // No need for explicit host handling here - isHost is updated above for both host and client
-            }
-            else if (networkRunner == null)
-            {
-                // Show "Connecting..." state
-                if (guiStatusText != null && !guiStatusText.text.Contains("Connect"))
-                {
-                    SetStatusText("Connecting to network...", "Update-Network");
-                }
-            }
-#endif
-        }
-        catch (System.Exception e)
+        if (HostAnchorsShared && !guiDiscoveryStarted)
         {
-            Debug.LogError($"[AnchorGUIManager Update (general)] Error in Update(): {e.Message}\n{e.StackTrace}");
+            TryStartClientDiscovery();
         }
+#endif
+    }
+
+    /// <summary>
+    /// Attempt to start client discovery using shared anchor UUID
+    /// Called from OnAutoAlignClicked or when HostAnchorsShared changes
+    /// </summary>
+    private void TryStartClientDiscovery()
+    {
+#if FUSION2
+        if (IsAlignmentComplete() || guiClientLocalizedAnchorCount >= 2)
+        {
+            return;
+        }
+
+        // FAST PATH: Check if host has shared anchors via network
+        if (HostAnchorsShared && !string.IsNullOrEmpty(SharedAnchorGroupUuidString.ToString()))
+        {
+            guiDiscoveryStarted = true;
+            guiLastDiscoveryTime = Time.time;
+
+            // Parse the UUID from networked string
+            if (Guid.TryParse(SharedAnchorGroupUuidString.ToString(), out Guid groupUuid))
+            {
+                SetStatusText("Loading shared anchors...", "ClientDiscovery");
+                _sharedAnchorGroupId = groupUuid;
+                LoadAndAlignToAnchor(groupUuid);
+            }
+            else
+            {
+                Debug.LogWarning($"{LOG_TAG} TryStartClientDiscovery: Failed to parse UUID");
+                // Fall back to OVR discovery
+                StartOvrDiscovery();
+            }
+        }
+        else
+        {
+            // FALLBACK: Use OVR discovery
+            StartOvrDiscovery();
+        }
+#endif
+    }
+
+    /// <summary>
+    /// Start OVR-based anchor discovery (slower fallback)
+    /// </summary>
+    private void StartOvrDiscovery()
+    {
+#if FUSION2
+        SetStatusText("Client Mode\nSearching for host...\n\nMake sure host has:\n1. Placed 2 anchors\n2. Shared them", "OvrDiscovery");
+
+        guiDiscoveryStarted = true;
+        guiLastDiscoveryTime = Time.time;
+        PrepareColocation();
+#endif
     }
 
     private async void OnAutoAlignClicked()
@@ -732,8 +771,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             _ = OVRColocationSession.StopDiscoveryAsync();
             guiDiscoveryStarted = false;
             guiLastDiscoveryTime = 0f;
-            // Start fresh discovery
-            PrepareColocation();
+
+            // Set client status text once (not per-frame)
+            SetStatusText("Client Mode\nSearching for host session...", "OnAutoAlignClicked-Client");
+
+            // Start fresh discovery using the new method
+            TryStartClientDiscovery();
             return;
         }
 
@@ -985,10 +1028,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             // Check distance from first anchor
             float distance = Vector3.Distance(firstAnchorWorldPosition, anchorPosition);
 
-            if (distance < 0.3f)
+            if (distance < 0.5f)
             {
                 isPlacingAnchor = false; // Allow retry
-                SetStatusText("Anchors must be at least 0.3 meters apart. Please move further away and try again.", "PlaceAnchorAtController");
+                SetStatusText("Anchors must be at least 0.5 meters apart. Please move further away and try again.", "PlaceAnchorAtController");
                 return;
             }
 
@@ -1064,7 +1107,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     protected override void RPC_NotifyClientAligned()
     {
-        Debug.Log("[AnchorGUIManager RPC_NotifyClientAligned (network)] HOST received: Client has aligned to anchors");
         ClientAlignedToAnchors = true;
 
         // Only set to Done when BOTH host and client are aligned
@@ -1102,7 +1144,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyBothAligned()
     {
-        Debug.Log("[AnchorGUIManager RPC_NotifyBothAligned (network)] Received: Both devices are aligned");
 
         // Update state to Done on all clients
         currentState = ColocationState.Done;
@@ -1123,8 +1164,20 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     public override void Spawned()
     {
         base.Spawned();
+
+#if FUSION2
+        // Cache NetworkRunner on spawn (one-time lookup)
+        if (networkRunner == null)
+        {
+            networkRunner = Runner;
+        }
+
+        // Detect role once on spawn - role doesn't change mid-session
         isHost = Object.HasStateAuthority;
+#endif
+
         UpdateStatusIndicator();
+        UpdateUIWizard();
         // Do NOT auto-start colocation/alignment here
     }
 
@@ -1145,7 +1198,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             // Log status text changes for debugging
             if (oldText != text)
             {
-                Debug.Log($"{LOG_TAG} [STATUS] {source} changed status: '{oldText}' -> '{text}'");
             }
         }
         UpdateStatusIndicator();
@@ -1187,57 +1239,23 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
 
-        // Log camera rig position - this shows if alignment was applied
-        var cameraRig = FindObjectOfType<OVRCameraRig>();
-        if (cameraRig != null)
-        {
-            Debug.Log($"[SPAWN DEBUG] CameraRig position: {cameraRig.transform.position}, rotation: {cameraRig.transform.eulerAngles}");
-        }
-        
-        // Log anchor position
-        if (_localizedAnchor != null)
-        {
-            Debug.Log($"[SPAWN DEBUG] _localizedAnchor: {_localizedAnchor.name}, UUID: {_localizedAnchor.Uuid}");
-            Debug.Log($"[SPAWN DEBUG] Anchor world pos: {_localizedAnchor.transform.position}, rot: {_localizedAnchor.transform.eulerAngles}");
-        }
-        else
-        {
-            Debug.LogError("[SPAWN DEBUG] _localizedAnchor is NULL!");
-        }
-
         // Get controller position and convert to anchor-relative
         Vector3 worldPos = GetControllerSpawnPosition();
         Vector3 anchorRelativePos = worldPos;
-        
-        Debug.Log($"[SPAWN DEBUG] Controller spawn position (world): {worldPos}");
 
         if (_localizedAnchor != null && _localizedAnchor.Localized)
         {
             anchorRelativePos = _localizedAnchor.transform.InverseTransformPoint(worldPos);
-            Debug.Log($"[SPAWN DEBUG] Anchor-relative pos: {anchorRelativePos}");
-            
-            // Verify: convert back to world to check consistency
-            Vector3 verifyWorldPos = _localizedAnchor.transform.TransformPoint(anchorRelativePos);
-            Debug.Log($"[SPAWN DEBUG] Verify (back to world): {verifyWorldPos}");
-        }
-        else
-        {
-            Debug.LogWarning("[SPAWN DEBUG] No localized anchor! Using world position directly.");
         }
 
-        // Request spawn via RPC if not host
         if (!Object.HasStateAuthority)
         {
-            Debug.Log("[SPAWN DEBUG] CLIENT: Sending RPC_RequestSpawnCube to host");
             RPC_RequestSpawnCube(anchorRelativePos);
         }
         else
         {
-            Debug.Log("[SPAWN DEBUG] HOST: Calling SpawnCubeAtAnchorPosition directly");
             SpawnCubeAtAnchorPosition(anchorRelativePos);
         }
-
-        Debug.Log("=== [SPAWN CUBE DEBUG END] ===");
 #else
 #endif
     }
@@ -1254,7 +1272,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         // Clear existing cube first (limit to 1)
         if (spawnedCube != null && Runner != null)
         {
-            Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition] Despawning existing cube: {spawnedCube.Id}");
             Runner.Despawn(spawnedCube);
             spawnedCube = null;
         }
@@ -1265,9 +1282,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
 
-        // SIMPLIFIED: Spawn at world position - NetworkedCube handles sync via world position
         Vector3 worldPos = _localizedAnchor.transform.TransformPoint(anchorRelativePos);
-        Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition] Spawning at world pos: {worldPos}");
 
         var newCube = Runner.Spawn(
             cubePrefab,
@@ -1278,29 +1293,21 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (newCube != null)
         {
-            // DON'T parent to anchor - NetworkedCube uses world position sync
             newCube.transform.localScale = Vector3.one * cubeScale;
             spawnedCube = newCube;
-            Debug.Log($"[AnchorGUIManager SpawnCubeAtAnchorPosition] Cube spawned at world pos: {worldPos}, NetworkId: {newCube.Id}");
         }
         else
         {
-            Debug.LogError("[AnchorGUIManager SpawnCubeAtAnchorPosition] Failed to spawn cube!");
+            Debug.LogError("[AnchorGUIManager] Failed to spawn cube");
         }
     }
 
     private void DespawnAllCubesOnHost()
     {
-        // Only the host (state authority) should despawn networked cubes
         if (!Object.HasStateAuthority || Runner == null || !Runner.IsRunning)
-        {
-            Debug.Log("[AnchorGUIManager DespawnAllCubesOnHost (cube)] Not host or runner not ready, cannot despawn cubes");
             return;
-        }
 
-        // Find and despawn all NetworkedCube objects via Fusion
         var allCubes = FindObjectsOfType<NetworkedCube>();
-        Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost (cube)] Host despawning {allCubes.Length} cubes via network");
 
         foreach (var cube in allCubes)
         {
@@ -1311,13 +1318,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
             if (cube.Object != null && cube.Object.IsValid)
             {
-                Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost (cube)] Despawning cube via Runner: {cube.Object.Id}");
                 Runner.Despawn(cube.Object);
             }
             else
             {
-                // NetworkObject is not valid - destroy GameObject directly
-                Debug.LogWarning($"[AnchorGUIManager DespawnAllCubesOnHost (cube)] Cube has invalid NetworkObject, destroying GameObject directly: {cube.gameObject.name}");
                 Destroy(cube.gameObject);
             }
         }
@@ -1340,7 +1344,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             }
             foreach (var obj in childrenToDestroy)
             {
-                Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost] Destroying orphaned cube child: {obj.name}");
                 obj.transform.SetParent(null);
                 Destroy(obj);
             }
@@ -1352,32 +1355,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestDespawnAllCubes()
     {
-        Debug.Log("[AnchorGUIManager RPC_RequestDespawnAllCubes (cube)] Host received request to despawn all cubes");
         DespawnAllCubesOnHost();
     }
 
-    /// <summary>
-    /// Public method to despawn all cubes - can be called by other managers (e.g., PassthroughGameManager)
-    /// Handles both host and client cases properly
-    /// </summary>
     public void DespawnAllCubes()
     {
-        Debug.Log("[AnchorGUIManager DespawnAllCubes] Despawning all cubes");
-
         if (Runner == null || !Runner.IsRunning)
-        {
-            Debug.LogWarning("[AnchorGUIManager DespawnAllCubes] Runner not available");
             return;
-        }
 
         if (Object.HasStateAuthority)
-        {
             DespawnAllCubesOnHost();
-        }
         else
-        {
             RPC_RequestDespawnAllCubes();
-        }
     }
 #endif
 
@@ -1401,8 +1390,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             }
             else
             {
-                // Client: request host to despawn cubes
-                Debug.Log("[AnchorGUIManager OnResetClicked (cube)] Client requesting host to despawn cubes");
                 RPC_RequestDespawnAllCubes();
             }
         }
@@ -1413,7 +1400,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             if (anchor != null)
             {
-                Debug.Log($"[AnchorGUIManager OnResetClicked (reset)] Destroying anchor: {anchor.Uuid}");
                 Destroy(anchor.gameObject);
             }
         }
@@ -1428,7 +1414,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             cameraRig.transform.position = Vector3.zero;
             cameraRig.transform.rotation = Quaternion.identity;
-            Debug.Log("[AnchorGUIManager OnResetClicked (reset)] Camera rig reset to origin");
         }
 
         // Reset state
@@ -1446,6 +1431,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         guiDiscoveryStarted = false;
         guiLastDiscoveryTime = 0f;
         guiClientLocalizedAnchorCount = 0;
+
+        // Reset event-driven state tracking
+        _lastKnownState = ColocationState.Idle;
+        _lastClientAlignedState = false;
+        _lastHostAnchorsSharedState = false;
 
         // Hide all placement UI
         if (leftDistanceDisplay != null) leftDistanceDisplay.SetActive(false);
@@ -1545,7 +1535,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestStartGame()
     {
-        Debug.Log("[AnchorGUIManager RPC_RequestStartGame (network)] Host received request to start game - loading scene for all");
         LoadTableTennisSceneNetworked();
     }
 
@@ -1553,7 +1542,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_PrepareForSceneTransition()
     {
-        Debug.Log("[AnchorGUIManager RPC_PrepareForSceneTransition (network)] Received scene transition notification - cleaning up and preserving anchors");
 
         // Cleanup passthrough objects to prevent duplicates in VR scene
         CleanupPassthroughObjects();
@@ -1566,39 +1554,29 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     /// Cleanup passthrough-specific objects before switching to VR scene
     private void CleanupPassthroughObjects()
     {
-        Debug.Log("[Passthrough] Cleaning up passthrough objects before VR scene switch...");
-
-        // Destroy passthrough table
         if (spawnedPassthroughTable != null)
         {
-            Debug.Log($"[Passthrough] Destroying passthrough table: {spawnedPassthroughTable.name}");
             Destroy(spawnedPassthroughTable);
             spawnedPassthroughTable = null;
         }
 
-        // Destroy passthrough ball
         if (spawnedBall != null)
         {
-            Debug.Log($"[Passthrough] Destroying passthrough ball: {spawnedBall.name}");
             Destroy(spawnedBall);
             spawnedBall = null;
         }
 
-        // Destroy passthrough rackets (local)
         if (leftRacket != null)
         {
-            Debug.Log($"[Passthrough] Destroying left racket");
             Destroy(leftRacket);
             leftRacket = null;
         }
         if (rightRacket != null)
         {
-            Debug.Log($"[Passthrough] Destroying right racket");
             Destroy(rightRacket);
             rightRacket = null;
         }
 
-        // Destroy remote rackets
         if (remoteLeftRacket != null)
         {
             Destroy(remoteLeftRacket);
@@ -1610,17 +1588,13 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             remoteRightRacket = null;
         }
 
-        // Destroy passthrough UI panel
         if (passthroughGameUIPanel != null)
         {
             Destroy(passthroughGameUIPanel);
             passthroughGameUIPanel = null;
         }
 
-        // Reset state
         passthroughPhase = PassthroughGamePhase.Idle;
-
-        Debug.Log("[Passthrough] Passthrough cleanup complete");
     }
 
 
@@ -1630,7 +1604,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     {
         if (Runner != null && Runner.IsRunning)
         {
-            Debug.Log($"[AnchorGUIManager LoadTableTennisSceneNetworked (scene)] Host loading networked scene: {tableTennisSceneName}");
 
             // Notify ALL clients to preserve their anchors BEFORE scene loads
             RPC_PrepareForSceneTransition();
@@ -1677,36 +1650,18 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         
         foreach (var table in existingTables)
         {
-            if (table != null && table.scene.name != "DontDestroyOnLoad") // Don't destroy preserved objects
-            {
-                Debug.Log($"[AnchorGUIManager PreserveObjectsForSceneTransition (scene)] Destroying existing table: {table.name}");
+            if (table != null && table.scene.name != "DontDestroyOnLoad")
                 Destroy(table);
-            }
         }
 
-        // Preserve the localized anchor (this is crucial for alignment in new scene)
         if (_localizedAnchor != null)
-        {
-            Debug.Log($"[AnchorGUIManager PreserveObjectsForSceneTransition (scene)] Preserving localized anchor: {_localizedAnchor.Uuid}, world pos: {_localizedAnchor.transform.position}");
             DontDestroyOnLoad(_localizedAnchor.gameObject);
-            Debug.Log($"[AnchorGUIManager PreserveObjectsForSceneTransition (scene)] Preserved anchor for scene transition: {_localizedAnchor.Uuid}");
-        }
-        else
-        {
-            Debug.LogWarning("[AnchorGUIManager PreserveObjectsForSceneTransition (scene)] No localized anchor to preserve!");
-        }
 
-        // Also preserve all tracked anchors
         foreach (var anchor in currentAnchors)
         {
             if (anchor != null && anchor.gameObject != null)
-            {
-                Debug.Log($"[AnchorGUIManager PreserveObjectsForSceneTransition (scene)] Preserving tracked anchor: {anchor.Uuid}, world pos: {anchor.transform.position}");
                 DontDestroyOnLoad(anchor.gameObject);
-            }
         }
-        
-        Debug.Log($"[AnchorGUIManager PreserveObjectsForSceneTransition (scene)] Total anchors preserved: {(currentAnchors?.Count ?? 0) + (_localizedAnchor != null ? 1 : 0)}");
     }
 
 
@@ -1719,8 +1674,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         if (cameraRig != null && cameraRig.rightControllerAnchor != null)
         {
             Transform rightHand = cameraRig.rightControllerAnchor;
-            // Use actual controller position (waist level) - no Y manipulation
-            Debug.Log($"[Anchor] Placing anchor at waist level, position: {rightHand.position}");
             return rightHand.position;
         }
 
@@ -1793,26 +1746,15 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             // Sort anchors by UUID for consistent ordering (even in debug mode)
             SortAnchorsConsistently();
 
-            // Perform local alignment as if anchors were shared
             _localizedAnchor = currentAnchors[0];
-
-            // Log anchor positions BEFORE alignment
-            Debug.Log($"[Anchor] DEBUG Pre-align Anchor1: {currentAnchors[0].transform.position} UUID: {currentAnchors[0].Uuid}");
-            Debug.Log($"[Anchor] DEBUG Pre-align Anchor2: {currentAnchors[1].transform.position} UUID: {currentAnchors[1].Uuid}");
-
             alignmentManager.AlignUserToTwoAnchors(currentAnchors[0], currentAnchors[1]);
 
-            // Store anchor positions and mark alignment complete
             FirstAnchorPosition = currentAnchors[0].transform.position;
             SecondAnchorPosition = currentAnchors[1].transform.position;
             FirstAnchorUuid = currentAnchors[0].Uuid;
             SecondAnchorUuid = currentAnchors[1].Uuid;
             AlignmentCompletedStatic = true;
-
-            // Set state to indicate we're "aligned" for UI purposes
             currentState = ColocationState.HostAligned;
-
-            Debug.Log($"[Anchor] DEBUG Stored positions: Anchor1={FirstAnchorPosition}, Anchor2={SecondAnchorPosition}");
 
             return;
         }
