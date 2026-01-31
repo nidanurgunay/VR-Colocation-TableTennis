@@ -41,7 +41,6 @@ public class PassthroughGameManager : NetworkBehaviour
 
     // State (using shared GamePhase enum from GamePhaseDefinitions.cs)
     private bool isActive = false;
-    private bool isGameMenuOpen = false;
     private bool racketsVisible = true;
     private bool ballNeedsRespawn = false;
     private int lastBallAuthority = 1; // Track last authority to swap on respawn (1=Host, 2=Client)
@@ -57,7 +56,6 @@ public class PassthroughGameManager : NetworkBehaviour
     private GameObject spawnedBall;
     private GameObject leftRacket;
     private GameObject rightRacket;
-    private GameObject runtimeMenuPanel;
     private GameObject gameUIPanel;
     private TextMesh roleText;          // Shows Client/Host
     private TextMesh roundText;         // Shows current round number
@@ -352,7 +350,6 @@ public class PassthroughGameManager : NetworkBehaviour
     {
         isActive = false;
         currentPhase = GamePhase.Idle;
-        isGameMenuOpen = false;
         Time.timeScale = 1.0f;
 
         // Cleanup spawned objects
@@ -393,7 +390,6 @@ public class PassthroughGameManager : NetworkBehaviour
 
         // Cleanup UI
         if (gameUIPanel != null) Destroy(gameUIPanel);
-        if (runtimeMenuPanel != null) Destroy(runtimeMenuPanel);
 
         // Clear UI references
         roleText = null;
@@ -431,19 +427,6 @@ public class PassthroughGameManager : NetworkBehaviour
 
     private void HandleInput()
     {
-        // MENU button - toggle game menu
-        if (OVRInput.GetDown(OVRInput.Button.Start))
-        {
-            ToggleGameMenu();
-            return;
-        }
-
-        if (isGameMenuOpen)
-        {
-            HandleMenuInput();
-            return;
-        }
-
         // B/Y button - (racket visibility now handled by ControllerRacket component)
         bool bPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
         bool yPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
@@ -552,33 +535,6 @@ public class PassthroughGameManager : NetworkBehaviour
         // No need for additional logic here - NetworkedBall handles thumbstick input directly
     }
 
-    private void HandleMenuInput()
-    {
-        bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
-        bool bPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
-        bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch);
-        bool yPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
-
-        // GRIP = Return to main AnchorGUI menu for game mode selection
-        bool gripPressed = OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
-                          OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger);
-
-        // A/X = Resume
-        if (aPressed || xPressed)
-        {
-            ToggleGameMenu();
-        }
-        // B/Y = Restart
-        else if (bPressed || yPressed)
-        {
-            RestartGame();
-        }
-        // GRIP = Return to main menu for game mode selection
-        else if (gripPressed)
-        {
-            ReturnToMainMenu();
-        }
-    }
 
     // ==================== TABLE MANAGEMENT ====================
 
@@ -776,46 +732,22 @@ public class PassthroughGameManager : NetworkBehaviour
             return;
         }
 
-        // Calculate table surface position (top center of table)
-        // FIX: Use TransformPoint to convert local center to world space
-        // The table is parented to the anchor, so we need proper world space calculation
-        Vector3 tableSurfacePos;
-
-        // Try to get table bounds to find actual surface height
-        Renderer tableRenderer = spawnedTable.GetComponentInChildren<Renderer>();
-        if (tableRenderer != null)
+        // Calculate spawn position: 0.5m above the world-space midpoint of the two anchors
+        var anchors = mainManager?.GetCurrentAnchors();
+        Vector3 anchorMidpoint;
+        if (anchors != null && anchors.Count >= 2)
         {
-            // Use bounds to find the TOP of the table (max Y of mesh bounds)
-            // Bounds are already in world space
-            Bounds bounds = tableRenderer.bounds;
-            tableSurfacePos = bounds.center;
-            tableSurfacePos.y = bounds.max.y; // Top of the table
-            Debug.Log($"{LOG_TAG} SpawnBall Using table renderer bounds - Center: {bounds.center}, Max Y: {bounds.max.y}, Surface: {tableSurfacePos}");
+            anchorMidpoint = (anchors[0].transform.position + anchors[1].transform.position) / 2f;
         }
         else
         {
-            // Fallback: Calculate world position manually from local position
-            // Get the anchor parent transform
-            Transform anchorTransform = spawnedTable.transform.parent;
-            if (anchorTransform != null)
-            {
-                // Convert local position to world space via parent transform
-                tableSurfacePos = anchorTransform.TransformPoint(spawnedTable.transform.localPosition);
-                tableSurfacePos.y += defaultTableHeight;
-                Debug.LogWarning($"{LOG_TAG} SpawnBall No renderer found, using anchor.TransformPoint + default height: {tableSurfacePos}");
-            }
-            else
-            {
-                // No parent - use world position directly
-                tableSurfacePos = spawnedTable.transform.position;
-                tableSurfacePos.y += defaultTableHeight;
-                Debug.LogWarning($"{LOG_TAG} SpawnBall No anchor parent, using table world position + default height: {tableSurfacePos}");
-            }
+            // Fallback to table world position if anchors unavailable
+            anchorMidpoint = spawnedTable.transform.position;
+            Debug.LogWarning($"{LOG_TAG} SpawnBall Not enough anchors, falling back to table position: {anchorMidpoint}");
         }
 
-        // Spawn ball 0.75m above table surface
-        Vector3 spawnPos = tableSurfacePos + Vector3.up * 0.75f;
-        Debug.Log($"{LOG_TAG} SpawnBall FINAL - Table local pos: {spawnedTable.transform.localPosition}, Table world pos: {spawnedTable.transform.position}, Surface: {tableSurfacePos}, Ball spawn: {spawnPos}");
+        Vector3 spawnPos = anchorMidpoint + Vector3.up * 0.5f;
+        Debug.Log($"{LOG_TAG} SpawnBall FINAL - Anchor midpoint: {anchorMidpoint}, Ball spawn (midpoint + 0.5 up): {spawnPos}");
 
 #if FUSION2
         if (Object.HasStateAuthority && Runner != null)
@@ -1131,9 +1063,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
     private void RestartGame()
     {
-        isGameMenuOpen = false;
         Time.timeScale = 1.0f;
-        if (runtimeMenuPanel != null) runtimeMenuPanel.SetActive(false);
 
         // Cleanup ball
         if (spawnedBall != null)
@@ -1235,54 +1165,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
     // ==================== UI ====================
 
-    private void ToggleGameMenu()
-    {
-        isGameMenuOpen = !isGameMenuOpen;
 
-        if (isGameMenuOpen)
-        {
-            ShowGameMenu();
-        }
-        else if (runtimeMenuPanel != null)
-        {
-            runtimeMenuPanel.SetActive(false);
-        }
-
-        Debug.Log($"{LOG_TAG} Menu {(isGameMenuOpen ? "opened" : "closed")}");
-    }
-
-    private void ShowGameMenu()
-    {
-        if (runtimeMenuPanel == null)
-        {
-            CreateMenuPanel();
-        }
-        runtimeMenuPanel.SetActive(true);
-    }
-
-    private void CreateMenuPanel()
-    {
-        var cam = Camera.main;
-        if (cam == null) return;
-
-        runtimeMenuPanel = new GameObject("PassthroughGameMenu");
-        Vector3 menuPosition = cam.transform.position + cam.transform.forward * 1.5f;
-        menuPosition.y += 1.0f; // Move GUI higher on Y axis
-        runtimeMenuPanel.transform.position = menuPosition;
-        runtimeMenuPanel.transform.rotation = Quaternion.LookRotation(
-            runtimeMenuPanel.transform.position - cam.transform.position);
-
-        // Create menu text
-        var textGO = new GameObject("MenuText");
-        textGO.transform.SetParent(runtimeMenuPanel.transform, false);
-        var textMesh = textGO.AddComponent<TextMesh>();
-        textMesh.text = "GAME MENU\n\nA/X: Resume\nB/Y: Restart\nGRIP: Switch to VR Game\nStick Down: Exit";
-        textMesh.fontSize = 40; // Increased from 32
-        textMesh.characterSize = 0.025f; // Increased from 0.02f
-        textMesh.anchor = TextAnchor.MiddleCenter;
-        textMesh.alignment = TextAlignment.Center;
-        textMesh.color = new Color(0.1f, 0.1f, 0.6f); // Dark blue instead of white
-    }
 
     private void CreateGameUI()
     {
@@ -1440,19 +1323,10 @@ public class PassthroughGameManager : NetworkBehaviour
                 break;
 
             case GamePhase.BallPosition:
-                // BallPosition: Show current turn owner
-                if (ballAuthority > 0)
+                if (ballAuthority > 0 && isLocalPlayerAuthority)
                 {
-                    if (isLocalPlayerAuthority)
-                    {
-                        authorityText.text = "YOUR SERVE";
-                        authorityText.color = Color.yellow;
-                    }
-                    else
-                    {
-                        authorityText.text = $"OPPONENT'S SERVE (P{ballAuthority})";
-                        authorityText.color = Color.gray;
-                    }
+                    authorityText.text = "YOUR SERVE";
+                    authorityText.color = Color.yellow;
                 }
                 else
                 {
@@ -1482,19 +1356,10 @@ public class PassthroughGameManager : NetworkBehaviour
                 break;
 
             case GamePhase.Playing:
-                // Playing: Show whose turn it is
-                if (ballAuthority > 0)
+                if (ballAuthority > 0 && isLocalPlayerAuthority)
                 {
-                    if (isLocalPlayerAuthority)
-                    {
-                        authorityText.text = "YOUR TURN";
-                        authorityText.color = Color.yellow;
-                    }
-                    else
-                    {
-                        authorityText.text = $"OPPONENT'S TURN (P{ballAuthority})";
-                        authorityText.color = Color.gray;
-                    }
+                    authorityText.text = "YOUR TURN";
+                    authorityText.color = Color.yellow;
                 }
                 else
                 {
@@ -1502,7 +1367,6 @@ public class PassthroughGameManager : NetworkBehaviour
                     authorityText.color = Color.white;
                 }
                 if (controlsText) controlsText.text =
-                    "[MENU] Pause Game\n" +
                     "[A/X] Reset Ball";
                 break;
 

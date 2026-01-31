@@ -818,16 +818,20 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 break;
 
             case ColocationState.ReadyToShare:
-                // Share
-                PrepareColocation(); 
-                UpdateUIWizard();
+                // Disable button and show sharing state immediately
+                autoAlignButton.interactable = false;
+                var readyBtnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+                if (readyBtnText != null) readyBtnText.text = "Sharing...";
+                PrepareColocation();
                 break;
 
             case ColocationState.ShareFailed:
                 // Retry sharing
                 currentState = ColocationState.ReadyToShare;
-                PrepareColocation(); // Triggers ShareAnchors()
-                UpdateUIWizard();
+                autoAlignButton.interactable = false;
+                var retryBtnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+                if (retryBtnText != null) retryBtnText.text = "Sharing...";
+                PrepareColocation();
                 break;
 
             case ColocationState.HostAligned:
@@ -835,8 +839,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 if (!ClientAlignedToAnchors)
                 {
                     currentState = ColocationState.ReadyToShare;
-                    PrepareColocation(); // Triggers ShareAnchors()
-                    UpdateUIWizard();
+                    autoAlignButton.interactable = false;
+                    var readvBtnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+                    if (readvBtnText != null) readvBtnText.text = "Sharing...";
+                    PrepareColocation();
                 }
                 break;
 
@@ -845,8 +851,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 if (!ClientAlignedToAnchors)
                 {
                     currentState = ColocationState.ReadyToShare;
-                    PrepareColocation(); // Triggers ShareAnchors()
-                    UpdateUIWizard();
+                    autoAlignButton.interactable = false;
+                    var doneBtnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+                    if (doneBtnText != null) doneBtnText.text = "Sharing...";
+                    PrepareColocation();
                 }
                 break;
         }

@@ -93,11 +93,15 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
             else
             {
                 Debug.LogError($"[ColocationManager] Advertisement failed: {startAdvertisementResult.Status}");
+                currentState = ColocationState.ShareFailed;
+                UpdateUIWizard();
             }
         }
         catch (Exception e)
         {
             Debug.LogError($"[ColocationManager] Advertisement error: {e.Message}");
+            currentState = ColocationState.ShareFailed;
+            UpdateUIWizard();
         }
     }
 
@@ -141,6 +145,8 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
             if (localizedCount == 0)
             {
                 Debug.LogError("[ColocationManager] No anchors localized - cannot share");
+                currentState = ColocationState.ShareFailed;
+                UpdateUIWizard();
                 return;
             }
 
@@ -171,6 +177,8 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
             if (anchorsToShare.Count == 0)
             {
                 Debug.LogError("[ColocationManager] No anchors saved - sharing failed");
+                currentState = ColocationState.ShareFailed;
+                UpdateUIWizard();
                 return;
             }
 
