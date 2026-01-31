@@ -13,25 +13,25 @@ using Fusion;
 public class PassthroughGameManager : NetworkBehaviour
 {
     private const string LOG_TAG = "[PassthroughGameManager]";
-    
+
     [Header("Prefabs")]
     [SerializeField] private TableTennisConfig sharedConfig;
     [SerializeField] private GameObject tablePrefab;
     [SerializeField] private GameObject racketPrefab;
     [SerializeField] private NetworkPrefabRef ballPrefab;
-    
+
     [Header("Table Settings")]
     [SerializeField] private float tableRotateSpeed = 90f;
     [SerializeField] private float tableMoveSpeed = 1f;
     [SerializeField] private float tableXRotationOffset = 180f;
     [SerializeField] private float tableYRotationOffset = 90f;
     [SerializeField] private float defaultTableHeight = 0.8f; // AR table height for comfortable viewing/playing
-    
+
     [Header("Debug Settings")]
     [Tooltip("Skip anchor alignment for quick testing. Table will spawn in front of player.")]
     [SerializeField] private bool skipAlignmentForDebug = false;
     [SerializeField] private Vector3 debugTablePosition = new Vector3(0, 0.76f, 2f);
-    
+
     // Prefab accessors
     private GameObject TablePrefab => sharedConfig != null ? sharedConfig.TablePrefab : tablePrefab;
     private GameObject RacketPrefab => sharedConfig != null ? sharedConfig.RacketPrefab : racketPrefab;
@@ -46,12 +46,12 @@ public class PassthroughGameManager : NetworkBehaviour
     private bool ballNeedsRespawn = false;
     private int lastBallAuthority = 1; // Track last authority to swap on respawn (1=Host, 2=Client)
     private int currentRound = 0; // Tracks the current round number
-    
+
     // // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
     // private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
     // private Vector3 racketRotation = new Vector3(-51f, 240f, 43f);
     // private float racketScale = 10f;
-    
+
     // References
     private GameObject spawnedTable;
     private GameObject spawnedBall;
@@ -67,7 +67,7 @@ public class PassthroughGameManager : NetworkBehaviour
     private OVRSpatialAnchor _localizedAnchor;
     private AnchorGUIManager_AutoAlignment mainManager;
     private ControllerRacket controllerRacket;
-    
+
 #if FUSION2
     [Networked] private float NetworkedTableYRotation { get; set; }
     [Networked] private float NetworkedTableHeight { get; set; }
@@ -81,7 +81,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
     // Local phase tracking (using shared GamePhase enum)
     private GamePhase currentPhase = GamePhase.Idle;
-    
+
     private void Awake()
     {
         mainManager = FindObjectOfType<AnchorGUIManager_AutoAlignment>();
@@ -90,13 +90,13 @@ public class PassthroughGameManager : NetworkBehaviour
             Debug.LogError($"{LOG_TAG} Could not find AnchorGUIManager_AutoAlignment!");
         }
     }
-    
+
     private void Start()
     {
         // Check if we're returning from VR scene - if so, auto-start passthrough mode after alignment
         CheckReturnFromVRScene();
     }
-    
+
 
     /// Start passthrough table tennis - spawns table at anchor midpoint without loading new scene
     public void OnStartPassthroughGameClicked()
@@ -172,7 +172,7 @@ public class PassthroughGameManager : NetworkBehaviour
         StartPassthroughGame();
 #endif
     }
-    
+
 
     /// Initialize and start the passthrough game
     public void StartGame()
@@ -202,12 +202,26 @@ public class PassthroughGameManager : NetworkBehaviour
     private void DespawnAllCubes()
     {
 #if FUSION2
-        var allCubes = FindObjectsOfType<NetworkedCube>();
-        Debug.Log($"{LOG_TAG} DespawnAllCubes: Found {allCubes.Length} cubes to despawn");
+        // Find all NetworkObjects with cube-like names
+        var allNetworkObjects = FindObjectsOfType<NetworkObject>();
+        var cubesToDespawn = new System.Collections.Generic.List<NetworkObject>();
 
-        if (allCubes.Length == 0)
+        foreach (var netObj in allNetworkObjects)
         {
-            Debug.Log($"{LOG_TAG} DespawnAllCubes: No cubes to despawn");
+            if (netObj == null || netObj.gameObject == null) continue;
+            
+            string lowerName = netObj.gameObject.name.ToLower();
+            if (lowerName.Contains("cube") || lowerName.Contains("networked") || lowerName.Contains("grabbable"))
+            {
+                cubesToDespawn.Add(netObj);
+            }
+        }
+
+        Debug.Log($"{LOG_TAG} DespawnAllCubes: Found {cubesToDespawn.Count} networked objects to despawn");
+
+        if (cubesToDespawn.Count == 0)
+        {
+            Debug.Log($"{LOG_TAG} DespawnAllCubes: No networked objects to despawn");
             return;
         }
 
@@ -224,29 +238,32 @@ public class PassthroughGameManager : NetworkBehaviour
             // Fallback: try to despawn directly
             if (Runner != null && Runner.IsRunning && Object != null && Object.HasStateAuthority)
             {
-                foreach (var cube in allCubes)
+                foreach (var cube in cubesToDespawn)
                 {
-                    if (cube != null && cube.Object != null && cube.Object.IsValid)
+                    if (cube != null && cube.IsValid)
                     {
                         cube.transform.SetParent(null);
-                        Debug.Log($"{LOG_TAG} DespawnAllCubes: Despawning cube {cube.Object.Id}");
-                        Runner.Despawn(cube.Object);
+                        Debug.Log($"{LOG_TAG} DespawnAllCubes: Despawning networked object {cube.Id}");
+                        Runner.Despawn(cube);
                     }
                 }
             }
         }
 
-        // Start verification coroutine to ensure cubes are actually destroyed
+        // Start verification coroutine to ensure objects are actually destroyed
         StartCoroutine(VerifyAndForceDespawnCubes());
 #else
         // Non-networked: just destroy
-        var allCubes = FindObjectsOfType<NetworkedCube>();
-        foreach (var cube in allCubes)
+        var allNetworkObjects = FindObjectsOfType<NetworkObject>();
+        foreach (var netObj in allNetworkObjects)
         {
-            if (cube != null)
+            if (netObj == null || netObj.gameObject == null) continue;
+
+            string lowerName = netObj.gameObject.name.ToLower();
+            if (lowerName.Contains("cube") || lowerName.Contains("networked") || lowerName.Contains("grabbable"))
             {
-                cube.transform.SetParent(null);
-                Destroy(cube.gameObject);
+                netObj.transform.SetParent(null);
+                Destroy(netObj.gameObject);
             }
         }
 #endif
@@ -260,18 +277,39 @@ public class PassthroughGameManager : NetworkBehaviour
         // Wait for network despawn to process
         yield return new WaitForSeconds(0.5f);
 
-        var remainingCubes = FindObjectsOfType<NetworkedCube>();
-        if (remainingCubes.Length > 0)
+        // Find remaining NetworkObjects with cube-like names
+        var allNetworkObjects = FindObjectsOfType<NetworkObject>();
+        var remainingCubes = new System.Collections.Generic.List<NetworkObject>();
+
+        foreach (var netObj in allNetworkObjects)
         {
-            Debug.LogWarning($"{LOG_TAG} VerifyAndForceDespawnCubes: {remainingCubes.Length} cubes still exist after despawn! Force destroying...");
+            if (netObj == null || netObj.gameObject == null) continue;
+
+            string lowerName = netObj.gameObject.name.ToLower();
+            if (lowerName.Contains("cube") || lowerName.Contains("networked") || lowerName.Contains("grabbable"))
+            {
+                remainingCubes.Add(netObj);
+            }
+        }
+
+        if (remainingCubes.Count > 0)
+        {
+            Debug.LogWarning($"{LOG_TAG} VerifyAndForceDespawnCubes: {remainingCubes.Count} networked objects still exist after despawn! Force destroying...");
 
             foreach (var cube in remainingCubes)
             {
-                if (cube != null)
+                if (cube != null && cube.gameObject != null)
                 {
-                    Debug.Log($"{LOG_TAG} VerifyAndForceDespawnCubes: Force destroying cube: {cube.gameObject.name}");
+                    Debug.Log($"{LOG_TAG} VerifyAndForceDespawnCubes: Force destroying networked object: {cube.gameObject.name}");
                     cube.transform.SetParent(null);
-                    Destroy(cube.gameObject);
+                    if (cube.IsValid)
+                    {
+                        Runner.Despawn(cube);
+                    }
+                    else
+                    {
+                        Destroy(cube.gameObject);
+                    }
                 }
             }
         }
@@ -289,7 +327,7 @@ public class PassthroughGameManager : NetworkBehaviour
                     continue;
 
                 string lowerName = child.name.ToLower();
-                if (lowerName.Contains("cube") || lowerName.Contains("networked"))
+                if (lowerName.Contains("cube") || lowerName.Contains("networked") || lowerName.Contains("grabbable"))
                 {
                     childrenToDestroy.Add(child.gameObject);
                 }
@@ -336,11 +374,12 @@ public class PassthroughGameManager : NetworkBehaviour
 
         if (spawnedTable != null)
         {
-            // Only disable table if not keeping it active for VR scene transition
             if (!keepTableActive)
             {
-                spawnedTable.SetActive(false);
-                Debug.Log($"{LOG_TAG} StopGame Table disabled");
+                // Destroy table completely when returning to main menu
+                Destroy(spawnedTable);
+                spawnedTable = null;
+                Debug.Log($"{LOG_TAG} StopGame Table destroyed");
             }
             else
             {
@@ -348,9 +387,9 @@ public class PassthroughGameManager : NetworkBehaviour
             }
         }
 
-        // Hide rackets
-        if (leftRacket != null) leftRacket.SetActive(false);
-        if (rightRacket != null) rightRacket.SetActive(false);
+        // Destroy rackets
+        if (leftRacket != null) { Destroy(leftRacket); leftRacket = null; }
+        if (rightRacket != null) { Destroy(rightRacket); rightRacket = null; }
 
         // Cleanup UI
         if (gameUIPanel != null) Destroy(gameUIPanel);
@@ -372,7 +411,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
         Debug.Log($"{LOG_TAG} Game stopped (keepTableActive: {keepTableActive})");
     }
-    
+
     private void Update()
     {
         if (!isActive) return;
@@ -387,9 +426,9 @@ public class PassthroughGameManager : NetworkBehaviour
         // No need to apply table state every frame - updates come via explicit RPCs
     }
 #endif
-    
+
     // ==================== INPUT HANDLING ====================
-    
+
     private void HandleInput()
     {
         // MENU button - toggle game menu
@@ -398,13 +437,13 @@ public class PassthroughGameManager : NetworkBehaviour
             ToggleGameMenu();
             return;
         }
-        
+
         if (isGameMenuOpen)
         {
             HandleMenuInput();
             return;
         }
-        
+
         // B/Y button - (racket visibility now handled by ControllerRacket component)
         bool bPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
         bool yPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
@@ -413,11 +452,11 @@ public class PassthroughGameManager : NetworkBehaviour
             // Racket toggling now handled by ControllerRacket in single mode
             return;
         }
-        
+
         // A/X button for phase-specific actions
         bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
         bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch);
-        
+
         switch (currentPhase)
         {
             case GamePhase.TableAdjust:
@@ -444,7 +483,7 @@ public class PassthroughGameManager : NetworkBehaviour
                     HandleTableAdjust();
                 }
                 break;
-                
+
             case GamePhase.BallPosition:
                 HandleBallPosition(aPressed || xPressed);
                 break;
@@ -459,7 +498,7 @@ public class PassthroughGameManager : NetworkBehaviour
                 break;
         }
     }
-    
+
     private void HandleTableAdjust()
     {
         if (spawnedTable == null) return;
@@ -496,7 +535,7 @@ public class PassthroughGameManager : NetworkBehaviour
         ApplyLocalAdjustment(rotationDelta, heightDelta);
 #endif
     }
-    
+
     private void HandleBallPosition(bool confirmPressed)
     {
         // GRIP spawns ball if not spawned
@@ -512,7 +551,7 @@ public class PassthroughGameManager : NetworkBehaviour
         // Ball positioning is now handled by NetworkedBall component
         // No need for additional logic here - NetworkedBall handles thumbstick input directly
     }
-    
+
     private void HandleMenuInput()
     {
         bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
@@ -540,9 +579,9 @@ public class PassthroughGameManager : NetworkBehaviour
             ReturnToMainMenu();
         }
     }
-    
+
     // ==================== TABLE MANAGEMENT ====================
-    
+
     private void SpawnTable()
     {
         Debug.Log($"{LOG_TAG} SpawnTable START");
@@ -666,7 +705,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
         Debug.Log($"{LOG_TAG} SpawnTable COMPLETE - Table: {(spawnedTable != null ? "OK" : "FAILED")}");
     }
-    
+
 
     /// Initialize ControllerRacket component for single-hand passthrough gameplay
     private void InitializeControllerRacket()
@@ -676,16 +715,16 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             controllerRacket = gameObject.AddComponent<ControllerRacket>();
         }
-        
+
         // Set racket prefab from config if available
         if (RacketPrefab != null)
         {
             controllerRacket.SetRacketPrefab(RacketPrefab);
         }
-        
+
         Debug.Log($"{LOG_TAG} RacketDebug: ControllerRacket component initialized in single-racket mode");
     }
-    
+
     private void ApplyTableState()
     {
         var anchors = mainManager?.GetCurrentAnchors();
@@ -713,22 +752,22 @@ public class PassthroughGameManager : NetworkBehaviour
         Debug.Log($"{LOG_TAG} [AR TABLE DEBUG] (tablePosition) ApplyTableState - After Y update: localPos={spawnedTable.transform.localPosition}, worldPos={spawnedTable.transform.position}, NetworkedTableHeight={NetworkedTableHeight}");
 #endif
     }
-    
+
     private void ApplyLocalAdjustment(float rotDelta, float heightDelta)
     {
         if (spawnedTable == null) return;
-        
+
         Vector3 euler = spawnedTable.transform.localEulerAngles;
         spawnedTable.transform.localRotation = Quaternion.Euler(euler.x, euler.y + rotDelta, 0);
-        
+
         Vector3 pos = spawnedTable.transform.localPosition;
         pos.y += heightDelta;
         spawnedTable.transform.localPosition = pos;
     }
-    
-    
+
+
     // ==================== BALL MANAGEMENT ====================
-    
+
     private void SpawnBall()
     {
         if (spawnedTable == null)
@@ -1089,7 +1128,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
         UpdateInstructions();
     }
-    
+
     private void RestartGame()
     {
         isGameMenuOpen = false;
@@ -1124,15 +1163,20 @@ public class PassthroughGameManager : NetworkBehaviour
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Game restarted");
     }
-    
+
     private void ReturnToMainMenu()
     {
         StopGame();
-        // The main GUI will be restored automatically when returning to the main scene
-        // No need to call OnPassthroughGameEnded as the scene transition handles UI restoration
+
+        // Restore the main aligned GUI panel
+        if (mainManager != null)
+        {
+            mainManager.ShowMainGUIPanel();
+        }
+
         Debug.Log($"{LOG_TAG} Returned to mode selection");
     }
-    
+
     private void SwitchToVRGame()
     {
         Debug.Log($"{LOG_TAG} Switching to VR TableTennis scene...");
@@ -1140,7 +1184,7 @@ public class PassthroughGameManager : NetworkBehaviour
         // Stop passthrough game but KEEP TABLE ACTIVE for VR scene to use
         // Table is parented to anchor (which has DontDestroyOnLoad), so it persists across scenes
         StopGame(keepTableActive: true);
-        
+
         // Load the TableTennis scene using Fusion's networked scene loading
 #if FUSION2
         if (Runner != null && Runner.IsRunning && Object.HasStateAuthority)
@@ -1179,7 +1223,7 @@ public class PassthroughGameManager : NetworkBehaviour
         UnityEngine.SceneManagement.SceneManager.LoadScene("TableTennis");
 #endif
     }
-    
+
 #if FUSION2
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestSwitchToVRGame()
@@ -1188,13 +1232,13 @@ public class PassthroughGameManager : NetworkBehaviour
         SwitchToVRGame();
     }
 #endif
-    
+
     // ==================== UI ====================
-    
+
     private void ToggleGameMenu()
     {
         isGameMenuOpen = !isGameMenuOpen;
-        
+
         if (isGameMenuOpen)
         {
             ShowGameMenu();
@@ -1203,10 +1247,10 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             runtimeMenuPanel.SetActive(false);
         }
-        
+
         Debug.Log($"{LOG_TAG} Menu {(isGameMenuOpen ? "opened" : "closed")}");
     }
-    
+
     private void ShowGameMenu()
     {
         if (runtimeMenuPanel == null)
@@ -1215,19 +1259,19 @@ public class PassthroughGameManager : NetworkBehaviour
         }
         runtimeMenuPanel.SetActive(true);
     }
-    
+
     private void CreateMenuPanel()
     {
         var cam = Camera.main;
         if (cam == null) return;
-        
+
         runtimeMenuPanel = new GameObject("PassthroughGameMenu");
         Vector3 menuPosition = cam.transform.position + cam.transform.forward * 1.5f;
         menuPosition.y += 1.0f; // Move GUI higher on Y axis
         runtimeMenuPanel.transform.position = menuPosition;
         runtimeMenuPanel.transform.rotation = Quaternion.LookRotation(
             runtimeMenuPanel.transform.position - cam.transform.position);
-        
+
         // Create menu text
         var textGO = new GameObject("MenuText");
         textGO.transform.SetParent(runtimeMenuPanel.transform, false);
@@ -1239,21 +1283,21 @@ public class PassthroughGameManager : NetworkBehaviour
         textMesh.alignment = TextAlignment.Center;
         textMesh.color = new Color(0.1f, 0.1f, 0.6f); // Dark blue instead of white
     }
-    
+
     private void CreateGameUI()
     {
         var anchors = mainManager?.GetCurrentAnchors();
         if (gameUIPanel != null || anchors == null || anchors.Count < 2) return;
-        
+
         Transform primary = anchors[0].transform;
         Transform secondary = anchors[1].transform;
-        
+
         Vector3 midpoint = (primary.position + secondary.position) / 2f;
         midpoint.y = 1.5f;
-        
+
         Vector3 dir = (secondary.position - primary.position).normalized;
         dir.y = 0;
-        
+
         gameUIPanel = new GameObject("PassthroughGameUI");
 
         // FIX: Parent UI to camera rig so it stays stable during periodic realignment
@@ -1336,7 +1380,7 @@ public class PassthroughGameManager : NetworkBehaviour
 
         UpdateInstructions();
     }
-    
+
     private void UpdateInstructions()
     {
         if (phaseText == null) return;
@@ -1391,7 +1435,7 @@ public class PassthroughGameManager : NetworkBehaviour
                     "[Right Stick Y] Adjust Height\n" +
                     "[Left Stick X] Rotate Table\n" +
                     "[A/X] Confirm\n" +
-                    "[B/Y] Get Bat" ;
+                    "[B/Y] Get Bat";
 #endif
                 break;
 
@@ -1429,6 +1473,10 @@ public class PassthroughGameManager : NetworkBehaviour
                             "[Right Stick Y] Move Ball Up/Down\n" +
                             "[A/X] Reset Ball Position\n" +
                             "Hit ball with racket to start!";
+                        controlsText.text = "You can change the ball position with free controller.\n" +
+                        "[A/X] Reset Ball Position\n" +
+                            "Hit ball with racket to start!"; ;
+
                     }
                 }
                 break;
@@ -1472,9 +1520,9 @@ public class PassthroughGameManager : NetworkBehaviour
                 break;
         }
     }
-    
+
     // ==================== NETWORK RPCs ====================
-    
+
 #if FUSION2
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestTableAdjust(float rotDelta, float heightDelta)
@@ -1596,7 +1644,7 @@ public class PassthroughGameManager : NetworkBehaviour
         if (mainManager != null)
         {
             var currentAnchors = mainManager.GetCurrentAnchors();
-            
+
             foreach (var anchor in allAnchors)
             {
                 if (anchor.Localized && !currentAnchors.Contains(anchor))
@@ -1616,7 +1664,7 @@ public class PassthroughGameManager : NetworkBehaviour
         }
     }
     /// Wait for alignment to complete, then auto-start passthrough game
- 
+
     private System.Collections.IEnumerator AutoStartPassthroughAfterAlignment()
     {
         Debug.Log($"{LOG_TAG} [DEBUG VR-AR] Waiting for alignment before auto-starting passthrough...");
@@ -1654,7 +1702,7 @@ public class PassthroughGameManager : NetworkBehaviour
     }
 
     /// Start the game automatically after alignment is detected
-     private void StartGameFromAuto()
+    private void StartGameFromAuto()
     {
         var currentAnchors = mainManager?.GetCurrentAnchors();
         if (currentAnchors != null && currentAnchors.Count >= 2)
@@ -1700,7 +1748,7 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             // Spawn or enable the table at anchor midpoint
             SpawnTable();
-            
+
             // Client: request current table state from host
 #if FUSION2
             if (Object != null && !Object.HasStateAuthority && spawnedTable != null)
@@ -1710,7 +1758,7 @@ public class PassthroughGameManager : NetworkBehaviour
             }
 #endif
         }
-        
+
         // Rackets are now initialized by ControllerRacket component in SpawnTabl
         // Switch UI to show table adjustment instructions
         UpdateInstructions();

@@ -26,6 +26,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [SerializeField] private Button resetButton;
     [SerializeField] private Button startGameButton;
     [SerializeField] private Button startPassthroughGameButton;
+    [Header("UI Popups")]
+    [SerializeField] private CubeInstructionsPopup cubeInstructionsPopup;
     [Header("Game Scene Settings")]
     [SerializeField] private string tableTennisSceneName = "TableTennis";
 
@@ -1256,6 +1258,14 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             SpawnCubeAtAnchorPosition(anchorRelativePos);
         }
+
+        // Show cube instructions popup (auto-create if not assigned in Inspector)
+        if (cubeInstructionsPopup == null)
+        {
+            var popupObj = new GameObject("CubeInstructionsPopup");
+            cubeInstructionsPopup = popupObj.AddComponent<CubeInstructionsPopup>();
+        }
+        cubeInstructionsPopup.ShowPopup();
 #else
 #endif
     }
@@ -1307,18 +1317,33 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         if (!Object.HasStateAuthority || Runner == null || !Runner.IsRunning)
             return;
 
-        var allCubes = FindObjectsOfType<NetworkedCube>();
+        // Find all NetworkObjects and check for cube-like names
+        var allNetworkObjects = FindObjectsOfType<NetworkObject>();
+        var cubesToDespawn = new System.Collections.Generic.List<NetworkObject>();
 
-        foreach (var cube in allCubes)
+        foreach (var netObj in allNetworkObjects)
         {
-            if (cube == null) continue;
+            if (netObj == null || netObj.gameObject == null) continue;
+            
+            string lowerName = netObj.gameObject.name.ToLower();
+            if (lowerName.Contains("cube") || lowerName.Contains("networked") || lowerName.Contains("grabbable"))
+            {
+                cubesToDespawn.Add(netObj);
+            }
+        }
+
+        Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost] Found {cubesToDespawn.Count} networked objects to despawn");
+
+        foreach (var cube in cubesToDespawn)
+        {
+            if (cube == null || cube.gameObject == null) continue;
 
             // CRITICAL: Unparent from anchor first to prevent anchor from keeping the object alive
             cube.transform.SetParent(null);
 
-            if (cube.Object != null && cube.Object.IsValid)
+            if (cube.IsValid)
             {
-                Runner.Despawn(cube.Object);
+                Runner.Despawn(cube);
             }
             else
             {
@@ -1326,26 +1351,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             }
         }
 
-        // Also destroy any GameObjects with "Cube" in name that might not have NetworkedCube component
-        var anchors = FindObjectsOfType<OVRSpatialAnchor>();
-        foreach (var anchor in anchors)
+        // Also destroy any GameObjects with "Cube" in name that might not have NetworkObject component
+        var allObjects = FindObjectsOfType<GameObject>();
+        foreach (var obj in allObjects)
         {
-            if (anchor == null) continue;
-            var childrenToDestroy = new System.Collections.Generic.List<GameObject>();
-            foreach (Transform child in anchor.transform)
+            if (obj == null) continue;
+            
+            string lowerName = obj.name.ToLower();
+            if (lowerName.Contains("cube") || lowerName.Contains("networked") || lowerName.Contains("grabbable"))
             {
-                string lowerName = child.name.ToLower();
-                if (lowerName.Contains("cube") || lowerName.Contains("networked"))
+                // Skip visual markers and UI elements
+                if (obj.name == "Visual" || obj.name.Contains("Marker") || obj.name.Contains("Canvas") || obj.name.Contains("UI")) continue;
+                
+                // Check if it's a NetworkObject (already handled above) or regular GameObject
+                var netObj = obj.GetComponent<NetworkObject>();
+                if (netObj == null)
                 {
-                    // Skip visual markers
-                    if (child.name == "Visual" || child.name.Contains("Marker")) continue;
-                    childrenToDestroy.Add(child.gameObject);
+                    Destroy(obj);
                 }
-            }
-            foreach (var obj in childrenToDestroy)
-            {
-                obj.transform.SetParent(null);
-                Destroy(obj);
             }
         }
 
@@ -1472,6 +1495,9 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
 
+        // Despawn any existing cubes before loading VR scene
+        DespawnAllCubes();
+
         // Either player can initiate - request goes to host, host loads scene
         if (Object.HasStateAuthority)
         {
@@ -1528,6 +1554,21 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             myCanvas.gameObject.SetActive(false);
             hiddenUIElements.Add(myCanvas.gameObject);
         }
+    }
+
+    /// Restore the main GUI panel that was hidden when starting the game
+    public void ShowMainGUIPanel()
+    {
+        foreach (var uiElement in hiddenUIElements)
+        {
+            if (uiElement != null)
+            {
+                uiElement.SetActive(true);
+            }
+        }
+        hiddenUIElements.Clear();
+        hiddenMainGUICanvas = null;
+        Debug.Log("[AnchorGUIManager] Main GUI panel restored");
     }
 
 #if FUSION2

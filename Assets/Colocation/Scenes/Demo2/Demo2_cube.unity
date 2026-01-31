@@ -23385,7 +23385,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 160, y: -134.3}
+  m_AnchoredPosition: {x: 500, y: -134.3}
   m_SizeDelta: {x: 280, y: 60}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1022472320
@@ -25758,6 +25758,7 @@ MonoBehaviour:
   resetButton: {fileID: 965380431}
   startGameButton: {fileID: 0}
   startPassthroughGameButton: {fileID: 1022472320}
+  cubeInstructionsPopup: {fileID: 0}
   tableTennisSceneName: TableTennis
   guiStatusText: {fileID: 1186972806}
   anchorText: {fileID: 1196130576}
@@ -27336,7 +27337,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 500, y: -135}
+  m_AnchoredPosition: {x: 160, y: -135}
   m_SizeDelta: {x: 280, y: 60}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1186022814
@@ -40840,7 +40841,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &1729556573
 RectTransform:
   m_ObjectHideFlags: 0
