@@ -58,7 +58,9 @@ public class PassthroughGameManager : NetworkBehaviour
     private GameObject rightRacket;
     private GameObject gameUIPanel;
     private TextMesh roleText;          // Shows Client/Host
+    private TextMesh roundText;         // Shows current round number
     private TextMesh phaseText;         // Shows current game phase
+    private TextMesh authorityText;     // Shows active authority (Host Only / Your Turn / Opponent's Turn)
     private TextMesh controlsText;      // Shows controller instructions
     private OVRSpatialAnchor _localizedAnchor;
     private AnchorGUIManager_AutoAlignment mainManager;
@@ -1246,8 +1248,15 @@ public class PassthroughGameManager : NetworkBehaviour
         roleText.text = "SOLO";
 #endif
 
+        // Round display (yellow, large)
+        roundText = CreateText("RoundText", new Vector3(0, 0.55f, -0.05f), 300, Color.yellow);
+        roundText.text = "";
+
         // Game Phase (white)
         phaseText = CreateText("PhaseText", new Vector3(0, 0.2f, -0.05f), 200, Color.white);
+
+        // Active Authority (cyan/yellow based on whose turn)
+        authorityText = CreateText("AuthorityText", new Vector3(0, -0.1f, -0.05f), 160, Color.cyan);
 
         // Controller Info (cyan, smaller)
         controlsText = CreateText("ControlsText", new Vector3(0, -0.65f, -0.05f), 150, Color.cyan);
@@ -1262,20 +1271,50 @@ public class PassthroughGameManager : NetworkBehaviour
         // Update phase display
         phaseText.text = currentPhase.GetDisplayName();
 
-        // Update controls text based on phase
-        if (controlsText == null) return;
+        // Update round display
+        if (roundText != null)
+        {
+            roundText.text = currentRound > 0 ? $"Round {currentRound}" : "";
+        }
 
+        // Get current ball authority
+        int ballAuthority = 0;
+        bool isLocalPlayerAuthority = false;
+        if (spawnedBall != null)
+        {
+            var networkedBall = spawnedBall.GetComponent<NetworkedBall>();
+            if (networkedBall != null)
+            {
+                ballAuthority = networkedBall.CurrentAuthority;
+#if FUSION2
+                // Determine if local player has authority
+                // Player 1 = Host, Player 2 = Client
+                if (Object != null)
+                {
+                    isLocalPlayerAuthority = (ballAuthority == 1 && Object.HasStateAuthority) ||
+                                            (ballAuthority == 2 && !Object.HasStateAuthority);
+                }
+#endif
+            }
+        }
+
+        // Update authority display based on phase
         switch (currentPhase)
         {
             case GamePhase.TableAdjust:
+                // TableAdjust: Host Only can confirm
 #if FUSION2
-                controlsText.text =
+                authorityText.text = "Adjust Table with thumbsticks.\nHost should press A/X to confirm";
+                authorityText.color = Color.green;
+                if (controlsText) controlsText.text =
                     "[Right Stick Y] Adjust Height\n" +
                     "[Left Stick X] Rotate Table\n" +
                     "[A/X] Confirm & Spawn Ball\n" +
-                    "[B/Y] Get Bat";
+                    "[B/Y] Get Bat" ;
 #else
-                controlsText.text =
+                authorityText.text = "ADJUST TABLE";
+                authorityText.color = Color.cyan;
+                if (controlsText) controlsText.text =
                     "[Right Stick Y] Adjust Height\n" +
                     "[Left Stick X] Rotate Table\n" +
                     "[A/X] Confirm\n" +
@@ -1284,29 +1323,64 @@ public class PassthroughGameManager : NetworkBehaviour
                 break;
 
             case GamePhase.BallPosition:
-                if (spawnedBall == null)
+                if (ballAuthority > 0 && isLocalPlayerAuthority)
                 {
-                    controlsText.text = "[GRIP] Spawn Ball";
+                    authorityText.text = "YOUR SERVE";
+                    authorityText.color = Color.yellow;
                 }
                 else
                 {
-                    controlsText.text =
-                        "Grab ball to reposition\n" +
+                    authorityText.text = "READY TO SERVE";
+                    authorityText.color = Color.cyan;
+                }
+                if (controlsText)
+                {
+                    if (spawnedBall == null)
+                    {
+                        controlsText.text = "[GRIP] Spawn Ball";
+                    }
+                    else
+                    {
+                        controlsText.text =
+                            "[B/Y] Toggle Ball Adjust\n" +
+                            "[Left Stick] Move Ball XZ\n" +
+                            "[Right Stick Y] Move Ball Up/Down\n" +
+                            "[A/X] Reset Ball Position\n" +
+                            "Hit ball with racket to start!";
+                        controlsText.text = "You can change the ball position with free controller.\n" +
                         "[A/X] Reset Ball Position\n" +
-                        "Hit ball with racket to start!";
+                            "Hit ball with racket to start!"; ;
+
+                    }
                 }
                 break;
 
             case GamePhase.Playing:
-                controlsText.text = "[A/X] Reset Ball";
+                if (ballAuthority > 0 && isLocalPlayerAuthority)
+                {
+                    authorityText.text = "YOUR TURN";
+                    authorityText.color = Color.yellow;
+                }
+                else
+                {
+                    authorityText.text = "PLAYING";
+                    authorityText.color = Color.white;
+                }
+                if (controlsText) controlsText.text =
+                    "[A/X] Reset Ball";
                 break;
 
             case GamePhase.BallGrounded:
-                controlsText.text = "Transitioning...";
+                // BallGrounded: No longer used, but keep for compatibility
+                authorityText.text = "ROUND ENDED";
+                authorityText.color = Color.cyan;
+                if (controlsText) controlsText.text = "Transitioning...";
                 break;
 
             case GamePhase.Idle:
-                controlsText.text = "";
+                authorityText.text = "WAITING";
+                authorityText.color = Color.gray;
+                if (controlsText) controlsText.text = "";
                 break;
         }
     }

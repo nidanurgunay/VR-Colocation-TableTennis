@@ -11,6 +11,8 @@ public class ControllerRacket : MonoBehaviour
     [SerializeField] private GameObject racketPrefab; // Racket model to show on controller
     
     [Header("Settings")]
+    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller (Button.Two = B when using RTouch)
+    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller (Button.Two = Y when using LTouch)
     [SerializeField] private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f); // Position offset from controller
     [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 240f, 43f); // Rotation to align handle with controller grip
     [SerializeField] private float racketScale = 10f; // 10x scale for visibility
@@ -39,12 +41,18 @@ public class ControllerRacket : MonoBehaviour
     
     private void Start()
     {
+        Debug.Log($"[ControllerRacket Start] Start - Rotation: {racketRotation}, Offset: {racketOffset}, Scale: {racketScale}");
         TryFindRacketTemplate();
         
         // Create rackets attached to controllers (hidden initially)
         if (racketPrefab != null)
         {
             CreateControllerRackets();
+            Debug.Log("[ControllerRacket Start] Initialized - press B/Y to toggle rackets on controllers");
+        }
+        else
+        {
+            Debug.LogWarning("[ControllerRacket Start] Racket not found yet - will retry...");
         }
     }
 
@@ -55,13 +63,16 @@ public class ControllerRacket : MonoBehaviour
         {
             leftController = cameraRig.leftControllerAnchor;
             rightController = cameraRig.rightControllerAnchor;
+            Debug.Log($"[ControllerRacket FindControllers] Found controllers - Left: {leftController != null}, Right: {rightController != null}");
             
             if (leftController == null)
             {
+                Debug.LogWarning("[ControllerRacket FindControllers] leftControllerAnchor is null - creating dummy");
                 leftController = new GameObject("LeftControllerDummy").transform;
             }
             if (rightController == null)
             {
+                Debug.LogWarning("[ControllerRacket FindControllers] rightControllerAnchor is null - creating dummy");
                 rightController = new GameObject("RightControllerDummy").transform;
             }
             
@@ -75,12 +86,17 @@ public class ControllerRacket : MonoBehaviour
                 rightControllerVisual = FindControllerVisual(rightController);
             }
         }
+        else
+        {
+            Debug.LogWarning("[ControllerRacket FindControllers] OVRCameraRig not found!");
+        }
     }
     
     private void TryFindRacketTemplate()
     {
         if (racketPrefab != null)
         {
+            Debug.Log("[ControllerRacket TryFindRacketTemplate] Racket prefab already assigned.");
             return; // Already found
         } 
         
@@ -91,6 +107,7 @@ public class ControllerRacket : MonoBehaviour
             // Skip our created copies
             if (r.name.Contains("Controller") || r.name.Contains("Remote")) continue;
             racketPrefab = r;
+            Debug.Log($"[ControllerRacket TryFindRacketTemplate] Found racket by tag: {racketPrefab.name}");
             return;
         }
         
@@ -107,6 +124,7 @@ public class ControllerRacket : MonoBehaviour
                 && t.GetComponent<MeshFilter>() != null)
             {
                 racketPrefab = t.gameObject;
+                Debug.Log($"[ControllerRacket TryFindRacketTemplate] Found racket by Resources search: {racketPrefab.name}");
                 return;
             }
         }
@@ -118,6 +136,7 @@ public class ControllerRacket : MonoBehaviour
         var controllerHelper = controllerAnchor.GetComponentInChildren<OVRControllerHelper>(true);
         if (controllerHelper != null)
         {
+            Debug.Log($"[ControllerRacket] Found OVRControllerHelper on {controllerAnchor.name}");
             return controllerHelper.gameObject;
         }
         
@@ -129,6 +148,7 @@ public class ControllerRacket : MonoBehaviour
             {
                 if (child.GetComponent<Renderer>() != null || child.GetComponentInChildren<Renderer>() != null)
                 {
+                    Debug.Log($"[ControllerRacket] Found controller visual: {child.name}");
                     return child.gameObject;
                 }
             }
@@ -142,6 +162,7 @@ public class ControllerRacket : MonoBehaviour
         // If no racket prefab found, create a placeholder
         if (racketPrefab == null)
         {
+            Debug.LogWarning("[ControllerRacket CreateControllerRackets] No racket prefab found - creating placeholder rackets");
             CreatePlaceholderRackets();
             return;
         }
@@ -167,6 +188,7 @@ public class ControllerRacket : MonoBehaviour
                     if (child.gameObject != leftRacket && child.gameObject != rightRacket)
                     {
                         child.gameObject.SetActive(false);
+                        Debug.Log($"[ControllerRacket CreateControllerRackets] Hiding scene racket: {child.name}");
                     }
                 }
             }
@@ -178,12 +200,15 @@ public class ControllerRacket : MonoBehaviour
     
     private void CreateRacketOnController()
     {
+        Debug.Log($"[ControllerRacket CreateRacketOnController] Prefab original rotation: {racketPrefab.transform.eulerAngles}");
         
         // Create left controller racket
         if (leftController != null && leftRacket == null)
         {
+            Debug.Log("[ControllerRacket CreateRacketOnController] Entering left if");
             // Instantiate without parent first to avoid inheriting rotations
             leftRacket = Instantiate(racketPrefab);
+            Debug.Log($"[ControllerRacket CreateRacketOnController] leftRacket after Instantiate: {leftRacket}");
             leftRacket.name = "LeftControllerRacket";
             
             // Reset to identity, then set parent
@@ -194,28 +219,38 @@ public class ControllerRacket : MonoBehaviour
             leftRacket.transform.localScale = Vector3.one * racketScale;
             leftRacket.SetActive(false); // Hidden until activated
             
+            Debug.Log($"[ControllerRacket CreateRacketOnController] Left racket created with rotation: {leftRacket.transform.localEulerAngles}");
             
             // Remove any physics/grab components
             CleanupRacketComponents(leftRacket);
         }
+        else
+        {
+            Debug.Log($"[ControllerRacket CreateRacketOnController] Skipping left: leftController={leftController}, leftRacket={leftRacket}");
+        }
         
         // Create right controller racket
+        Debug.Log($"[ControllerRacket CreateRacketOnController] Checking right: rightController={rightController}, rightRacket={rightRacket}");
         if (rightController != null && rightRacket == null)
         {
+            Debug.Log("[ControllerRacket CreateRacketOnController] Entering right if");
             // Instantiate without parent first to avoid inheriting rotations
             rightRacket = Instantiate(racketPrefab);
+            Debug.Log($"[ControllerRacket CreateRacketOnController] rightRacket after Instantiate: {rightRacket}");
             if (rightRacket != null)
             {
                 rightRacket.name = "RightControllerRacket";
                 
                 // Reset to identity, then set parent
                 rightRacket.transform.SetParent(rightController, false);
+                Debug.Log("[ControllerRacket CreateRacketOnController] Right SetParent done");
                 rightRacket.transform.localPosition = racketOffset;
                 rightRacket.transform.localRotation = Quaternion.identity; // Reset first
                 rightRacket.transform.localRotation = Quaternion.Euler(racketRotation); // Then apply our rotation
                 rightRacket.transform.localScale = Vector3.one * racketScale;
                 rightRacket.SetActive(false); // Will be activated by UpdateRacketVisibility
                 
+                Debug.Log($"[ControllerRacket CreateRacketOnController] Right racket created with rotation: {rightRacket.transform.localEulerAngles}");
                 
                 // Remove any physics/grab components
                 CleanupRacketComponents(rightRacket);
@@ -225,10 +260,15 @@ public class ControllerRacket : MonoBehaviour
                 Debug.LogError("[ControllerRacket CreateRacketOnController] Instantiate returned null for right racket!");
             }
         }
+        else
+        {
+            Debug.Log($"[ControllerRacket CreateRacketOnController] Skipping right: rightController={rightController}, rightRacket={rightRacket}");
+        }
         
         // Start with no rackets active
         UpdateRacketVisibility(false, false);
         
+        Debug.Log("[ControllerRacket CreateRacketOnController] Created racket on controller - press B/Y to toggle rackets on controllers");
     }
     
     private void CleanupRacketComponents(GameObject racket)
@@ -238,6 +278,39 @@ public class ControllerRacket : MonoBehaviour
         if (rb != null) Destroy(rb);
         
         // Keep collider for ball hits
+        
+        // Deleted code from current branch (for consistency with main):
+        // // Add kinematic rigidbody for collision detection
+        // // Kinematic = follows transform exactly, no physics forces
+        // var rb = racket.AddComponent<Rigidbody>();
+        // rb.isKinematic = true;
+        // rb.useGravity = false;
+        // rb.interpolation = RigidbodyInterpolation.Interpolate;
+        // rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        // 
+        // // Ensure proper tag for ball collision detection
+        // racket.tag = "Racket";
+        // 
+        // // Ensure collider exists for ball collision
+        // var colliders = racket.GetComponentsInChildren<Collider>();
+        // if (colliders.Length == 0)
+        // {
+        //     var boxCol = racket.AddComponent<BoxCollider>();
+        //     boxCol.isTrigger = false;
+        //     boxCol.size = new Vector3(0.15f, 0.02f, 0.18f);
+        //     boxCol.center = new Vector3(0, 0, 0.1f);
+        //     Debug.Log($"[ControllerRacket] Added BoxCollider to {racket.name}");
+        // }
+        // else
+        // {
+        //     foreach (var col in colliders)
+        //     {
+        //         col.isTrigger = false;
+        //         col.gameObject.tag = "Racket";
+        //     }
+        // }
+        // 
+        // Debug.Log($"[ControllerRacket CleanupRacketComponents] Cleaned up {racket.name} - no physics, direct controller attachment");
     }
     
     private void Update()
@@ -249,6 +322,7 @@ public class ControllerRacket : MonoBehaviour
             if (racketPrefab != null)
             {
                 CreateControllerRackets();
+                Debug.Log("[ControllerRacket] Racket found on retry - initialized!");
             }
             return; // Don't process input until we have rackets
         }
@@ -275,11 +349,13 @@ public class ControllerRacket : MonoBehaviour
         {
             rightRacketActive = true;
             leftRacketActive = false;
+            Debug.Log($"[ControllerRacket Update] Activated right racket, deactivated left");
         }
         if (yPressed)
         {
             leftRacketActive = true;
             rightRacketActive = false;
+            Debug.Log($"[ControllerRacket Update] Activated left racket, deactivated right");
         }
         
         UpdateRacketVisibility(leftRacketActive, rightRacketActive);
@@ -314,17 +390,28 @@ public class ControllerRacket : MonoBehaviour
     /// Update which racket is visible based on active states
     private void UpdateRacketVisibility(bool leftActive, bool rightActive)
     {
+        Debug.Log($"[ControllerRacket UpdateRacketVisibility] Left: {leftActive}, Right: {rightActive}");
 
         if (leftRacket != null)
         {
             leftRacket.SetActive(leftActive);
             SetControllerVisualActive(leftControllerVisual, !leftActive); // Show controller when racket hidden
+            Debug.Log($"[ControllerRacket UpdateRacketVisibility] Left racket SetActive({leftActive}), position: {leftRacket.transform.position}, rotation: {leftRacket.transform.rotation.eulerAngles}");
+        }
+        else
+        {
+            Debug.LogWarning("[ControllerRacket UpdateRacketVisibility] Left racket is null!");
         }
 
         if (rightRacket != null)
         {
             rightRacket.SetActive(rightActive);
             SetControllerVisualActive(rightControllerVisual, !rightActive); // Show controller when racket hidden
+            Debug.Log($"[ControllerRacket UpdateRacketVisibility] Right racket SetActive({rightActive}), position: {rightRacket.transform.position}, rotation: {rightRacket.transform.rotation.eulerAngles}");
+        }
+        else
+        {
+            Debug.LogWarning("[ControllerRacket UpdateRacketVisibility] Right racket is null!");
         }
     }
     
@@ -346,6 +433,7 @@ public class ControllerRacket : MonoBehaviour
                 controllerHelper.enabled = active;
             }
             
+            Debug.Log($"[ControllerRacket SetControllerVisualActive] Controller visual {(active ? "SHOWN" : "HIDDEN")} - disabled {renderers.Length} renderers");
         }
         
         // Disable ray/pointer visuals
@@ -391,6 +479,7 @@ public class ControllerRacket : MonoBehaviour
             {
                 mb.enabled = !hide;
                 disabledCount++;
+                Debug.Log($"[ControllerRacket DisableRayVisuals] {(hide ? "Disabled" : "Enabled")} ray interactor: {mb.GetType().Name}");
             }
         }
 
@@ -406,6 +495,15 @@ public class ControllerRacket : MonoBehaviour
                     r.enabled = !hide;
                 }
             }
+        }
+
+        if (hide)
+        {
+            Debug.Log($"[ControllerRacket DisableRayVisuals] Disabled {disabledCount} ray/pointer components");
+        }
+        else
+        {
+            Debug.Log($"[ControllerRacket DisableRayVisuals] Enabled {disabledCount} ray/pointer components");
         }
     }
 
@@ -466,6 +564,7 @@ public class ControllerRacket : MonoBehaviour
         if (prefab != null && racketPrefab == null)
         {
             racketPrefab = prefab;
+            Debug.Log($"[ControllerRacket] Racket prefab set externally: {prefab.name}");
             
             // If we already have controllers, create the rackets now
             if (leftController != null && rightController != null && leftRacket == null && rightRacket == null)
@@ -478,6 +577,7 @@ public class ControllerRacket : MonoBehaviour
     /// Create placeholder rackets when no prefab is available
     private void CreatePlaceholderRackets()
     {
+        Debug.Log("[ControllerRacket CreatePlaceholderRackets] Creating placeholder rackets...");
         
         // Create left racket
         if (leftController != null && leftRacket == null)
@@ -489,6 +589,7 @@ public class ControllerRacket : MonoBehaviour
             leftRacket.transform.localScale = Vector3.one * 0.15f; // Smaller scale for placeholder
             leftRacket.SetActive(false);
             CleanupRacketComponents(leftRacket);
+            Debug.Log("[ControllerRacket CreatePlaceholderRackets] Created placeholder left racket");
         }
         
         // Create right racket
@@ -501,11 +602,13 @@ public class ControllerRacket : MonoBehaviour
             rightRacket.transform.localScale = Vector3.one * 0.15f; // Smaller scale for placeholder
             rightRacket.SetActive(false);
             CleanupRacketComponents(rightRacket);
+            Debug.Log("[ControllerRacket CreatePlaceholderRackets] Created placeholder right racket");
         }
         
         // Start with no rackets active
         UpdateRacketVisibility(false, false);
         
+        Debug.Log("[ControllerRacket CreatePlaceholderRackets] Placeholder rackets created - press B/Y to toggle rackets on controllers");
     }
     
 
@@ -549,6 +652,9 @@ public class ControllerRacket : MonoBehaviour
         {
             paddleCol.isTrigger = false;
         }
+
+        // Add debug collision logger to paddle
+        paddle.AddComponent<DebugRacketCollisionLogger>();
 
         return racket;
     }

@@ -14,8 +14,12 @@ public class NetworkedBall : NetworkBehaviour
     [SerializeField] private float bounciness = 0.95f; // Increased from 0.92 for more realistic ping pong bounce
     [SerializeField] private float airResistance = 0.02f;
     [SerializeField] private float tableHeight = 0.76f; // Standard table tennis height
+    [SerializeField] private float racketHitMultiplier = 2.2f; // Multiplier for racket velocity transfer
+    [SerializeField] private float fallbackHitMultiplier = 1.2f; // Multiplier when racket has no rigidbody
 
     [Header("Serve Settings")]
+    [SerializeField] private float serveHeight = 0.4f; // Height above table for serve
+    [SerializeField] private float serveDistanceFromCenter = 0.8f; // How far from table center (toward server)
     [SerializeField] private float serveForce = 3f;
 
     [Header("Table Reference")]
@@ -28,6 +32,10 @@ public class NetworkedBall : NetworkBehaviour
     [Header("Reset Settings")]
     [SerializeField] private float resetBelowY = -1f; // Reset if ball falls below this
     [SerializeField] private float resetAfterSeconds = 5f; // Reset if no activity
+
+    [Header("Positioning Mode")]
+    [SerializeField] private float positionMoveSpeed = 1.5f; // Speed of thumbstick movement
+    [SerializeField] private float positionHeightSpeed = 0.8f; // Speed of vertical movement
 
     // Networked state - direct world position sync (relies on colocation alignment)
     [Networked] private Vector3 SyncedWorldPosition { get; set; }
@@ -48,7 +56,8 @@ public class NetworkedBall : NetworkBehaviour
     private bool isInitialized;
     private TableTennisGameManager gameManager;
     private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
-    private bool localPositioningMode = true;
+    private bool localPositioningMode = true; // Local flag for positioning
+    private bool ballAdjustModeActive = false; // Toggle with A button to enable ball movement
     private GameObject floorPlane; // Floor collider for detecting ball out of play
     private float lastResetTime = 0f; // Cooldown to prevent reset loops
 
@@ -93,6 +102,7 @@ public class NetworkedBall : NetworkBehaviour
             if (CurrentAuthority == 0)
             {
                 CurrentAuthority = 1;
+                Debug.Log("[NetworkedBall] First serve - Player 1 gets initial authority");
             }
             // Initialize synced world position
             SyncedWorldPosition = transform.position;
@@ -106,6 +116,7 @@ public class NetworkedBall : NetworkBehaviour
             StartCoroutine(TryFindAnchorAndInitialize());
         }
 
+        Debug.Log($"[NetworkedBall] Spawned. HasStateAuthority: {Object.HasStateAuthority}, Position: {transform.position}");
 
         // Create floor collider for detecting ball out of play (host only)
         if (Object.HasStateAuthority)
@@ -135,6 +146,7 @@ public class NetworkedBall : NetworkBehaviour
         floorPlane.tag = "Ground";
 
         // Make floor invisible (no renderer)
+        Debug.Log($"[NetworkedBall] Created floor collider at Y={floorPlane.transform.position.y}");
     }
 
     /// <summary>
@@ -193,6 +205,7 @@ public class NetworkedBall : NetworkBehaviour
             // Clean up temporary sphere
             Destroy(sphere);
 
+            Debug.Log("[NetworkedBall] Created ball visual with URP shader");
         }
 
         // Set correct scale for ping pong ball size
@@ -210,6 +223,7 @@ public class NetworkedBall : NetworkBehaviour
         if (ballMaterial != null)
         {
             collider.material = ballMaterial;
+            Debug.Log("[NetworkedBall] Assigned PingPongBall physics material to collider");
         }
         else
         {
@@ -221,8 +235,10 @@ public class NetworkedBall : NetworkBehaviour
             bouncyMat.frictionCombine = PhysicMaterialCombine.Minimum;
             bouncyMat.bounceCombine = PhysicMaterialCombine.Maximum;
             collider.material = bouncyMat;
+            Debug.Log("[NetworkedBall] Created dynamic bouncy physics material for collider");
         }
 
+        Debug.Log($"[NetworkedBall] Ball visual ensured. Scale: {transform.localScale}, Position: {transform.position}");
     }
 
     /// <summary>
@@ -232,6 +248,7 @@ public class NetworkedBall : NetworkBehaviour
     {
         if (!pauseStatus) // Resuming (headset put back on)
         {
+            Debug.Log("[NetworkedBall] Application resumed - refreshing table reference");
 
             // Refresh table reference in case tracking re-localized
             RefreshTableReference();
@@ -255,6 +272,7 @@ public class NetworkedBall : NetworkBehaviour
             float distanceFromTable = Vector3.Distance(transform.position, tableTransform.position);
             if (distanceFromTable > 5f || transform.position.y < -1f || transform.position.y > 5f)
             {
+                Debug.Log($"[NetworkedBall] Ball in bad position after resume (dist={distanceFromTable:F1}m, y={transform.position.y:F1}m), resetting");
                 ResetToServePosition();
             }
         }
@@ -265,6 +283,7 @@ public class NetworkedBall : NetworkBehaviour
         // On client, wait for alignment to complete before initializing
         if (!Object.HasStateAuthority)
         {
+            Debug.Log("[NetworkedBall][INIT] Client waiting for alignment to complete...");
             float waitTime = 0f;
             while (!AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic && waitTime < 15f)
             {
@@ -272,6 +291,14 @@ public class NetworkedBall : NetworkBehaviour
                 waitTime += 0.5f;
             }
 
+            if (AnchorGUIManager_AutoAlignment.AlignmentCompletedStatic)
+            {
+                Debug.Log($"[NetworkedBall][INIT] Client alignment completed, proceeding with initialization after {waitTime}s");
+            }
+            else
+            {
+                Debug.LogWarning("[NetworkedBall][INIT] Client timed out waiting for alignment, proceeding anyway");
+            }
         }
 
         int attempts = 0;
@@ -286,6 +313,7 @@ public class NetworkedBall : NetworkBehaviour
             if (table != null)
             {
                 tableTransform = table.transform;
+                Debug.Log($"[NetworkedBall][FIND] Found table: {table.name} at position {tableTransform.position}");
             }
 
             attempts++;
@@ -295,6 +323,7 @@ public class NetworkedBall : NetworkBehaviour
         if (tableTransform != null)
         {
             isInitialized = true;
+            Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}");
 
             // Find game manager
             gameManager = FindObjectOfType<TableTennisGameManager>();
@@ -311,11 +340,13 @@ public class NetworkedBall : NetworkBehaviour
         }
         else
         {
+            Debug.LogWarning("[NetworkedBall] Could not find table after 50 attempts, using fallback");
 
             // Fallback: Use static anchor position from AnchorGUIManager if available
             Vector3 firstAnchor = AnchorGUIManager_AutoAlignment.FirstAnchorPosition;
             if (firstAnchor.sqrMagnitude > 0.01f)
             {
+                Debug.Log($"[NetworkedBall] Using static anchor position as fallback: {firstAnchor}");
                 GameObject fallbackObj = new GameObject("FallbackTable_FromStatic");
                 fallbackObj.transform.position = firstAnchor;
                 tableTransform = fallbackObj.transform;
@@ -331,6 +362,7 @@ public class NetworkedBall : NetworkBehaviour
 
     private IEnumerator ClientSyncRoutine()
     {
+        Debug.Log("[NetworkedBall] CLIENT waiting for sync...");
 
         int attempts = 0;
         while (SyncedWorldPosition == Vector3.zero && attempts < 50)
@@ -347,8 +379,12 @@ public class NetworkedBall : NetworkBehaviour
             previousPosition = transform.position;
             isInitialized = true;
 
+            Debug.Log($"[NetworkedBall] CLIENT synced to {transform.position}");
         }
-
+        else
+        {
+            Debug.LogError("[NetworkedBall] CLIENT sync failed!");
+        }
     }
 
     public override void FixedUpdateNetwork()
@@ -363,6 +399,7 @@ public class NetworkedBall : NetworkBehaviour
                 float distFromTable = Vector3.Distance(transform.position, tableTransform.position);
                 if (distFromTable > 5f)
                 {
+                    Debug.LogWarning($"[NetworkedBall] SANITY CHECK FAILED! Ball is {distFromTable:F1}m from table. Resetting!");
                     ResetToServePosition();
                     return;
                 }
@@ -388,6 +425,7 @@ public class NetworkedBall : NetworkBehaviour
             bool aButtonPressed = OVRInput.GetDown(OVRInput.Button.One) || OVRInput.GetDown(OVRInput.Button.Three);
             if (aButtonPressed)
             {
+                Debug.Log("[NetworkedBall] A button pressed - resetting ball to serve position");
 
                 // Try to find table if we don't have it
                 if (tableTransform == null)
@@ -399,13 +437,21 @@ public class NetworkedBall : NetworkBehaviour
                 return; // Don't process other input this frame
             }
         }
-  
+
         // Guard for other operations that need table
         if (!isInitialized || tableTransform == null) return;
 
-        // Ball stick positioning disabled - users reposition by grabbing
-        // Keep positioning mode logic for kinematic state only
-        if (IsInPositioningMode || localPositioningMode)
+        // Toggle ball adjust mode with B/Y button (only in positioning mode)
+        if ((IsInPositioningMode || localPositioningMode) &&
+            (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch) ||
+             OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch)))
+        {
+            ballAdjustModeActive = !ballAdjustModeActive;
+            Debug.Log($"[NetworkedBall] Ball adjust mode: {(ballAdjustModeActive ? "ON - Use thumbsticks to move ball" : "OFF")}");
+        }
+
+        // Handle positioning mode with thumbsticks (only if adjust mode is active)
+        if ((IsInPositioningMode || localPositioningMode) && ballAdjustModeActive)
         {
             HandlePositioningMode();
         }
@@ -422,14 +468,58 @@ public class NetworkedBall : NetworkBehaviour
     /// </summary>
     private void HandlePositioningMode()
     {
-        // Ball repositioning via controller sticks is disabled.
-        // Users now reposition the ball by grabbing it directly.
+        // Only allow positioning if we have authority or it's local-only ball
+        if (!Object.HasStateAuthority && Object != null && Object.IsValid) return;
 
-        // Only keep ball kinematic while in positioning mode
+        // Note: A button reset is now handled in Update() so it works in ALL phases
+
+        // Keep ball kinematic while positioning
         if (rb != null && !rb.isKinematic)
         {
             rb.isKinematic = true;
             rb.velocity = Vector3.zero;
+        }
+
+        // Get thumbstick input
+        Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
+        Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
+
+        // Dead zone
+        if (leftStick.magnitude < 0.1f) leftStick = Vector2.zero;
+        if (rightStick.magnitude < 0.1f) rightStick = Vector2.zero;
+
+        if (leftStick.magnitude > 0.1f || Mathf.Abs(rightStick.y) > 0.1f)
+        {
+            // Get camera for movement direction
+            Camera cam = Camera.main;
+            if (cam == null) return;
+
+            // Calculate movement in camera-relative space (horizontal only)
+            Vector3 camForward = cam.transform.forward;
+            camForward.y = 0;
+            camForward.Normalize();
+            Vector3 camRight = cam.transform.right;
+            camRight.y = 0;
+            camRight.Normalize();
+
+            // Left stick: horizontal movement (X/Z)
+            Vector3 moveDir = (camRight * leftStick.x + camForward * leftStick.y) * positionMoveSpeed * Time.deltaTime;
+
+            // Right stick Y: vertical movement
+            float verticalMove = rightStick.y * positionHeightSpeed * Time.deltaTime;
+
+            // Apply movement
+            Vector3 newPos = transform.position + moveDir;
+            newPos.y += verticalMove;
+
+            // Clamp height to reasonable range (0.5m to 2.5m)
+            newPos.y = Mathf.Clamp(newPos.y, 0.5f, 2.5f);
+
+            transform.position = newPos;
+
+            // Sync world position directly
+            SyncedWorldPosition = newPos;
+            SyncedVelocity = Vector3.zero;
         }
     }
 
@@ -439,6 +529,7 @@ public class NetworkedBall : NetworkBehaviour
     public void EnterPositioningMode()
     {
         localPositioningMode = true;
+        ballAdjustModeActive = true; // Auto-activate ball adjustment when entering positioning mode
 
         // Only access networked properties if spawned
         if (Object != null && Object.IsValid)
@@ -454,6 +545,7 @@ public class NetworkedBall : NetworkBehaviour
             rb.angularVelocity = Vector3.zero;
         }
 
+        Debug.Log("[NetworkedBall] Entered positioning mode - ball adjust ON, use thumbsticks to move");
     }
 
     /// <summary>
@@ -474,6 +566,7 @@ public class NetworkedBall : NetworkBehaviour
             rb.isKinematic = false;
         }
 
+        Debug.Log("[NetworkedBall] Exited positioning mode - game started!");
     }
 
     /// <summary>
@@ -575,6 +668,7 @@ public class NetworkedBall : NetworkBehaviour
         // Reset if ball falls below threshold
         if (transform.position.y < resetBelowY)
         {
+            Debug.Log("[NetworkedBall] Ball fell below threshold, resetting");
 
             // Notify game manager ball went out
             if (gameManager != null && IsInPlay)
@@ -589,6 +683,7 @@ public class NetworkedBall : NetworkBehaviour
         // Reset if ball goes too high (above 10m - tracking issue)
         if (transform.position.y > 10f)
         {
+            Debug.Log("[NetworkedBall] Ball too high (tracking issue?), resetting");
             ResetToServePosition();
             return;
         }
@@ -599,6 +694,7 @@ public class NetworkedBall : NetworkBehaviour
             float distanceFromTable = Vector3.Distance(transform.position, tableTransform.position);
             if (distanceFromTable > 10f)
             {
+                Debug.Log($"[NetworkedBall] Ball too far from table ({distanceFromTable:F1}m), resetting");
                 ResetToServePosition();
                 return;
             }
@@ -607,6 +703,7 @@ public class NetworkedBall : NetworkBehaviour
         // Reset if inactive too long
         if (Time.time - lastHitTime > resetAfterSeconds && IsInPlay)
         {
+            Debug.Log("[NetworkedBall] Ball inactive too long, resetting");
 
             // Notify game manager ball went out
             if (gameManager != null)
@@ -623,6 +720,7 @@ public class NetworkedBall : NetworkBehaviour
         // COOLDOWN: Prevent reset loops - minimum 1 second between resets
         if (Time.time - lastResetTime < 1.0f)
         {
+            Debug.Log($"[NetworkedBall] ResetToServePosition skipped - cooldown ({Time.time - lastResetTime:F2}s < 1s)");
             return;
         }
         lastResetTime = Time.time;
@@ -636,6 +734,7 @@ public class NetworkedBall : NetworkBehaviour
         // Spawn ball between the two anchors, 0.5m up
         Vector3 worldServePos = GetSpawnPositionBetweenAnchors();
 
+        Debug.Log($"[NetworkedBall] ResetToServePosition: worldServePos={worldServePos} (between anchors)");
 
         // Find table for side detection (still needed for game logic)
         if (tableObject == null)
@@ -662,6 +761,7 @@ public class NetworkedBall : NetworkBehaviour
         SyncedWorldRotation = transform.rotation;
         SyncedVelocity = Vector3.zero;
 
+        Debug.Log($"[NetworkedBall] Reset to serve position for Player {serverPlayerNumber}: {worldServePos}");
     }
 
     /// <summary>
@@ -674,8 +774,12 @@ public class NetworkedBall : NetworkBehaviour
         if (table != null)
         {
             tableTransform = table.transform;
+            Debug.Log($"[NetworkedBall] Table reference refreshed: {table.name} at {tableTransform.position}");
         }
-
+        else
+        {
+            Debug.LogWarning("[NetworkedBall] Could not find table to refresh reference");
+        }
     }
 
     /// <summary>
@@ -690,10 +794,12 @@ public class NetworkedBall : NetworkBehaviour
         // Check if we have valid anchor positions
         if (firstAnchor.sqrMagnitude > 0.01f && secondAnchor.sqrMagnitude > 0.01f)
         {
-            // Calculate midpoint between anchors, always 0.5m above world midpoint
+            // Calculate midpoint between anchors
             Vector3 midpoint = (firstAnchor + secondAnchor) / 2f;
-            midpoint.y += 0.5f;
+            // Set Y to 0.5m above the midpoint's Y (or use fixed 0.5m if anchors are at floor level)
+            midpoint.y = Mathf.Max(firstAnchor.y, secondAnchor.y) + 0.5f;
 
+            Debug.Log($"[NetworkedBall] Spawn between anchors: first={firstAnchor}, second={secondAnchor}, midpoint={midpoint}");
             return midpoint;
         }
         else if (firstAnchor.sqrMagnitude > 0.01f)
@@ -701,6 +807,7 @@ public class NetworkedBall : NetworkBehaviour
             // Only first anchor available
             Vector3 pos = firstAnchor;
             pos.y += 0.5f;
+            Debug.Log($"[NetworkedBall] Spawn at first anchor + 0.5m: {pos}");
             return pos;
         }
         else
@@ -711,10 +818,12 @@ public class NetworkedBall : NetworkBehaviour
             {
                 Vector3 pos = cam.transform.position + cam.transform.forward * 0.5f;
                 pos.y = cam.transform.position.y; // Same height as camera
+                Debug.Log($"[NetworkedBall] Spawn at camera fallback: {pos}");
                 return pos;
             }
 
             // Last resort
+            Debug.LogWarning("[NetworkedBall] No anchors or camera found, using origin + 0.5m");
             return new Vector3(0, 0.5f, 0);
         }
     }
@@ -728,6 +837,7 @@ public class NetworkedBall : NetworkBehaviour
         if (tableByTag != null)
         {
             tableObject = tableByTag.transform;
+            Debug.Log($"[NetworkedBall] Found table: {tableObject.name}");
             return;
         }
 
@@ -738,6 +848,7 @@ public class NetworkedBall : NetworkBehaviour
             if (obj.name.ToLower().Contains("table") && obj.GetComponent<Collider>() != null)
             {
                 tableObject = obj;
+                Debug.Log($"[NetworkedBall] Found table by name: {tableObject.name}");
                 return;
             }
         }
@@ -795,6 +906,7 @@ public class NetworkedBall : NetworkBehaviour
                 // Check if racket is moving fast enough
                 if (racketVelocity.magnitude > minRacketSpeed)
                 {
+                    Debug.Log($"[NetworkedBall] PROXIMITY HIT! Distance: {distance:F3}, RacketVel: {racketVelocity.magnitude:F2}, IsHost: {Object.HasStateAuthority}");
 
                     // Use racket face normal for hit direction
                     Vector3 racketNormal = racket.transform.up;
@@ -808,6 +920,7 @@ public class NetworkedBall : NetworkBehaviour
                     else
                     {
                         // Client sends RPC to host
+                        Debug.Log($"[NetworkedBall] CLIENT proximity hit - sending RPC. Velocity: {hitVelocity}");
                         RPC_RequestHit(hitVelocity, transform.position);
                     }
                     return;
@@ -827,12 +940,14 @@ public class NetworkedBall : NetworkBehaviour
         if (IsInPositioningMode || localPositioningMode)
         {
             ExitPositioningMode();
+            Debug.Log("[NetworkedBall] Ball hit in positioning mode - starting game!");
         }
 
         // CLAMP velocity to prevent ball from flying off to infinity
         float maxSpeed = 8f; // Max 8 m/s - reasonable for table tennis in VR
         if (hitVelocity.magnitude > maxSpeed)
         {
+            Debug.Log($"[NetworkedBall] Clamping velocity from {hitVelocity.magnitude:F1} to {maxSpeed}");
             hitVelocity = hitVelocity.normalized * maxSpeed;
         }
 
@@ -865,6 +980,7 @@ public class NetworkedBall : NetworkBehaviour
             passthroughManager.OnBallHit(playerNumber);
         }
 
+        Debug.Log($"[NetworkedBall] Hit by player {playerNumber} - velocity: {hitVelocity}, speed: {hitVelocity.magnitude:F1}, ball pos: {transform.position}");
     }
 
     /// <summary>
@@ -872,6 +988,7 @@ public class NetworkedBall : NetworkBehaviour
     /// </summary>
     public void SetSpawnPosition(Vector3 worldPosition, Transform table = null)
     {
+        Debug.Log($"[NetworkedBall] SetSpawnPosition called with world position: {worldPosition}, table={table?.name ?? "null"}");
 
         // Set transform position
         transform.position = worldPosition;
@@ -890,6 +1007,7 @@ public class NetworkedBall : NetworkBehaviour
         if (table != null)
         {
             tableTransform = table;
+            Debug.Log($"[NetworkedBall] SetSpawnPosition: Using provided table: {table.name} at {tableTransform.position}");
         }
         else if (tableTransform == null)
         {
@@ -898,6 +1016,7 @@ public class NetworkedBall : NetworkBehaviour
             if (tableObj != null)
             {
                 tableTransform = tableObj.transform;
+                Debug.Log($"[NetworkedBall] SetSpawnPosition: Found table synchronously: {tableObj.name} at {tableTransform.position}");
             }
         }
 
@@ -906,6 +1025,7 @@ public class NetworkedBall : NetworkBehaviour
         SyncedWorldRotation = transform.rotation;
         SyncedVelocity = Vector3.zero;
 
+        Debug.Log($"[NetworkedBall] SetSpawnPosition complete: {transform.position}");
     }
     /// <summary>
     /// Request a serve (can be called by any player)
@@ -938,6 +1058,7 @@ public class NetworkedBall : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_RequestHit(Vector3 hitVelocity, Vector3 hitPoint)
     {
+        Debug.Log($"[NetworkedBall] Received hit RPC from client. Velocity: {hitVelocity}, Point: {hitPoint}");
         OnRacketHit(hitVelocity, hitPoint);
     }
 
@@ -990,6 +1111,7 @@ public class NetworkedBall : NetworkBehaviour
             else
             {
                 // Client sends RPC to host
+                Debug.Log($"[NetworkedBall] CLIENT detected racket collision - sending RPC. Velocity: {hitVelocity}");
                 RPC_RequestHit(hitVelocity, hitPoint);
             }
             return;
@@ -1003,7 +1125,18 @@ public class NetworkedBall : NetworkBehaviour
             collision.gameObject.CompareTag(tableTag) ||
             (tableObject != null && collision.gameObject == tableObject.gameObject))
         {
-            if (gameManager != null)
+            // // Bounce off table with bounciness factor
+            // Vector3 normal = collision.contacts[0].normal;
+            // Vector3 velocity = rb.velocity;
+
+            // // Reflect velocity with bounciness
+            // Vector3 reflectedVelocity = Vector3.Reflect(velocity, normal) * bounciness;
+
+            // rb.velocity = reflectedVelocity;
+            // localVelocity = reflectedVelocity;
+
+            // Debug.Log($"[NetworkedBall] Ball bounced on table - New velocity: {reflectedVelocity}");
+             if (gameManager != null)
             {
                 gameManager.OnBallBounce(transform.position);
             }
@@ -1016,6 +1149,7 @@ public class NetworkedBall : NetworkBehaviour
             collision.gameObject.layer == LayerMask.NameToLayer("Default") ||
             transform.position.y < resetBelowY)
         {
+            Debug.Log($"[NetworkedBall] Ball hit ground - Respawn needed");
             OnGroundHit();
         }
     }
@@ -1064,6 +1198,7 @@ public class NetworkedBall : NetworkBehaviour
             hitVelocity.y = 0.5f + swingSpeed * 0.2f;
         }
 
+        Debug.Log($"[NetworkedBall] Hit calc (world): swingSpeed={swingSpeed:F2}, hitSpeed={hitSpeed:F2}, dir={hitDirection}");
 
         return hitVelocity;
     }
@@ -1120,6 +1255,7 @@ public class NetworkedBall : NetworkBehaviour
         // Alternate authority: swap to the other player each round
         int nextAuthority = CurrentAuthority == 1 ? 2 : 1;
         CurrentAuthority = nextAuthority;
+        Debug.Log($"[NetworkedBall] Round ended - authority switched to Player {nextAuthority}");
 
         // Notify game managers
         var passthroughManager = FindObjectOfType<PassthroughGameManager>();
@@ -1138,6 +1274,7 @@ public class NetworkedBall : NetworkBehaviour
         RPC_NotifyRoundEnd(nextAuthority);
 
         // Reset ball to serve position for next player
+        Debug.Log($"[NetworkedBall] Resetting ball to serve position for Player {nextAuthority}");
         ResetToServePosition(nextAuthority);
     }
 
@@ -1159,6 +1296,7 @@ public class NetworkedBall : NetworkBehaviour
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyRoundEnd(int nextAuthority)
     {
+        Debug.Log($"[NetworkedBall] Round end - next serve: Player {nextAuthority}");
     }
 
     private void OnTriggerEnter(Collider other)
@@ -1178,6 +1316,7 @@ public class NetworkedBall : NetworkBehaviour
             else
             {
                 // Client sends RPC to host
+                Debug.Log($"[NetworkedBall] CLIENT detected racket trigger - sending RPC. Velocity: {hitVelocity}");
                 RPC_RequestHit(hitVelocity, hitPoint);
             }
             return;
@@ -1189,6 +1328,7 @@ public class NetworkedBall : NetworkBehaviour
         // Check for GROUND trigger (floor collider for ball out of play)
         if (other.CompareTag("Ground") || other.gameObject.name == "BallFloorCollider")
         {
+            Debug.Log($"[NetworkedBall] Ball hit floor trigger! Triggering ground hit reset.");
             OnGroundHit();
             return;
         }

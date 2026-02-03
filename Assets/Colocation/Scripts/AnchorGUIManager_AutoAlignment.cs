@@ -18,11 +18,13 @@ using Fusion;
 /// Inherits from ColocationManager to reuse alignment logic.
 public class AnchorGUIManager_AutoAlignment : ColocationManager
 {
+    private const string LOG_TAG = "[AnchorGUIManager]";
     // ===================== SERIALIZED FIELDS =====================
     [Header("UI Buttons")]
     [SerializeField] private Button autoAlignButton;
     [SerializeField] private Button spawnCubeButton;
     [SerializeField] private Button resetButton;
+    [SerializeField] private Button startGameButton;
     [SerializeField] private Button startPassthroughGameButton;
     [Header("UI Popups")]
     [SerializeField] private CubeInstructionsPopup cubeInstructionsPopup;
@@ -35,6 +37,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [SerializeField] private TextMeshProUGUI anchorText;
     [SerializeField] private Image statusIndicator;
     [SerializeField] private Image networkIndicator;
+
+    [Header("Settings")]
 
     [Header("Cube Spawn Settings")]
     [SerializeField] private NetworkPrefabRef cubePrefab;
@@ -51,6 +55,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Header("Debug / Development")]
     [Tooltip("Skip anchor alignment for quick testing. Uses local anchors and enables start buttons immediately.")]
     [SerializeField] private bool skipAlignmentForDebug = false;
+
+    private enum PassthroughGamePhase { Idle, TableAdjust, BallPosition, Playing }
 
     // ===================== STATIC PROPERTIES =====================
     new public static Vector3 FirstAnchorPosition { get; private set; }
@@ -70,6 +76,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
 
     private GameObject spawnedPassthroughTable;
+    private PassthroughGamePhase passthroughPhase = PassthroughGamePhase.Idle;
     private GameObject leftRacket;
     private GameObject rightRacket;
     private GameObject spawnedBall;
@@ -89,6 +96,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private bool waitingForGripToPlaceAnchors = false;
     private bool anchor1Placed = false;
     private bool anchor2Placed = false;
+    private bool hostAutoStarted = false;
     private bool isSwitchedToVRMode = false;
     // Note: passthrough mode is checked dynamically via passthroughGameManager.IsActive
     private bool isPlacingAnchor = false;
@@ -103,6 +111,11 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         CreateDistanceDisplays();
 
         cameraTransform = Camera.main?.transform;
+        if (cameraTransform == null)
+        {
+            Debug.LogWarning($"{LOG_TAG} Start No main camera found - will retry in Update");
+            // Don't return - continue initialization, camera can be found later
+        }
 
         // Check if we're in the TableTennis VR scene - if so, disable this component
         // (same approach as main branch Start Game - scene transition means this object is destroyed)
@@ -142,6 +155,21 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             networkRunner = FindObjectOfType<NetworkRunner>();
         }
 #endif
+        // Hide and disable the Start VR Game button (not currently used)
+        if (startGameButton != null)
+        {
+            startGameButton.gameObject.SetActive(false);
+            startGameButton = null;
+        }
+        else
+        {
+            // Try to find and hide the button by name if not assigned
+            var vrButton = GameObject.Find("StartGameButton") ?? GameObject.Find("Start VR Game") ?? GameObject.Find("StartVRGame");
+            if (vrButton != null)
+            {
+                vrButton.SetActive(false);
+            }
+        }
         // Note: passthrough mode is checked dynamically in Update() via passthroughGameManager.IsActive
         autoAlignButton?.onClick.AddListener(OnAutoAlignClicked);
         spawnCubeButton?.onClick.AddListener(OnSpawnCubeClicked);
@@ -288,6 +316,36 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (resetButton != null)
             resetButton.interactable = true; // Always available
+
+        // Start Game button - requires BOTH devices to be aligned
+        if (startGameButton != null)
+        {
+            startGameButton.interactable = debugModeEnabled || (hasNetwork && bothAligned);
+
+            // Update button text to show status
+            var btnText = startGameButton.GetComponentInChildren<TextMeshProUGUI>();
+            if (btnText != null)
+            {
+                if (debugModeEnabled)
+                {
+                    btnText.text = "Debug Start VR";
+                }
+                else if (!hasNetwork)
+                {
+                    btnText.text = "Start VR Game";
+                    startGameButton.interactable = false;
+                }
+                else if (!bothAligned)
+                {
+                    startGameButton.interactable = false;
+                }
+                else if (bothAligned)
+                {
+                    btnText.text = "Start VR Game";
+                    startGameButton.interactable = true;
+                }
+            }
+        }
 
         // Start Passthrough Game button - requires BOTH devices to be aligned
         if (startPassthroughGameButton != null)
@@ -663,6 +721,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             }
             else
             {
+                Debug.LogWarning($"{LOG_TAG} TryStartClientDiscovery: Failed to parse UUID");
                 // Fall back to OVR discovery
                 StartOvrDiscovery();
             }
@@ -689,7 +748,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 #endif
     }
 
-    private void OnAutoAlignClicked()
+    private async void OnAutoAlignClicked()
     {
         if (cameraTransform == null)
         {
@@ -856,6 +915,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
         if (leftHand == null || rightHand == null)
         {
+            Debug.LogWarning($"{LOG_TAG} UpdateAnchorPlacementPreview: Controller anchors not found! leftHand={leftHand != null}, rightHand={rightHand != null}");
             return;
         }
 
@@ -1010,8 +1070,12 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             if (leftDistanceDisplay != null) leftDistanceDisplay.SetActive(false);
             if (rightDistanceDisplay != null) rightDistanceDisplay.SetActive(false);
 
+            float distance = Vector3.Distance(currentAnchors[0].transform.position, currentAnchors[1].transform.position);
             currentState = ColocationState.ReadyToShare;
             UpdateUIWizard();
+        }
+        else
+        {
         }
     }
 
@@ -1133,17 +1197,24 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         return _localizedAnchor;
     }
 
+    /// Helper method to update status text with logging
     private void SetStatusText(string text, string source = "")
     {
         if (guiStatusText != null)
         {
+            string oldText = guiStatusText.text;
             guiStatusText.text = text;
+
+            // Log status text changes for debugging
+            if (oldText != text)
+            {
+            }
         }
         UpdateStatusIndicator();
     }
 
     // ==================== OVERRIDE BASE CLASS METHODS ====================
-    protected override void DiscoverNearbySession()
+    protected override async void DiscoverNearbySession()
     {
         base.DiscoverNearbySession();
     }
@@ -1269,6 +1340,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             }
         }
 
+        Debug.Log($"[AnchorGUIManager DespawnAllCubesOnHost] Found {cubesToDespawn.Count} networked objects to despawn");
 
         foreach (var cube in cubesToDespawn)
         {
@@ -1384,6 +1456,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         waitingForGripToPlaceAnchors = false;
         firstAnchorWorldPosition = Vector3.zero;
         isPlacingAnchor = false; // Reset placement lock
+        hostAutoStarted = false; // Allow auto-start again
 
         // Reset client-specific discovery state
         guiDiscoveryStarted = false;
@@ -1407,6 +1480,48 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
 
 
+
+    // ==================== START GAME (TABLE TENNIS) ====================
+    private void OnStartGameClicked()
+    {
+
+        // Check if aligned first
+        if (_localizedAnchor == null || !_localizedAnchor.Localized)
+        {
+            return;
+        }
+
+#if FUSION2
+        if (networkRunner == null || !networkRunner.IsRunning)
+        {
+            return;
+        }
+
+        // Check if both devices are aligned
+        if (!IsAlignmentComplete())
+        {
+            return;
+        }
+
+        // Despawn any existing cubes before loading VR scene
+        DespawnAllCubes();
+
+        // Either player can initiate - request goes to host, host loads scene
+        if (Object.HasStateAuthority)
+        {
+            HideMainGUIPanel(); // Hide UI before loading scene
+            LoadTableTennisSceneNetworked();
+        }
+        else
+        {
+            HideMainGUIPanel(); // Hide UI before scene loads
+            RPC_RequestStartGame();
+        }
+#else
+        // Non-networked fallback
+        LoadTableTennisSceneLocal();
+#endif
+    }
 
     // ==================== PASSTHROUGH GAME ====================
     /// Start passthrough table tennis - delegates to PassthroughGameManager
@@ -1461,6 +1576,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         }
         hiddenUIElements.Clear();
         hiddenMainGUICanvas = null;
+        Debug.Log("[AnchorGUIManager] Main GUI panel restored");
     }
 
 #if FUSION2
@@ -1527,6 +1643,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             passthroughGameUIPanel = null;
         }
 
+        passthroughPhase = PassthroughGamePhase.Idle;
     }
 
 
@@ -1670,7 +1787,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
 
     /// Override ShareAnchors to handle debug mode
-    protected override void ShareAnchors()
+    protected override async void ShareAnchors()
     {
         // DEBUG MODE: Use local anchors without sharing
         if (skipAlignmentForDebug && currentAnchors.Count >= 2)
@@ -1691,7 +1808,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             return;
         }
 
-        SetStatusText("Sharing anchors...", "ShareAnchors");
         base.ShareAnchors();
     }
 

@@ -107,6 +107,8 @@ public class WelcomePopup : MonoBehaviour
         popupCanvas.gameObject.SetActive(true);
         if (popupPanel != null) popupPanel.SetActive(true);
         isShowing = true;
+
+        Debug.Log("[WelcomePopup] Showing welcome popup (follows head)");
     }
 
     public void HidePopup()
@@ -120,6 +122,8 @@ public class WelcomePopup : MonoBehaviour
             popupPanel.SetActive(false);
         }
         isShowing = false;
+
+        Debug.Log("[WelcomePopup] Welcome popup dismissed");
     }
 
     private void CreatePopupUI()
@@ -244,6 +248,7 @@ public class WelcomePopup : MonoBehaviour
         buttonText.color = Color.white;
         buttonText.alignment = TextAlignmentOptions.Center;
 
+        Debug.Log("[WelcomePopup] Created popup UI programmatically");
     }
 
     private string GetWelcomeMessage()

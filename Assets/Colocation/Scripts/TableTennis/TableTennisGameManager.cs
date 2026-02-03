@@ -18,6 +18,8 @@ public class TableTennisGameManager : NetworkBehaviour
     [Header("Table Zones (anchor-relative)")]
     [SerializeField] private float tableHalfLength = 1.37f; // Half of 2.74m table
     [SerializeField] private float tableWidth = 1.525f; // Full width
+    [SerializeField] private float tableHeight = 0.76f;
+    [SerializeField] private float netHeight = 0.1525f; // 15.25cm net
     
     [Header("Table Object")]
     [SerializeField] private Transform tableObject; // Reference to actual table object
@@ -73,6 +75,7 @@ public class TableTennisGameManager : NetworkBehaviour
         
         StartCoroutine(Initialize());
         
+        Debug.Log($"[TableTennisGameManager] Spawned. HasStateAuthority: {Object.HasStateAuthority}");
     }
     
     private IEnumerator Initialize()
@@ -119,6 +122,7 @@ public class TableTennisGameManager : NetworkBehaviour
             ResetGame();
         }
         
+        Debug.Log($"[TableTennisGameManager] Initialized. LocalPlayer: {localPlayerNumber}, Table: {(tableObject != null ? tableObject.name : "not found")}");
     }
     
     private void FindTableObject()
@@ -130,6 +134,7 @@ public class TableTennisGameManager : NetworkBehaviour
         if (tableByTag != null)
         {
             tableObject = tableByTag.transform;
+            Debug.Log($"[TableTennisGameManager] Found table by tag: {tableObject.name}");
             return;
         }
         
@@ -140,10 +145,12 @@ public class TableTennisGameManager : NetworkBehaviour
             if (obj.name.ToLower().Contains("table") && obj.GetComponent<Collider>() != null)
             {
                 tableObject = obj;
+                Debug.Log($"[TableTennisGameManager] Found table by name: {tableObject.name}");
                 return;
             }
         }
         
+        Debug.LogWarning("[TableTennisGameManager] Could not find table object. Assign it in Inspector or tag it as 'Table'");
     }
     
     /// <summary>
@@ -190,6 +197,7 @@ public class TableTennisGameManager : NetworkBehaviour
         {
             Vector3 relativePos = WorldToTablePosition(cameraRig.centerEyeAnchor.position);
             localPlayerNumber = relativePos.z < 0 ? 1 : 2;
+            Debug.Log($"[TableTennisGameManager] Local player is Player {localPlayerNumber} (z={relativePos.z:F2})");
         }
     }
     
@@ -306,6 +314,7 @@ public class TableTennisGameManager : NetworkBehaviour
         }
         
         PlaySound(bounceSound);
+        Debug.Log($"[TableTennisGameManager] Bounce on side {bounceSide}, count: {BounceCount}");
     }
     
     /// <summary>
@@ -320,11 +329,15 @@ public class TableTennisGameManager : NetworkBehaviour
         
         if (CurrentGameState == GameState.Serving && playerNumber == CurrentServer)
         {
-            // Server hit the ball - transition to playing
-            CurrentGameState = GameState.Playing;
+            // Server hit the ball - good
+            Debug.Log($"[TableTennisGameManager] Player {playerNumber} served");
+        }
+        else if (CurrentGameState == GameState.Playing)
+        {
+            Debug.Log($"[TableTennisGameManager] Player {playerNumber} hit the ball");
         }
     }
-
+    
     /// <summary>
     /// Called when ball falls off table or goes out of bounds
     /// </summary>
@@ -351,6 +364,7 @@ public class TableTennisGameManager : NetworkBehaviour
         OnScoreChanged?.Invoke(Player1Score, Player2Score);
         OnPointScored?.Invoke(player);
         
+        Debug.Log($"[TableTennisGameManager] Point for Player {player}! Score: {Player1Score}-{Player2Score}");
         
         // Check for game win
         if (CheckForWin())
@@ -359,6 +373,7 @@ public class TableTennisGameManager : NetworkBehaviour
             CurrentGameState = GameState.GameOver;
             PlaySound(winSound);
             OnGameWon?.Invoke(winner);
+            Debug.Log($"[TableTennisGameManager] Player {winner} wins!");
         }
         else
         {
@@ -395,6 +410,7 @@ public class TableTennisGameManager : NetworkBehaviour
         {
             ServeCount = 0;
             CurrentServer = CurrentServer == 1 ? 2 : 1;
+            Debug.Log($"[TableTennisGameManager] Server switched to Player {CurrentServer}");
         }
         
         // Reset for next point
@@ -417,6 +433,7 @@ public class TableTennisGameManager : NetworkBehaviour
         ResetGame();
         CurrentGameState = GameState.Serving;
         
+        Debug.Log("[TableTennisGameManager] Game started!");
     }
     
     public void ResetGame()
@@ -436,6 +453,7 @@ public class TableTennisGameManager : NetworkBehaviour
             ball.RequestServe(CurrentServer);
         }
         
+        Debug.Log("[TableTennisGameManager] Game reset");
     }
     
     private void PlaySound(AudioClip clip)

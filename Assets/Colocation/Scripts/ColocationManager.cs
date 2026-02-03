@@ -208,7 +208,8 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
                     SortAnchorsConsistently();
                     currentState = ColocationState.HostAligned;
 
-                    }
+                    Debug.Log($"[ColocationManager] HOST aligned with 2 anchors");
+                }
                 else
                 {
                     _localizedAnchor = anchorsToShare[0];
@@ -265,7 +266,14 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
         OVRColocationSession.ColocationSessionDiscovered -= OnColocationSessionDiscovered;
 
         _sharedAnchorGroupId = session.AdvertisementUuid;
+        Debug.Log($"[ColocationManager] Session discovered - loading anchors");
         LoadAndAlignToAnchor(_sharedAnchorGroupId);
+    }
+
+    protected virtual async void CreateAndShareAlignmentAnchor()
+    {
+       // Legacy method, kept for compatibility if called directly, but redirected to ShareAnchors
+       ShareAnchors();
     }
 
     protected virtual async Task<OVRSpatialAnchor> CreateAnchor(Vector3 position, Quaternion rotation)
@@ -518,6 +526,7 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
                 if (statusText != null)
                     statusText.text = "Aligned\n2 anchors found\n\nReady to play";
 
+                Debug.Log("[ColocationManager] CLIENT aligned with 2 anchors");
                 UpdateUIWizard();
             }
             else if (localizedAnchors.Count == 1)
@@ -535,6 +544,7 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
                 if (statusText != null)
                     statusText.text = "Aligned\n1 anchor found\n\nReady to play";
 
+                Debug.Log("[ColocationManager] CLIENT aligned with 1 anchor");
                 UpdateUIWizard();
             }
             else
