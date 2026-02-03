@@ -24,11 +24,6 @@ public class PassthroughController : MonoBehaviour
         if (passthroughLayer != null)
         {
             passthroughLayer.enabled = enablePassthrough;
-            Debug.Log($"[PassthroughController] Passthrough {(enablePassthrough ? "enabled" : "disabled")}");
-        }
-        else
-        {
-            Debug.Log("[PassthroughController] No OVRPassthroughLayer found");
         }
 
         // Configure camera background
@@ -53,7 +48,6 @@ public class PassthroughController : MonoBehaviour
                 mainCamera.clearFlags = CameraClearFlags.SolidColor;
                 mainCamera.backgroundColor = backgroundColor;
             }
-            Debug.Log($"[PassthroughController] Camera background set to {mainCamera.clearFlags}");
         }
 
         // Also configure OVRManager if present

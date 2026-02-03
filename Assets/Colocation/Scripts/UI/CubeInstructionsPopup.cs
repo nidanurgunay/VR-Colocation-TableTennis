@@ -98,8 +98,6 @@ public class CubeInstructionsPopup : MonoBehaviour
         popupCanvas.gameObject.SetActive(true);
         if (popupPanel != null) popupPanel.SetActive(true);
         isShowing = true;
-
-        Debug.Log("[CubeInstructionsPopup] Showing cube instructions popup (follows head)");
     }
 
     public void HidePopup()
@@ -113,8 +111,6 @@ public class CubeInstructionsPopup : MonoBehaviour
             popupPanel.SetActive(false);
         }
         isShowing = false;
-
-        Debug.Log("[CubeInstructionsPopup] Cube instructions popup dismissed");
     }
 
     private void CreatePopupUI()
@@ -239,7 +235,6 @@ public class CubeInstructionsPopup : MonoBehaviour
         buttonText.color = Color.white;
         buttonText.alignment = TextAlignmentOptions.Center;
 
-        Debug.Log("[CubeInstructionsPopup] Created popup UI programmatically");
     }
 
     private string GetCubeInstructionsMessage()

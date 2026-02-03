@@ -9,7 +9,6 @@ using System.Linq;
 /// </summary>
 public class TableTennisManager : NetworkBehaviour
 {
-    private const string LOG_TAG = "[TableTennisManager]";
     [Header("Shared Config (assign this OR individual prefabs below)")]
     [SerializeField] private TableTennisConfig sharedConfig;
     
@@ -37,8 +36,6 @@ public class TableTennisManager : NetworkBehaviour
     [Header("Runtime Adjustment Controls")]
     [SerializeField] private float moveSpeed = 2.0f; // Meters per second
     [SerializeField] private float rotateSpeed = 90f; // Degrees per second
-    [SerializeField] private bool showAdjustmentInstructions = true;
-    
     // Networked table position/rotation for syncing across players (LOCAL to anchor)
     [Networked] private Vector3 NetworkedTableLocalPosition { get; set; } // Position relative to primary anchor
     [Networked] private float NetworkedTableYRotation { get; set; }
@@ -68,7 +65,6 @@ public class TableTennisManager : NetworkBehaviour
             if (Object.HasStateAuthority)
             {
                 CurrentPhase = GamePhase.Playing;
-                Debug.Log($"{LOG_TAG} OnBallHit Ball hit! Transitioning to Playing phase");
             }
             else
             {
@@ -88,7 +84,6 @@ public class TableTennisManager : NetworkBehaviour
         {
             CurrentPhase = GamePhase.BallPosition;
             RPC_NotifyPhaseChange(GamePhase.BallPosition);
-            Debug.Log($"{LOG_TAG} OnBallGroundHit Ball hit ground - round ended. Transitioning to BallPosition for next serve.");
         }
         else
         {
@@ -101,12 +96,10 @@ public class TableTennisManager : NetworkBehaviour
     {
         CurrentPhase = GamePhase.BallPosition;
         RPC_NotifyPhaseChange(GamePhase.BallPosition);
-        Debug.Log($"{LOG_TAG} Client notified ground hit - transitioning to BallPosition");
     }
     
     // Runtime adjustment state
     private GameObject tableRoot; // Reference to table object for positioning
-    private bool isInAdjustMode = false;
     private OVRCameraRig cameraRig;
     
     [Header("Table Setup")]
@@ -136,40 +129,18 @@ public class TableTennisManager : NetworkBehaviour
     
     public override void Spawned()
     {
-        Debug.Log($"[TableTennisManager] Spawned. HasStateAuthority: {Object.HasStateAuthority}");
         
         // Force tableXRotationOffset to 180 (in case Unity serialized an old value of 0)
         // This fixes upside-down table issue
         if (tableXRotationOffset == 0f)
         {
             tableXRotationOffset = 180f;
-            Debug.Log("[TableTennisManager] Forcing tableXRotationOffset to 180 to fix upside-down table");
         }
         
         StartCoroutine(InitializeGame());
         
         // Enable rackets on both hands by default
         StartCoroutine(EnableRacketsDelayed());
-        
-        if (showAdjustmentInstructions)
-        {
-            Debug.Log("[TableTennisManager] GAME CONTROLS:");
-            Debug.Log("  Phase 1 - TABLE ADJUST:");
-            Debug.Log("    - Left Stick: Move table (X/Z)");
-            Debug.Log("    - Right Stick X: Rotate table");
-            Debug.Log("    - Right Stick Y: Adjust height");
-            Debug.Log("    - GRIP: Spawn ball (skips to Phase 2)");
-            Debug.Log("    - B/Y: Toggle racket visibility");
-            Debug.Log("    - A/X: Confirm and go to Ball Position phase");
-            Debug.Log("  Phase 2 - BALL POSITION:");
-            Debug.Log("    - GRIP: Spawn ball");
-            Debug.Log("    - A/X HELD + Right Stick: Adjust ball position");
-            Debug.Log("    - Left/Right Stick: Continue adjusting table");
-            Debug.Log("    - Hit ball with racket to START");
-            Debug.Log("  Phase 3 - PLAYING:");
-            Debug.Log("    - Play ping pong!");
-            Debug.Log("  MENU button: Open game mode menu");
-        }
     }
     
     private System.Collections.IEnumerator EnableRacketsDelayed()
@@ -203,7 +174,6 @@ public class TableTennisManager : NetworkBehaviour
         {
             tableRoot.transform.SetParent(sharedAnchor, worldPositionStays: false);
             _tableParented = true;
-            Debug.Log($"[TableTennisManager] Table parented to anchor");
         }
         
         // Apply LOCAL position relative to anchor (Y includes floor offset)
@@ -245,7 +215,6 @@ public class TableTennisManager : NetworkBehaviour
                                  OVRInput.GetDown(OVRInput.Button.Start, OVRInput.Controller.RTouch);
         if (menuButtonPressed)
         {
-            Debug.Log("[TableTennisManager] MENU button pressed - toggling game menu");
             ToggleGameMenu();
             return;
         }
@@ -269,7 +238,6 @@ public class TableTennisManager : NetworkBehaviour
         
         if (gripPressed && !wasGripPressed && CurrentPhase == GamePhase.BallPosition && !isGameMenuOpen)
         {
-            Debug.Log($"[TableTennisManager] Grip detected! Left: {leftGrip}, Right: {rightGrip}");
             // GRIP spawns ball only in BallPosition phase (not after spawned)
             if (!GameStarted && !ballSpawnPending)
             {
@@ -333,7 +301,6 @@ public class TableTennisManager : NetworkBehaviour
             HideGameMenu();
         }
         
-        Debug.Log($"[TableTennisManager] Game menu {(isGameMenuOpen ? "opened" : "closed")}");
     }
     
     /// <summary>
@@ -357,11 +324,6 @@ public class TableTennisManager : NetworkBehaviour
         // Rackets managed by ControllerRacket - no need to hide here
         // ControllerRacket handles visibility via B/Y buttons
         
-        Debug.Log("[TableTennisManager] GAME MENU:");
-        Debug.Log("  A/X: Resume Game");
-        Debug.Log("  B/Y: Restart Game");
-        Debug.Log("  GRIP: Return to Passthrough");
-        Debug.Log("  MENU: Close Menu");
     }
     
     /// <summary>
@@ -480,7 +442,6 @@ public class TableTennisManager : NetworkBehaviour
         if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch) ||
             OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch))
         {
-            Debug.Log("[TableTennisManager] A/X pressed - resuming game");
             ToggleGameMenu(); // Close menu and resume
             return;
         }
@@ -489,7 +450,6 @@ public class TableTennisManager : NetworkBehaviour
         if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch) ||
             OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch))
         {
-            Debug.Log("[TableTennisManager] B/Y pressed - restarting game");
             RestartGame();
             ToggleGameMenu();
             return;
@@ -499,7 +459,6 @@ public class TableTennisManager : NetworkBehaviour
         if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger) ||
             OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger))
         {
-            Debug.Log("[TableTennisManager] GRIP pressed - returning to passthrough mode");
             ReturnToMainMenu();
             return;
         }
@@ -510,7 +469,6 @@ public class TableTennisManager : NetworkBehaviour
     /// </summary>
     private void RestartGame()
     {
-        Debug.Log("[TableTennisManager] Restarting game...");
         
         // Destroy ball if exists
         if (spawnedBall != null && Object.HasStateAuthority)
@@ -530,13 +488,11 @@ public class TableTennisManager : NetworkBehaviour
             RPC_RequestRestart();
         }
         
-        Debug.Log("[TableTennisManager] Game restarted - adjust table position");
     }
     
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestRestart()
     {
-        Debug.Log("[TableTennisManager] Host: Client requested restart");
         
         if (spawnedBall != null)
         {
@@ -553,7 +509,6 @@ public class TableTennisManager : NetworkBehaviour
     /// </summary>
     public void ReturnToMainMenu()
     {
-        Debug.Log($"[TableTennisManager] Returning to main menu: {mainMenuSceneName}");
         
         // Cleanup - ControllerRacket manages its own rackets
         if (runtimeMenuPanel != null) Destroy(runtimeMenuPanel);
@@ -585,7 +540,6 @@ public class TableTennisManager : NetworkBehaviour
                 
                 // Use Fusion's networked scene loading
                 Runner.LoadScene(SceneRef.FromIndex(sceneIndex));
-                Debug.Log($"[TableTennisManager] Loading scene index {sceneIndex} (returning to passthrough)");
             }
             else
             {
@@ -604,7 +558,6 @@ public class TableTennisManager : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestReturnToMainMenu()
     {
-        Debug.Log("[TableTennisManager] Host: Client requested return to main menu");
         ReturnToMainMenu();
     }
     
@@ -617,7 +570,6 @@ public class TableTennisManager : NetworkBehaviour
     {
         // Rackets are now managed by ControllerRacket component
         // This method is deprecated
-        Debug.Log("[TableTennisManager] ToggleRacketVisibility deprecated - use ControllerRacket B/Y buttons");
     }
     
     /// <summary>
@@ -630,7 +582,6 @@ public class TableTennisManager : NetworkBehaviour
         
         // Note: ControllerRacket uses B/Y buttons to toggle racket visibility
         // This method just tracks which hand is "active" for game logic
-        Debug.Log($"[TableTennisManager] Hand preference switched to {(isRacketOnRightHand ? "RIGHT" : "LEFT")} - use B/Y to toggle rackets");
     }
     
     /// <summary>
@@ -752,17 +703,14 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (Object.HasStateAuthority)
         {
-            Debug.Log($"{LOG_TAG} SpawnBallForPositioning Host spawning ball for positioning");
             SpawnBall();
             GameStarted = true; // Ball exists, but game hasn't truly started until hit
             ballSpawnPending = false; // Reset for host
             RPC_NotifyBallSpawned(); // Notify all clients
-            Debug.Log($"{LOG_TAG} SpawnBallForPositioning Ball spawned - adjust position with A/X + thumbstick, hit to start");
         }
         else
         {
             // Client requests host to spawn ball
-            Debug.Log($"{LOG_TAG} SpawnBallForPositioning Client requesting ball spawn");
             RPC_RequestGameStart();
         }
     }
@@ -784,8 +732,6 @@ public class TableTennisManager : NetworkBehaviour
             case GamePhase.TableAdjust:
                 // Move to ball position phase
                 CurrentPhase = GamePhase.BallPosition;
-                Debug.Log($"{LOG_TAG} AdvancePhase Phase: BALL POSITION");
-                Debug.Log($"{LOG_TAG} AdvancePhase Instructions: Press GRIP to spawn ball, A/X + thumbstick to adjust ball position, hit ball with racket to START");
                 // Notify all clients of phase change
                 RPC_NotifyPhaseChange(GamePhase.BallPosition);
                 break;
@@ -812,7 +758,6 @@ public class TableTennisManager : NetworkBehaviour
         }
         if (cameraRig == null)
         {
-            Debug.LogWarning("[TableTennisManager] EnableRackets: No OVRCameraRig found!");
             return;
         }
         
@@ -825,7 +770,6 @@ public class TableTennisManager : NetworkBehaviour
         // SetupControllerRackets() is called in Start() to create the manager
         // ControllerRacket handles B/Y for visibility and auto-enables right hand racket
         
-        Debug.Log("[TableTennisManager] EnableRackets: Rackets managed by ControllerRacket. Press B/Y to toggle visibility.");
     }
     
     /// <summary>
@@ -872,7 +816,6 @@ public class TableTennisManager : NetworkBehaviour
             if (typeName.Contains("rayinteractor") || (typeName.Contains("ray") && typeName.Contains("interactor")))
             {
                 mb.enabled = false;
-                Debug.Log($"[TableTennisManager] Disabled {mb.GetType().Name}");
             }
         }
         
@@ -885,7 +828,6 @@ public class TableTennisManager : NetworkBehaviour
             lr.enabled = false;
         }
         
-        Debug.Log("[TableTennisManager] Disabled ray interactors");
     }
     
     /// <summary>
@@ -920,7 +862,6 @@ public class TableTennisManager : NetworkBehaviour
     public void StartPlayingPhase()
     {
         CurrentPhase = GamePhase.Playing;
-        Debug.Log("[TableTennisManager] Phase: PLAYING - Game started!");
     }
     
     /// <summary>
@@ -969,7 +910,6 @@ public class TableTennisManager : NetworkBehaviour
         if (CurrentPhase == GamePhase.TableAdjust)
         {
             CurrentPhase = GamePhase.BallPosition;
-            Debug.Log("[TableTennisManager] Host: Client requested phase advance to BallPosition");
             // Notify all clients of phase change
             RPC_NotifyPhaseChange(GamePhase.BallPosition);
         }
@@ -982,7 +922,6 @@ public class TableTennisManager : NetworkBehaviour
         if (!Object.HasStateAuthority)
         {
             CurrentPhase = newPhase;
-            Debug.Log($"{LOG_TAG} Client: Phase synchronized to {newPhase}");
         }
     }
     
@@ -993,7 +932,6 @@ public class TableTennisManager : NetworkBehaviour
         if (CurrentPhase != GamePhase.Playing)
         {
             CurrentPhase = GamePhase.Playing;
-            Debug.Log("[TableTennisManager] Host: Client hit ball - transitioning to Playing");
         }
     }
     
@@ -1009,7 +947,6 @@ public class TableTennisManager : NetworkBehaviour
         SetupControllerRackets();
         
         // Ball is NOT auto-spawned here - user presses GRIP in BallPosition phase to spawn
-        Debug.Log("[TableTennisManager] Initialization complete. Adjust table, then press A/X to advance to BallPosition phase.");
     }
     
     /// <summary>
@@ -1021,45 +958,31 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (sharedAnchor == null)
         {
-            Debug.LogWarning("[TableTennisManager PlaceTableAtAnchor (table)] No anchor to place table at!");
             return;
         }
 
         // Find the Environment object FIRST - this contains the table and room (walls, floor, etc.)
         GameObject environmentRoot = GameObject.Find("Environment");
-        Debug.Log($"{LOG_TAG} PlaceTableAtAnchor Searching for Environment: {(environmentRoot != null ? "FOUND" : "NOT FOUND")}");
 
         // Find the PingPongTable (used for reference and verification)
         GameObject pingPongTable = GameObject.Find("PingPongTable") ?? GameObject.Find("pingpongtable")
                     ?? GameObject.Find("pingpong") ?? GameObject.Find("PingPong") ?? GameObject.Find("TableTennis");
-        Debug.Log($"{LOG_TAG} PlaceTableAtAnchor Searching for PingPongTable: {(pingPongTable != null ? $"FOUND '{pingPongTable.name}'" : "NOT FOUND")}");
 
         // Determine which object to use as tableRoot (the one we'll parent to anchor and position)
         if (environmentRoot != null)
         {
             // PREFERRED: Use Environment as root (contains table + room)
             tableRoot = environmentRoot;
-
-            // Verify table exists within Environment
-            if (pingPongTable != null)
-            {
-                Debug.Log($"{LOG_TAG} PlaceTableAtAnchor Using Environment as root. Table '{pingPongTable.name}' found at local pos: {pingPongTable.transform.localPosition} within {pingPongTable.transform.parent?.name ?? "null"}");
-            }
-            else
-            {
-                Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor Using Environment but PingPongTable not found! Environment has {environmentRoot.transform.childCount} children");
-            }
         }
         else if (pingPongTable != null)
         {
             // FALLBACK: Use PingPongTable directly if no Environment found
             tableRoot = pingPongTable;
-            Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor No Environment found - using PingPongTable directly (room may not be centered)");
         }
         else
         {
             tableRoot = null;
-            Debug.LogError($"{LOG_TAG} PlaceTableAtAnchor CRITICAL: Neither Environment nor PingPongTable found in scene!");
+            Debug.LogError($"[TableTennisManager] PlaceTableAtAnchor CRITICAL: Neither Environment nor PingPongTable found in scene!");
         }
 
         // CLEANUP: Remove OLD Environment/tables that were children of preserved anchors from previous scene
@@ -1076,7 +999,6 @@ public class TableTennisManager : NetworkBehaviour
                     child.name.Contains("pingpongtable") || child.name.Contains("pingpong") ||
                     child.name.Contains("PingPong") || child.name.Contains("TableTennis"))
                 {
-                    Debug.Log($"[TableTennisManager PlaceTableAtAnchor (table)] Removing old '{child.name}' from preserved anchor");
                     Destroy(child.gameObject);
                 }
             }
@@ -1086,7 +1008,6 @@ public class TableTennisManager : NetworkBehaviour
         if (tableRoot == null && tableTransform != null)
         {
             tableRoot = tableTransform.gameObject;
-            Debug.LogWarning("[TableTennisManager PlaceTableAtAnchor] Using assigned tableTransform as fallback");
         }
         
         if (tableRoot != null)
@@ -1094,7 +1015,6 @@ public class TableTennisManager : NetworkBehaviour
             // CRITICAL FIX: Ensure table is active (might be disabled by PassthroughGameManager.StopGame)
             if (!tableRoot.activeSelf)
             {
-                Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor Table/Environment was INACTIVE - enabling it");
                 tableRoot.SetActive(true);
             }
 
@@ -1164,11 +1084,6 @@ public class TableTennisManager : NetworkBehaviour
             tableRoot.transform.localRotation = Quaternion.Euler(xRotation, envYRotation, 0);
 
             string rootType = isEnvironmentRoot ? "Environment (room + table)" : "Table only";
-            Debug.Log($"{LOG_TAG} PlaceTableAtAnchor FINAL - Positioned: {rootType}, LocalPos: {tableRoot.transform.localPosition}, LocalRot: {tableRoot.transform.localEulerAngles} (X: {xRotation}°), WorldPos: {tableRoot.transform.position}");
-        }
-        else
-        {
-            Debug.LogWarning($"{LOG_TAG} PlaceTableAtAnchor Could not find Environment or table object to place at anchor");
         }
     }
     
@@ -1181,7 +1096,6 @@ public class TableTennisManager : NetworkBehaviour
         var existingControllerRacket = FindObjectOfType<ControllerRacket>();
         if (existingControllerRacket != null)
         {
-            Debug.Log($"[TableTennisManager] ControllerRacket already exists on '{existingControllerRacket.gameObject.name}' - not creating another");
             return;
         }
         
@@ -1193,15 +1107,10 @@ public class TableTennisManager : NetworkBehaviour
             var manager = new GameObject("ControllerRacketManager");
             // Use string-based AddComponent to avoid compile order issues
             var component = manager.AddComponent(System.Type.GetType("ControllerRacket"));
-            if (component != null)
-            {
-                Debug.Log("[TableTennisManager] Created ControllerRacketManager - press grip to show racket on controller");
-            }
-            else
+            if (component == null)
             {
                 // Fallback: try direct add
                 manager.AddComponent<ControllerRacket>();
-                Debug.Log("[TableTennisManager] Created ControllerRacketManager (direct)");
             }
         }
     }
@@ -1214,7 +1123,6 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (sharedAnchor == null)
         {
-            Debug.LogWarning("[TableTennisManager] No anchor to parent scene to!");
             return;
         }
         
@@ -1236,11 +1144,6 @@ public class TableTennisManager : NetworkBehaviour
             // Parent to anchor
             gameRoot.transform.SetParent(sharedAnchor, worldPositionStays: true);
             
-            Debug.Log($"[TableTennisManager] Parented '{gameRoot.name}' to anchor. Local pos: {gameRoot.transform.localPosition}");
-        }
-        else
-        {
-            Debug.LogWarning("[TableTennisManager] Could not find game root object to parent to anchor");
         }
     }
     
@@ -1256,7 +1159,6 @@ public class TableTennisManager : NetworkBehaviour
         {
             var alignObj = new GameObject("AlignmentManager");
             alignmentManager = alignObj.AddComponent<AlignmentManager>();
-            Debug.Log("[TableTennisManager] Created AlignmentManager for scene transition alignment");
         }
         
         // Try getting explicitly from AnchorGUIManager first (most reliable)
@@ -1268,7 +1170,6 @@ public class TableTennisManager : NetworkBehaviour
             {
                 sharedAnchor = localized.transform;
                 primaryOVRAnchor = localized;
-                Debug.Log($"[TableTennisManager] Found localized anchor from GUI: {localized.Uuid}");
             }
         }
 
@@ -1280,27 +1181,23 @@ public class TableTennisManager : NetworkBehaviour
             while ((sharedAnchor == null || secondaryAnchor == null) && attempts < 50)
             {
                 var anchors = FindObjectsOfType<OVRSpatialAnchor>(true);
-                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Found {anchors.Length} total OVRSpatialAnchor objects in scene");
                 
                 foreach (var anchor in anchors)
                 {
                     if (anchor != null) // Removed Localized check for preserved anchors from scene transition
                     {
-                        Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Checking anchor {anchor.Uuid}, world pos: {anchor.transform.position}");
                         
                         if (sharedAnchor == null)
                         {
                             sharedAnchor = anchor.transform;
                             primaryOVRAnchor = anchor;
                             NetworkedPrimaryAnchorUUID = anchor.Uuid.ToString();
-                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Set PRIMARY anchor UUID: {anchor.Uuid}");
                         }
                         else if (anchor.transform != sharedAnchor && secondaryAnchor == null)
                         {
                             secondaryAnchor = anchor.transform;
                             secondaryOVRAnchor = anchor;
                             NetworkedSecondaryAnchorUUID = anchor.Uuid.ToString();
-                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] HOST: Set SECONDARY anchor UUID: {anchor.Uuid}");
                         }
                     }
                 }
@@ -1312,7 +1209,6 @@ public class TableTennisManager : NetworkBehaviour
         else
         {
             // CLIENT: Wait for host to set the UUIDs, then find matching anchors
-            Debug.Log("[TableTennisManager] CLIENT: Waiting for host to share anchor UUIDs...");
             
             while (string.IsNullOrEmpty(NetworkedPrimaryAnchorUUID.ToString()) && attempts < 50)
             {
@@ -1322,33 +1218,28 @@ public class TableTennisManager : NetworkBehaviour
             
             string primaryUUID = NetworkedPrimaryAnchorUUID.ToString();
             string secondaryUUID = NetworkedSecondaryAnchorUUID.ToString();
-            Debug.Log($"[TableTennisManager] CLIENT: Received UUIDs - Primary: {primaryUUID}, Secondary: {secondaryUUID}");
             
             // Now find the matching anchors by UUID
             attempts = 0;
             while ((sharedAnchor == null || secondaryAnchor == null) && attempts < 50)
             {
                 var anchors = FindObjectsOfType<OVRSpatialAnchor>(true);
-                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Found {anchors.Length} total OVRSpatialAnchor objects in scene");
                 
                 foreach (var anchor in anchors)
                 {
                     if (anchor != null) // Removed Localized check for preserved anchors from scene transition
                     {
                         string anchorUUID = anchor.Uuid.ToString();
-                        Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Checking anchor {anchorUUID}, world pos: {anchor.transform.position}");
                         
                         if (sharedAnchor == null && anchorUUID == primaryUUID)
                         {
                             sharedAnchor = anchor.transform;
                             primaryOVRAnchor = anchor;
-                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Found PRIMARY anchor by UUID: {anchorUUID}");
                         }
                         else if (secondaryAnchor == null && anchorUUID == secondaryUUID)
                         {
                             secondaryAnchor = anchor.transform;
                             secondaryOVRAnchor = anchor;
-                            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] CLIENT: Found SECONDARY anchor by UUID: {anchorUUID}");
                         }
                     }
                 }
@@ -1360,49 +1251,37 @@ public class TableTennisManager : NetworkBehaviour
         
         if (sharedAnchor == null)
         {
-            Debug.LogWarning("[TableTennisManager] Could not find shared anchor after 50 attempts");
             
             // Use table as fallback reference
             if (tableTransform != null)
             {
                 sharedAnchor = tableTransform;
-                Debug.Log("[TableTennisManager] Using table as fallback anchor reference");
             }
         }
         else
         {
             // CRITICAL: Re-align the camera rig to the preserved anchors!
             // Without this, each headset's OVRCameraRig starts at default (0,0,0) and objects appear misaligned.
-            Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Re-aligning camera rig to preserved anchors after scene transition...");
-            Debug.Log($"[TableTennisManager WaitForAnchor (alignment)] Camera rig position before alignment: {Camera.main.transform.root.position}");
             
             if (primaryOVRAnchor != null && secondaryOVRAnchor != null)
             {
                 alignmentManager.AlignUserToTwoAnchors(primaryOVRAnchor, secondaryOVRAnchor);
-                Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Applied 2-point alignment");
-                Debug.Log($"[TableTennisManager WaitForAnchor (alignment)] Camera rig position after alignment: {Camera.main.transform.root.position}");
             }
             else if (primaryOVRAnchor != null)
             {
                 alignmentManager.AlignUserToAnchor(primaryOVRAnchor);
-                Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Applied single-point alignment");
-                Debug.Log($"[TableTennisManager WaitForAnchor (alignment)] Camera rig position after alignment: {Camera.main.transform.root.position}");
             }
             
             // Wait for alignment to complete before placing table
             yield return new WaitForSeconds(1.0f);
-            Debug.Log("[TableTennisManager WaitForAnchor (alignment)] Alignment wait complete, proceeding to place table");
         }
         
         // SUMMARY: Log final anchor positions before table placement
         if (sharedAnchor != null)
         {
-            Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] SUMMARY - Primary anchor world pos: {sharedAnchor.position}");
             if (secondaryAnchor != null)
             {
-                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] SUMMARY - Secondary anchor world pos: {secondaryAnchor.position}");
                 Vector3 distance = secondaryAnchor.position - sharedAnchor.position;
-                Debug.Log($"[TableTennisManager WaitForAnchor (anchor)] SUMMARY - Anchor separation: {distance.magnitude:F3}m, direction: {distance.normalized}");
             }
         }
     }
@@ -1411,13 +1290,13 @@ public class TableTennisManager : NetworkBehaviour
     {
         if (BallPrefab == default)
         {
-            Debug.LogError($"{LOG_TAG} SpawnBall Ball prefab not assigned");
+            Debug.LogError($"[TableTennisManager] SpawnBall Ball prefab not assigned");
             return;
         }
 
         if (Runner == null)
         {
-            Debug.LogError($"{LOG_TAG} SpawnBall Runner is null! Cannot spawn ball");
+            Debug.LogError($"[TableTennisManager] SpawnBall Runner is null! Cannot spawn ball");
             return;
         }
 
@@ -1442,18 +1321,15 @@ public class TableTennisManager : NetworkBehaviour
                     Bounds bounds = tableRenderer.bounds;
                     tableSurfacePos = bounds.center;
                     tableSurfacePos.y = bounds.max.y; // Top of the table
-                    Debug.Log($"{LOG_TAG} SpawnBall Using table renderer bounds - Center: {bounds.center}, Max Y: {bounds.max.y}");
                 }
                 else
                 {
                     // Fallback: add default table height to calculated world position
                     tableSurfacePos.y = tableWorldPos.y + defaultTableHeight;
-                    Debug.Log($"{LOG_TAG} SpawnBall No renderer, using calculated world pos + default height");
                 }
             }
 
             spawnPosition = tableSurfacePos + Vector3.up * 0.75f;
-            Debug.Log($"{LOG_TAG} SpawnBall Using anchor + local pos. Anchor: {sharedAnchor.position}, TableLocal: {tableLocalPos}, TableWorld: {tableWorldPos}, Surface: {tableSurfacePos}, BallSpawn: {spawnPosition}");
         }
         // FALLBACK: Use tableRoot if anchor not available
         else if (tableRoot != null)
@@ -1467,7 +1343,6 @@ public class TableTennisManager : NetworkBehaviour
                 Bounds bounds = tableRenderer.bounds;
                 tableSurfacePos = bounds.center;
                 tableSurfacePos.y = bounds.max.y;
-                Debug.Log($"{LOG_TAG} SpawnBall Using tableRoot renderer bounds - Surface: {tableSurfacePos}");
             }
             else
             {
@@ -1477,22 +1352,18 @@ public class TableTennisManager : NetworkBehaviour
                 {
                     tableSurfacePos = anchorTransform.TransformPoint(tableRoot.transform.localPosition);
                     tableSurfacePos.y += defaultTableHeight;
-                    Debug.Log($"{LOG_TAG} SpawnBall No renderer, using anchor.TransformPoint + default height: {tableSurfacePos}");
                 }
                 else
                 {
                     // No parent - use world position directly
                     tableSurfacePos = tableRoot.transform.position + Vector3.up * defaultTableHeight;
-                    Debug.Log($"{LOG_TAG} SpawnBall No anchor parent, using world position + default height: {tableSurfacePos}");
                 }
             }
             spawnPosition = tableSurfacePos + Vector3.up * 0.75f;
-            Debug.Log($"{LOG_TAG} SpawnBall Using tableRoot - LocalPos: {tableRoot.transform.localPosition}, WorldPos: {tableRoot.transform.position}, Surface: {tableSurfacePos}, BallSpawn: {spawnPosition}");
         }
         else if (tableTransform != null)
         {
             spawnPosition = tableTransform.TransformPoint(ballSpawnOffset);
-            Debug.Log($"{LOG_TAG} SpawnBall Using tableTransform: {tableTransform.position}");
         }
         else
         {
@@ -1501,15 +1372,9 @@ public class TableTennisManager : NetworkBehaviour
             if (head != null)
             {
                 spawnPosition = head.position + head.forward * 0.5f;
-                Debug.Log($"{LOG_TAG} SpawnBall Using head position fallback");
-            }
-            else
-            {
-                Debug.LogWarning($"{LOG_TAG} SpawnBall No reference found! Spawning at origin");
             }
         }
 
-        Debug.Log($"{LOG_TAG} SpawnBall Spawning ball at: {spawnPosition}");
 
         var ballObj = Runner.Spawn(
             BallPrefab,
@@ -1522,11 +1387,10 @@ public class TableTennisManager : NetworkBehaviour
         {
             spawnedBall = ballObj.GetComponent<NetworkedBall>();
             // Stay in BallPosition phase - transition to Playing when ball is hit
-            Debug.Log($"{LOG_TAG} SpawnBall Ball spawned successfully at {spawnPosition}, NetworkId: {ballObj.Id}");
         }
         else
         {
-            Debug.LogError($"{LOG_TAG} SpawnBall Runner.Spawn returned null!");
+            Debug.LogError($"[TableTennisManager] SpawnBall Runner.Spawn returned null!");
         }
     }
     
@@ -1541,7 +1405,6 @@ public class TableTennisManager : NetworkBehaviour
             // Authority was already set by OnGroundHit based on who won the round
             spawnedBall.ResetToServePosition(spawnedBall.CurrentAuthority);
             CurrentPhase = GamePhase.BallPosition;
-            Debug.Log($"{LOG_TAG} Ball respawned for Player {spawnedBall.CurrentAuthority}'s serve");
         }
         else if (Object.HasStateAuthority)
         {
@@ -1559,7 +1422,6 @@ public class TableTennisManager : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestRespawnBall()
     {
-        Debug.Log($"{LOG_TAG} Host: Client requested ball respawn");
         RespawnBall();
     }
 
@@ -1580,20 +1442,17 @@ public class TableTennisManager : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_RequestGameStart()
     {
-        Debug.Log("[TableTennisManager] Host: Received game start request from client");
         if (!GameStarted)
         {
             GameStarted = true;
             SpawnBall();
             RPC_NotifyBallSpawned(); // Notify all clients
-            Debug.Log("[TableTennisManager] Host: Ball spawned via client request");
         }
     }
     
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyBallSpawned()
     {
-        Debug.Log("[TableTennisManager] Ball spawn notification received");
         ballSpawnPending = false; // Reset pending flag for all clients
         StartCoroutine(FindSpawnedBallDelayed());
     }
@@ -1609,7 +1468,6 @@ public class TableTennisManager : NetworkBehaviour
         if (ball != null && spawnedBall == null)
         {
             spawnedBall = ball;
-            Debug.Log($"[TableTennisManager] Found spawned ball: {ball.name}");
         }
     }
     

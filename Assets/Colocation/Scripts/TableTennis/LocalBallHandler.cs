@@ -53,7 +53,6 @@ public class LocalBallHandler : MonoBehaviour
             col.material = bouncyMat;
         }
         
-        Debug.Log("[LocalBallHandler] Initialized in positioning mode - use thumbsticks to move, hit with racket to start");
     }
     
     private void Update()
@@ -86,7 +85,6 @@ public class LocalBallHandler : MonoBehaviour
                 Rigidbody racketRb = racket.GetComponent<Rigidbody>();
                 if (racketRb != null && racketRb.velocity.magnitude > 1.0f) // Higher threshold
                 {
-                    Debug.Log($"[LocalBallHandler] PROXIMITY HIT! Distance: {distance}, Velocity: {racketRb.velocity.magnitude}");
                     HandleProximityHit(racket, racketRb.velocity);
                     return;
                 }
@@ -130,7 +128,6 @@ public class LocalBallHandler : MonoBehaviour
             tableTennisManager.OnBallHit();
         }
         
-        Debug.Log($"[LocalBallHandler] Ball hit! RacketVel={racketVelocity}, BallVel={hitVelocity}");
     }
     
     private void FixedUpdate()
@@ -194,14 +191,12 @@ public class LocalBallHandler : MonoBehaviour
     
     private void OnCollisionEnter(Collision collision)
     {
-        Debug.Log($"[BALL_COLLISION] Ball collided with: {collision.gameObject.name}, Tag: {collision.gameObject.tag}, Layer: {collision.gameObject.layer}");
         // Check if hit floor - respawn ball
         if (collision.gameObject.CompareTag("Floor") || 
             collision.gameObject.name.ToLower().Contains("floor") ||
             collision.gameObject.name.ToLower().Contains("ground") ||
             collision.gameObject.layer == LayerMask.NameToLayer("Floor"))
         {
-            Debug.Log("[LocalBallHandler] Ball hit floor - respawning!");
             ResetBall();
             return;
         }
@@ -218,13 +213,11 @@ public class LocalBallHandler : MonoBehaviour
     
     private void OnTriggerEnter(Collider other)
     {
-        Debug.Log($"[BALL_TRIGGER] Ball triggered by: {other.gameObject.name}, Tag: {other.gameObject.tag}, Layer: {other.gameObject.layer}");
         // Check if hit floor trigger
         if (other.CompareTag("Floor") || 
             other.gameObject.name.ToLower().Contains("floor") ||
             other.gameObject.name.ToLower().Contains("ground"))
         {
-            Debug.Log("[LocalBallHandler] Ball entered floor trigger - respawning!");
             ResetBall();
             return;
         }
@@ -241,7 +234,6 @@ public class LocalBallHandler : MonoBehaviour
     
     private void HandleRacketHit(Collision collision)
     {
-        Debug.Log($"[LocalBallHandler] HIT BY RACKET: {collision.gameObject.name}");
         
         // Exit positioning mode
         if (isInPositioningMode)
@@ -249,7 +241,6 @@ public class LocalBallHandler : MonoBehaviour
             isInPositioningMode = false;
             rb.constraints = RigidbodyConstraints.None; // Unfreeze
             rb.useGravity = false; // We handle gravity manually
-            Debug.Log("[LocalBallHandler] Exited positioning mode - game started!");
         }
         
         // Get racket velocity for direction
@@ -284,12 +275,10 @@ public class LocalBallHandler : MonoBehaviour
             tableTennisManager.OnBallHit();
         }
         
-        Debug.Log($"[LocalBallHandler] Ball velocity: {hitVelocity}");
     }
 
     private void HandleRacketHitTrigger(Collider other)
     {
-        Debug.Log($"[LocalBallHandler] TRIGGER HIT BY RACKET: {other.gameObject.name}");
         
         // Exit positioning mode
         if (isInPositioningMode)
@@ -297,7 +286,6 @@ public class LocalBallHandler : MonoBehaviour
             isInPositioningMode = false;
             rb.constraints = RigidbodyConstraints.None; // Unfreeze
             rb.useGravity = false;
-            Debug.Log("[LocalBallHandler] Exited positioning mode - game started!");
         }
         
         // Get racket velocity
@@ -350,12 +338,10 @@ public class LocalBallHandler : MonoBehaviour
             tableTennisManager.OnBallHit();
         }
         
-        Debug.Log($"[LocalBallHandler] Ball velocity: {hitVelocity}");
     }
     
     private void ResetBall()
     {
-        Debug.Log("[LocalBallHandler] Ball reset - back to positioning mode");
         
         // Reset to center, enter positioning mode
         Camera cam = Camera.main;

@@ -32,7 +32,6 @@ public class SessionCleanup : MonoBehaviour
         if (isQuitting) return;
         isQuitting = true;
         
-        Debug.Log("[SessionCleanup] Application quitting - cleaning up network session...");
         ShutdownAllRunners();
     }
     
@@ -49,7 +48,6 @@ public class SessionCleanup : MonoBehaviour
     /// </summary>
     public static void QuitGame()
     {
-        Debug.Log("[SessionCleanup] QuitGame called");
         
         if (instance != null)
         {
@@ -87,7 +85,6 @@ public class SessionCleanup : MonoBehaviour
             
             if (allShutdown)
             {
-                Debug.Log("[SessionCleanup] All runners shut down gracefully");
                 break;
             }
             
@@ -95,7 +92,6 @@ public class SessionCleanup : MonoBehaviour
             yield return null;
         }
         
-        Debug.Log("[SessionCleanup] Quitting application");
         Application.Quit();
         
         #if UNITY_EDITOR
@@ -110,7 +106,6 @@ public class SessionCleanup : MonoBehaviour
         {
             if (runner != null && runner.State != NetworkRunner.States.Shutdown)
             {
-                Debug.Log($"[SessionCleanup] Shutting down runner: {runner.name}");
                 runner.Shutdown();
             }
         }
@@ -121,7 +116,6 @@ public class SessionCleanup : MonoBehaviour
     /// </summary>
     public static void LeaveSession()
     {
-        Debug.Log("[SessionCleanup] Leaving session...");
         ShutdownAllRunners();
     }
 }

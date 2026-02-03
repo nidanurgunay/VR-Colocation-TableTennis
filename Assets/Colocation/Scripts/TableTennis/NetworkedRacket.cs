@@ -30,7 +30,6 @@ public class NetworkedRacket : NetworkBehaviour
     
     public override void Spawned()
     {
-        Debug.Log($"[NetworkedRacket] Spawned. Owner={OwningPlayer}, Local={Runner.LocalPlayer}");
         
         // Check if this racket belongs to the local player
         isLocalPlayer = (OwningPlayer == Runner.LocalPlayer);
@@ -46,7 +45,6 @@ public class NetworkedRacket : NetworkBehaviour
         else
         {
             // This is a remote player's racket - just follow networked state
-            Debug.Log("[NetworkedRacket] This is a remote player's racket");
         }
         
         initialized = true;
@@ -61,14 +59,9 @@ public class NetworkedRacket : NetworkBehaviour
         {
             // Use right controller by default - could be made configurable
             controllerTransform = cameraRig.rightControllerAnchor;
-            Debug.Log($"[NetworkedRacket] Local player - attached to right controller");
             
             // Show the racket
             IsVisible = true;
-        }
-        else
-        {
-            Debug.LogWarning("[NetworkedRacket] OVRCameraRig not found!");
         }
     }
     
@@ -170,7 +163,6 @@ public class NetworkedRacket : NetworkBehaviour
         var ball = collision.gameObject.GetComponent<NetworkedBall>();
         if (ball != null)
         {
-            Debug.Log($"[NetworkedRacket] Local player hit ball! Sending RPC...");
             lastHitTime = Time.time;
 
             // Calculate hit velocity in WORLD SPACE

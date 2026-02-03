@@ -75,7 +75,6 @@ public class AnchorRelativeObject : MonoBehaviour
     private IEnumerator WaitForAnchorAndAlign()
     {
         if (showDebugInfo)
-            Debug.Log($"[AnchorRelativeObject] {gameObject.name} waiting for anchor...");
 
         while (sharedAnchor == null && retryCount < MAX_RETRIES)
         {
@@ -109,7 +108,6 @@ public class AnchorRelativeObject : MonoBehaviour
             if (anchor != null && anchor.Localized)
             {
                 if (showDebugInfo)
-                    Debug.Log($"[AnchorRelativeObject] Found anchor via GUIManager: {anchor.name}");
                 return anchor.transform;
             }
         }
@@ -121,7 +119,6 @@ public class AnchorRelativeObject : MonoBehaviour
             if (anchor != null && anchor.Localized)
             {
                 if (showDebugInfo)
-                    Debug.Log($"[AnchorRelativeObject] Found anchor via scene search: {anchor.name}");
                 return anchor.transform;
             }
         }
@@ -141,12 +138,6 @@ public class AnchorRelativeObject : MonoBehaviour
 
         UpdatePosition();
         isAligned = true;
-
-        if (showDebugInfo)
-        {
-            Debug.Log($"[AnchorRelativeObject] {gameObject.name} aligned to anchor");
-            Debug.Log($"[AnchorRelativeObject] World position: {transform.position}, Floor Y: {detectedFloorY}");
-        }
     }
 
     private void DetectFloor()
@@ -158,14 +149,18 @@ public class AnchorRelativeObject : MonoBehaviour
         {
             detectedFloorY = hit.point.y;
             if (showDebugInfo)
-                Debug.Log($"[AnchorRelativeObject] Floor detected at Y={detectedFloorY}");
+            {
+                Debug.Log($"[AnchorRelativeObject] {gameObject.name} detected floor at Y: {detectedFloorY}");
+            }
         }
         else
         {
             // No floor found, use anchor Y position as floor
             detectedFloorY = sharedAnchor.position.y;
             if (showDebugInfo)
-                Debug.Log($"[AnchorRelativeObject] No floor detected, using anchor Y={detectedFloorY}");
+            {
+                Debug.Log($"[AnchorRelativeObject] {gameObject.name} no floor found, using anchor Y: {detectedFloorY}");
+            }
         }
     }
 
@@ -229,7 +224,9 @@ public class AnchorRelativeObject : MonoBehaviour
         currentHeightOffset += heightAdjustmentStep;
         if (isAligned) UpdatePosition();
         if (showDebugInfo)
-            Debug.Log($"[AnchorRelativeObject] Height raised to {HeightAboveFloor}m");
+        {
+            Debug.Log($"[AnchorRelativeObject] {gameObject.name} raised height to: {currentHeightOffset}");
+        }
     }
 
     /// <summary>
@@ -241,7 +238,9 @@ public class AnchorRelativeObject : MonoBehaviour
         currentHeightOffset -= heightAdjustmentStep;
         if (isAligned) UpdatePosition();
         if (showDebugInfo)
-            Debug.Log($"[AnchorRelativeObject] Height lowered to {HeightAboveFloor}m");
+        {
+            Debug.Log($"[AnchorRelativeObject] {gameObject.name} lowered height to: {currentHeightOffset}");
+        }
     }
 
     /// <summary>
@@ -287,11 +286,6 @@ public class AnchorRelativeObject : MonoBehaviour
         {
             anchorOffset = anchor.InverseTransformPoint(transform.position);
             anchorRotationOffset = (Quaternion.Inverse(anchor.rotation) * transform.rotation).eulerAngles;
-            Debug.Log($"[AnchorRelativeObject] Captured offset: Position={anchorOffset}, Rotation={anchorRotationOffset}");
-        }
-        else
-        {
-            Debug.LogWarning("[AnchorRelativeObject] No localized anchor found to capture offset from");
         }
     }
 
