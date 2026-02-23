@@ -1,6 +1,5 @@
 /// <summary>
-/// Shared game phase definitions for both VR (TableTennisManager) and AR (PassthroughGameManager).
-/// Ensures consistent phase naming and behavior across both game modes.
+/// Game phase definitions for PassthroughGameManager.
 /// </summary>
 public enum GamePhase
 {
@@ -31,9 +30,8 @@ public enum GamePhase
     Playing,
 
     /// <summary>
-    /// Ball hit ground, round ended
-    /// Shows which player gets the next serve
-    /// Controls: GRIP to respawn ball and return to BallPosition/Playing
+    /// Ball hit ground, round ended.
+    /// Kept for switch-case compatibility; transition logic handled by PassthroughGameManager.
     /// </summary>
     BallGrounded
 }

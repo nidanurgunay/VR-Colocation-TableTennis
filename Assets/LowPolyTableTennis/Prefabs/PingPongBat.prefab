@@ -13,7 +13,6 @@ GameObject:
   - component: {fileID: 6993727638598655233}
   - component: {fileID: 726079139407410118}
   - component: {fileID: 726079139407410117}
-  - component: {fileID: -4622226233922778675}
   - component: {fileID: -2381692538875535439}
   m_Layer: 0
   m_Name: PingPongBat
@@ -140,19 +139,6 @@ MeshCollider:
   m_Convex: 1
   m_CookingOptions: 0
   m_Mesh: {fileID: -3758573805739257388, guid: c724c2cfb7e6cb247b2e89d44ad42631, type: 3}
---- !u!114 &-4622226233922778675
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8733148417151412701}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3442c3e41960546feb8e977536f8cbea, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  interpolationSpeed: 20
 --- !u!114 &-2381692538875535439
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -169,6 +155,5 @@ MonoBehaviour:
   ObjectInterest: 1
   Flags: 262145
   NestedObjects: []
-  NetworkedBehaviours:
-  - {fileID: -4622226233922778675}
+  NetworkedBehaviours: []
   ForceRemoteRenderTimeframe: 0

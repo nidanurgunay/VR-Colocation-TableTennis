@@ -56,8 +56,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     [Tooltip("Skip anchor alignment for quick testing. Uses local anchors and enables start buttons immediately.")]
     [SerializeField] private bool skipAlignmentForDebug = false;
 
-    private enum PassthroughGamePhase { Idle, TableAdjust, BallPosition, Playing }
-
     // ===================== STATIC PROPERTIES =====================
     new public static Vector3 FirstAnchorPosition { get; private set; }
     new public static Vector3 SecondAnchorPosition { get; private set; }
@@ -76,7 +74,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
 
     private GameObject spawnedPassthroughTable;
-    private PassthroughGamePhase passthroughPhase = PassthroughGamePhase.Idle;
     private GameObject leftRacket;
     private GameObject rightRacket;
     private GameObject spawnedBall;
@@ -96,7 +93,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     private bool waitingForGripToPlaceAnchors = false;
     private bool anchor1Placed = false;
     private bool anchor2Placed = false;
-    private bool hostAutoStarted = false;
     private bool isSwitchedToVRMode = false;
     // Note: passthrough mode is checked dynamically via passthroughGameManager.IsActive
     private bool isPlacingAnchor = false;
@@ -124,7 +120,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         {
             isSwitchedToVRMode = true;
 
-            // Disable this component - TableTennisManager handles VR game
             this.enabled = false;
             return;
         }
@@ -748,7 +743,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 #endif
     }
 
-    private async void OnAutoAlignClicked()
+    private void OnAutoAlignClicked()
     {
         if (cameraTransform == null)
         {
@@ -840,8 +835,8 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
                 {
                     currentState = ColocationState.ReadyToShare;
                     autoAlignButton.interactable = false;
-                    var readvBtnText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
-                    if (readvBtnText != null) readvBtnText.text = "Sharing...";
+                    var reshareText = autoAlignButton.GetComponentInChildren<TextMeshProUGUI>();
+                    if (reshareText != null) reshareText.text = "Sharing...";
                     PrepareColocation();
                 }
                 break;
@@ -1074,9 +1069,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             currentState = ColocationState.ReadyToShare;
             UpdateUIWizard();
         }
-        else
-        {
-        }
     }
 
 
@@ -1100,16 +1092,10 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         waitingForGripToPlaceAnchors = value;
     }
 
-    /// Check if passthrough rackets are currently visible
+    /// Check if the passthrough game is currently active
     public bool ArePassthroughRacketsVisible()
     {
-        // Delegate to PassthroughGameManager if available
-        if (passthroughGameManager != null)
-        {
-            return passthroughGameManager.IsActive && passthroughGameManager.RacketsVisible;
-        }
-        // No passthrough game manager available
-        return false;
+        return passthroughGameManager != null && passthroughGameManager.IsActive;
     }
 
 #if FUSION2
@@ -1214,7 +1200,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
     }
 
     // ==================== OVERRIDE BASE CLASS METHODS ====================
-    protected override async void DiscoverNearbySession()
+    protected override void DiscoverNearbySession()
     {
         base.DiscoverNearbySession();
     }
@@ -1456,7 +1442,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
         waitingForGripToPlaceAnchors = false;
         firstAnchorWorldPosition = Vector3.zero;
         isPlacingAnchor = false; // Reset placement lock
-        hostAutoStarted = false; // Allow auto-start again
 
         // Reset client-specific discovery state
         guiDiscoveryStarted = false;
@@ -1643,7 +1628,6 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
             passthroughGameUIPanel = null;
         }
 
-        passthroughPhase = PassthroughGamePhase.Idle;
     }
 
 
@@ -1787,7 +1771,7 @@ public class AnchorGUIManager_AutoAlignment : ColocationManager
 
 
     /// Override ShareAnchors to handle debug mode
-    protected override async void ShareAnchors()
+    protected override void ShareAnchors()
     {
         // DEBUG MODE: Use local anchors without sharing
         if (skipAlignmentForDebug && currentAnchors.Count >= 2)

@@ -15,7 +15,6 @@ public class PassthroughGameManager : NetworkBehaviour
     private const string LOG_TAG = "[PassthroughGameManager]";
 
     [Header("Prefabs")]
-    [SerializeField] private TableTennisConfig sharedConfig;
     [SerializeField] private GameObject tablePrefab;
     [SerializeField] private GameObject racketPrefab;
     [SerializeField] private NetworkPrefabRef ballPrefab;
@@ -24,32 +23,16 @@ public class PassthroughGameManager : NetworkBehaviour
     [SerializeField] private float tableRotateSpeed = 90f;
     [SerializeField] private float tableMoveSpeed = 1f;
     [SerializeField] private float tableXRotationOffset = 180f;
-    [SerializeField] private float tableYRotationOffset = 90f;
-    [SerializeField] private float defaultTableHeight = 0.8f; // AR table height for comfortable viewing/playing
+    [SerializeField] private float defaultTableHeight = 0.8f;
 
     [Header("Debug Settings")]
     [Tooltip("Skip anchor alignment for quick testing. Table will spawn in front of player.")]
     [SerializeField] private bool skipAlignmentForDebug = false;
     [SerializeField] private Vector3 debugTablePosition = new Vector3(0, 0.76f, 2f);
 
-    // Prefab accessors
-    private GameObject TablePrefab => sharedConfig != null ? sharedConfig.TablePrefab : tablePrefab;
-    private GameObject RacketPrefab => sharedConfig != null ? sharedConfig.RacketPrefab : racketPrefab;
-    private NetworkPrefabRef BallPrefab => sharedConfig != null && sharedConfig.BallPrefab != default ? sharedConfig.BallPrefab : ballPrefab;
-    private float TableRotateSpeed => sharedConfig != null ? sharedConfig.tableRotateSpeed : tableRotateSpeed;
-    private float TableMoveSpeed => sharedConfig != null ? sharedConfig.tableMoveSpeed : tableMoveSpeed;
-
-    // State (using shared GamePhase enum from GamePhaseDefinitions.cs)
+    // State
     private bool isActive = false;
-    private bool racketsVisible = true;
-    private bool ballNeedsRespawn = false;
-    private int lastBallAuthority = 1; // Track last authority to swap on respawn (1=Host, 2=Client)
-    private int currentRound = 0; // Tracks the current round number
-
-    // // Racket offset/rotation settings (matching VR scene's ControllerRacket for consistency)
-    // private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f);
-    // private Vector3 racketRotation = new Vector3(-51f, 240f, 43f);
-    // private float racketScale = 10f;
+    private int currentRound = 0;
 
     // References
     private GameObject spawnedTable;
@@ -75,7 +58,6 @@ public class PassthroughGameManager : NetworkBehaviour
     // Properties
     public bool IsActive => isActive;
     public GamePhase CurrentPhase => currentPhase;
-    public bool RacketsVisible => racketsVisible;
 
     // Local phase tracking (using shared GamePhase enum)
     private GamePhase currentPhase = GamePhase.Idle;
@@ -345,7 +327,7 @@ public class PassthroughGameManager : NetworkBehaviour
     /// <summary>
     /// Stop the passthrough game and cleanup
     /// </summary>
-    /// <param name="keepTableActive">If true, table stays ac tive (for VR scene transition). If false, table is disabled.</param>
+    /// <param name="keepTableActive">If true, table stays active (for VR scene transition). If false, table is disabled.</param>
     public void StopGame(bool keepTableActive = false)
     {
         isActive = false;
@@ -427,15 +409,6 @@ public class PassthroughGameManager : NetworkBehaviour
 
     private void HandleInput()
     {
-        // B/Y button - (racket visibility now handled by ControllerRacket component)
-        bool bPressed = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch);
-        bool yPressed = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
-        if ((bPressed || yPressed) && currentPhase != GamePhase.Playing)
-        {
-            // Racket toggling now handled by ControllerRacket in single mode
-            return;
-        }
-
         // A/X button for phase-specific actions
         bool aPressed = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch);
         bool xPressed = OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch);
@@ -497,8 +470,8 @@ public class PassthroughGameManager : NetworkBehaviour
         if (leftX == 0f && rightY == 0f) return;
 
         // Right stick Y = Height, Left stick X = Rotation
-        float rotationDelta = leftX * TableRotateSpeed * Time.deltaTime;
-        float heightDelta = rightY * TableMoveSpeed * Time.deltaTime;
+        float rotationDelta = leftX * tableRotateSpeed * Time.deltaTime;
+        float heightDelta = rightY * tableMoveSpeed * Time.deltaTime;
 
 #if FUSION2
         if (Object != null && Object.HasStateAuthority)
@@ -581,15 +554,15 @@ public class PassthroughGameManager : NetworkBehaviour
             }
         }
 
-        if (spawnedTable == null && TablePrefab != null)
+        if (spawnedTable == null && tablePrefab != null)
         {
             Debug.Log($"{LOG_TAG} SpawnTable Instantiating table from prefab");
-            spawnedTable = Instantiate(TablePrefab);
+            spawnedTable = Instantiate(tablePrefab);
             Debug.Log($"{LOG_TAG} SpawnTable Instantiated table: {spawnedTable?.name ?? "NULL"}");
         }
-        else if (spawnedTable == null && TablePrefab == null)
+        else if (spawnedTable == null && tablePrefab == null)
         {
-            Debug.LogError($"{LOG_TAG} SpawnTable FAILED - TablePrefab is NULL! Check sharedConfig and tablePrefab assignments");
+            Debug.LogError($"{LOG_TAG} SpawnTable FAILED - tablePrefab is NULL! Check Inspector assignments");
         }
 
         if (spawnedTable != null)
@@ -672,10 +645,9 @@ public class PassthroughGameManager : NetworkBehaviour
             controllerRacket = gameObject.AddComponent<ControllerRacket>();
         }
 
-        // Set racket prefab from config if available
-        if (RacketPrefab != null)
+        if (racketPrefab != null)
         {
-            controllerRacket.SetRacketPrefab(RacketPrefab);
+            controllerRacket.SetRacketPrefab(racketPrefab);
         }
 
         Debug.Log($"{LOG_TAG} RacketDebug: ControllerRacket component initialized in single-racket mode");
@@ -755,7 +727,7 @@ public class PassthroughGameManager : NetworkBehaviour
             Debug.Log($"{LOG_TAG} SpawnBall Host spawning networked ball at {spawnPos}");
 
             // CRITICAL: Spawn at origin first, then move - Fusion may ignore spawn position if parent exists
-            var ball = Runner.Spawn(BallPrefab, Vector3.zero, Quaternion.identity);
+            var ball = Runner.Spawn(ballPrefab, Vector3.zero, Quaternion.identity);
             if (ball != null)
             {
                 spawnedBall = ball.gameObject;
@@ -866,7 +838,6 @@ public class PassthroughGameManager : NetworkBehaviour
     public void OnBallGroundHit()
     {
         Debug.Log($"{LOG_TAG} OnBallGroundHit called - transitioning to BallPosition for next serve");
-        ballNeedsRespawn = true;
         currentRound++;
         currentPhase = GamePhase.BallPosition;
         Time.timeScale = 1.0f;
@@ -961,8 +932,6 @@ public class PassthroughGameManager : NetworkBehaviour
         // Spawn new ball
         SpawnBall();
 
-        // Reset state
-        ballNeedsRespawn = false;
         // Stay in BallPosition phase - ball will be positioned for serve
         UpdateInstructions();
     }
@@ -1078,8 +1047,7 @@ public class PassthroughGameManager : NetworkBehaviour
             spawnedBall = null;
         }
 
-        // Reset authority and round tracking for fresh game
-        lastBallAuthority = 1;
+        // Reset round tracking for fresh game
         currentRound = 0;
 
         currentPhase = GamePhase.TableAdjust;
@@ -1341,15 +1309,9 @@ public class PassthroughGameManager : NetworkBehaviour
                     }
                     else
                     {
-                        controlsText.text =
-                            "[B/Y] Toggle Ball Adjust\n" +
-                            "[Left Stick] Move Ball XZ\n" +
-                            "[Right Stick Y] Move Ball Up/Down\n" +
+                        controlsText.text = "You can change the ball position with free controller.\n" +
                             "[A/X] Reset Ball Position\n" +
                             "Hit ball with racket to start!";
-                        controlsText.text = "You can change the ball position with free controller.\n" +
-                        "[A/X] Reset Ball Position\n" +
-                            "Hit ball with racket to start!"; ;
 
                     }
                 }
@@ -1487,7 +1449,7 @@ public class PassthroughGameManager : NetworkBehaviour
         {
             PlayerPrefs.SetInt("ReturnFromVRScene", 0);
             PlayerPrefs.Save();
-            Debug.Log($"{LOG_TAG} DEBUG_VR-AR] Returning from VR scene - will auto-start passthrough after alignment");
+            Debug.Log($"{LOG_TAG} [DEBUG VR-AR] Returning from VR scene - will auto-start passthrough after alignment");
 
             // Try to find persistent anchors from previous session
             FindPersistentAnchors();
@@ -1503,7 +1465,7 @@ public class PassthroughGameManager : NetworkBehaviour
     private void FindPersistentAnchors()
     {
         var allAnchors = FindObjectsOfType<OVRSpatialAnchor>();
-        Debug.Log($"{LOG_TAG} DEBUG_VR-AR] Found {allAnchors.Length} persistent spatial anchors");
+        Debug.Log($"{LOG_TAG} [DEBUG VR-AR] Found {allAnchors.Length} persistent spatial anchors");
 
         if (mainManager != null)
         {
@@ -1514,7 +1476,7 @@ public class PassthroughGameManager : NetworkBehaviour
                 if (anchor.Localized && !currentAnchors.Contains(anchor))
                 {
                     currentAnchors.Add(anchor);
-                    Debug.Log($"{LOG_TAG} DEBUG_VR-AR] Restored anchor: {anchor.Uuid}");
+                    Debug.Log($"{LOG_TAG} [DEBUG VR-AR] Restored anchor: {anchor.Uuid}");
 
                     // Set the first localized anchor as our reference
                     if (_localizedAnchor == null)
@@ -1623,7 +1585,7 @@ public class PassthroughGameManager : NetworkBehaviour
 #endif
         }
 
-        // Rackets are now initialized by ControllerRacket component in SpawnTabl
+        // Rackets are now initialized by ControllerRacket component in SpawnTable
         // Switch UI to show table adjustment instructions
         UpdateInstructions();
         Debug.Log($"{LOG_TAG} Table Adjust Mode - Use thumbstick to adjust, B/Y switches racket hand, A/X when ready");

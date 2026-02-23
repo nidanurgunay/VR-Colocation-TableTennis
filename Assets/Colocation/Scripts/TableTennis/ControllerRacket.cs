@@ -11,8 +11,6 @@ public class ControllerRacket : MonoBehaviour
     [SerializeField] private GameObject racketPrefab; // Racket model to show on controller
     
     [Header("Settings")]
-    [SerializeField] private OVRInput.Button rightActivateButton = OVRInput.Button.Two; // B button for right controller (Button.Two = B when using RTouch)
-    [SerializeField] private OVRInput.Button leftActivateButton = OVRInput.Button.Two; // Y button for left controller (Button.Two = Y when using LTouch)
     [SerializeField] private Vector3 racketOffset = new Vector3(0f, 0.03f, 0.04f); // Position offset from controller
     [SerializeField] private Vector3 racketRotation = new Vector3(-51f, 240f, 43f); // Rotation to align handle with controller grip
     [SerializeField] private float racketScale = 10f; // 10x scale for visibility
@@ -38,6 +36,9 @@ public class ControllerRacket : MonoBehaviour
     private Vector3 lastRightRacketWorldPos;
     private Vector3 leftRacketWorldVelocity;
     private Vector3 rightRacketWorldVelocity;
+
+    // Cached camera rig reference (found once, reused every frame)
+    private OVRCameraRig cachedCameraRig;
     
     private void Start()
     {
@@ -58,7 +59,10 @@ public class ControllerRacket : MonoBehaviour
 
     private void FindControllers()
     {
-        var cameraRig = FindObjectOfType<OVRCameraRig>(true);
+        if (cachedCameraRig == null)
+            cachedCameraRig = FindObjectOfType<OVRCameraRig>(true);
+
+        var cameraRig = cachedCameraRig;
         if (cameraRig != null)
         {
             leftController = cameraRig.leftControllerAnchor;
@@ -273,44 +277,8 @@ public class ControllerRacket : MonoBehaviour
     
     private void CleanupRacketComponents(GameObject racket)
     {
-        // Remove components that shouldn't be on the controller-attached version
         var rb = racket.GetComponent<Rigidbody>();
         if (rb != null) Destroy(rb);
-        
-        // Keep collider for ball hits
-        
-        // Deleted code from current branch (for consistency with main):
-        // // Add kinematic rigidbody for collision detection
-        // // Kinematic = follows transform exactly, no physics forces
-        // var rb = racket.AddComponent<Rigidbody>();
-        // rb.isKinematic = true;
-        // rb.useGravity = false;
-        // rb.interpolation = RigidbodyInterpolation.Interpolate;
-        // rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
-        // 
-        // // Ensure proper tag for ball collision detection
-        // racket.tag = "Racket";
-        // 
-        // // Ensure collider exists for ball collision
-        // var colliders = racket.GetComponentsInChildren<Collider>();
-        // if (colliders.Length == 0)
-        // {
-        //     var boxCol = racket.AddComponent<BoxCollider>();
-        //     boxCol.isTrigger = false;
-        //     boxCol.size = new Vector3(0.15f, 0.02f, 0.18f);
-        //     boxCol.center = new Vector3(0, 0, 0.1f);
-        //     Debug.Log($"[ControllerRacket] Added BoxCollider to {racket.name}");
-        // }
-        // else
-        // {
-        //     foreach (var col in colliders)
-        //     {
-        //         col.isTrigger = false;
-        //         col.gameObject.tag = "Racket";
-        //     }
-        // }
-        // 
-        // Debug.Log($"[ControllerRacket CleanupRacketComponents] Cleaned up {racket.name} - no physics, direct controller attachment");
     }
     
     private void Update()
@@ -327,8 +295,10 @@ public class ControllerRacket : MonoBehaviour
             return; // Don't process input until we have rackets
         }
         
-        FindControllers();
-        
+        // Find controllers once; skip if already cached
+        if (leftController == null || rightController == null)
+            FindControllers();
+
         // Update dummy transforms to follow controller positions
         if (leftController != null && leftController.gameObject.name == "LeftControllerDummy")
         {
@@ -442,8 +412,10 @@ public class ControllerRacket : MonoBehaviour
     
     private void DisableRayVisuals(bool hide)
     {
-        // Find and disable common ray/pointer components
-        var cameraRig = FindObjectOfType<OVRCameraRig>(true);
+        if (cachedCameraRig == null)
+            cachedCameraRig = FindObjectOfType<OVRCameraRig>(true);
+
+        var cameraRig = cachedCameraRig;
         if (cameraRig == null) return;
 
         int disabledCount = 0;
@@ -531,7 +503,7 @@ public class ControllerRacket : MonoBehaviour
         }
 
         // Fallback: Convert local controller velocity to world space
-        Transform cameraRig = Camera.main?.transform.parent;
+        Transform cameraRig = cachedCameraRig != null ? cachedCameraRig.transform : Camera.main?.transform.parent;
         Vector3 localVelocity;
 
         if (racketObject == leftRacket)
@@ -652,9 +624,6 @@ public class ControllerRacket : MonoBehaviour
         {
             paddleCol.isTrigger = false;
         }
-
-        // Add debug collision logger to paddle
-        paddle.AddComponent<DebugRacketCollisionLogger>();
 
         return racket;
     }

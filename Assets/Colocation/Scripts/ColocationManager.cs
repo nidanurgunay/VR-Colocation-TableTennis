@@ -270,7 +270,7 @@ public class ColocationManager : NetworkBehaviour, IPlayerJoined, IPlayerLeft
         LoadAndAlignToAnchor(_sharedAnchorGroupId);
     }
 
-    protected virtual async void CreateAndShareAlignmentAnchor()
+    protected virtual void CreateAndShareAlignmentAnchor()
     {
        // Legacy method, kept for compatibility if called directly, but redirected to ShareAnchors
        ShareAnchors();

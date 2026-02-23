@@ -14,12 +14,7 @@ public class NetworkedBall : NetworkBehaviour
     [SerializeField] private float bounciness = 0.95f; // Increased from 0.92 for more realistic ping pong bounce
     [SerializeField] private float airResistance = 0.02f;
     [SerializeField] private float tableHeight = 0.76f; // Standard table tennis height
-    [SerializeField] private float racketHitMultiplier = 2.2f; // Multiplier for racket velocity transfer
-    [SerializeField] private float fallbackHitMultiplier = 1.2f; // Multiplier when racket has no rigidbody
-
     [Header("Serve Settings")]
-    [SerializeField] private float serveHeight = 0.4f; // Height above table for serve
-    [SerializeField] private float serveDistanceFromCenter = 0.8f; // How far from table center (toward server)
     [SerializeField] private float serveForce = 3f;
 
     [Header("Table Reference")]
@@ -54,7 +49,6 @@ public class NetworkedBall : NetworkBehaviour
     private float lastHitTime;
     private Vector3 localVelocity;
     private bool isInitialized;
-    private TableTennisGameManager gameManager;
     private int currentServerSide = 1; // Which side to spawn ball (1 or 2)
     private bool localPositioningMode = true; // Local flag for positioning
     private bool ballAdjustModeActive = false; // Toggle with A button to enable ball movement
@@ -324,9 +318,6 @@ public class NetworkedBall : NetworkBehaviour
         {
             isInitialized = true;
             Debug.Log($"[NetworkedBall] Initialized with table at {tableTransform.position}");
-
-            // Find game manager
-            gameManager = FindObjectOfType<TableTennisGameManager>();
 
             if (Object.HasStateAuthority)
             {
@@ -602,11 +593,6 @@ public class NetworkedBall : NetworkBehaviour
                 rb.velocity = localVelocity;
                 transform.position = new Vector3(transform.position.x, tableHeight + 0.02f, transform.position.z);
 
-                // Notify game manager of bounce
-                if (gameManager != null)
-                {
-                    gameManager.OnBallBounce(transform.position);
-                }
             }
         }
     }
@@ -670,12 +656,6 @@ public class NetworkedBall : NetworkBehaviour
         {
             Debug.Log("[NetworkedBall] Ball fell below threshold, resetting");
 
-            // Notify game manager ball went out
-            if (gameManager != null && IsInPlay)
-            {
-                gameManager.OnBallOut();
-            }
-
             ResetToServePosition();
             return;
         }
@@ -704,12 +684,6 @@ public class NetworkedBall : NetworkBehaviour
         if (Time.time - lastHitTime > resetAfterSeconds && IsInPlay)
         {
             Debug.Log("[NetworkedBall] Ball inactive too long, resetting");
-
-            // Notify game manager ball went out
-            if (gameManager != null)
-            {
-                gameManager.OnBallOut();
-            }
 
             ResetToServePosition();
         }
@@ -968,12 +942,6 @@ public class NetworkedBall : NetworkBehaviour
         IsInPlay = true;
         lastHitTime = Time.time;
 
-        // Notify game managers
-        if (gameManager != null)
-        {
-            gameManager.OnBallHit(playerNumber);
-        }
-
         var passthroughManager = FindObjectOfType<PassthroughGameManager>();
         if (passthroughManager != null)
         {
@@ -1041,12 +1009,6 @@ public class NetworkedBall : NetworkBehaviour
         {
             RPC_RequestServe(serverPlayerNumber);
         }
-    }
-
-    // Legacy overload for compatibility
-    public void RequestServe(Vector3 direction)
-    {
-        RequestServe(1); // Default to player 1
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -1120,27 +1082,11 @@ public class NetworkedBall : NetworkBehaviour
         // Remaining collision handling only on host
         if (!Object.HasStateAuthority) return;
 
-        // Check for table collision (bounce)
+        // Table bounce is handled by SimulatePhysics(); ignore collision event here
         if (collision.gameObject.CompareTag("Table") ||
             collision.gameObject.CompareTag(tableTag) ||
             (tableObject != null && collision.gameObject == tableObject.gameObject))
         {
-            // // Bounce off table with bounciness factor
-            // Vector3 normal = collision.contacts[0].normal;
-            // Vector3 velocity = rb.velocity;
-
-            // // Reflect velocity with bounciness
-            // Vector3 reflectedVelocity = Vector3.Reflect(velocity, normal) * bounciness;
-
-            // rb.velocity = reflectedVelocity;
-            // localVelocity = reflectedVelocity;
-
-            // Debug.Log($"[NetworkedBall] Ball bounced on table - New velocity: {reflectedVelocity}");
-             if (gameManager != null)
-            {
-                gameManager.OnBallBounce(transform.position);
-            }
-
             return;
         }
 
@@ -1262,12 +1208,6 @@ public class NetworkedBall : NetworkBehaviour
         if (passthroughManager != null)
         {
             passthroughManager.OnBallGroundHit();
-        }
-
-        var tableTennisManager = FindObjectOfType<TableTennisManager>();
-        if (tableTennisManager != null)
-        {
-            tableTennisManager.OnBallGroundHit();
         }
 
         // Notify via RPC for UI updates
