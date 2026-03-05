@@ -1,93 +1,111 @@
-# Colocation Table Tennis
+# XR Colocation Table Tennis
 
+A multiplayer AR/VR table tennis game for **Meta Quest** headsets that uses **colocation** — two players wearing headsets in the same physical room see the same virtual table at the same physical position, without any external tracking setup.
 
+Built as a research/prototype project at the University of Konstanz.
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## How It Works
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### Colocation via Shared Spatial Anchors
+Each player places one spatial anchor (via grip trigger) on their side of the real table. The host shares both anchors via `OVRColocationSession`. The client loads and localizes to those anchors, aligning its world space to the host's — no external trackers needed. The table is then spawned at the midpoint between the two anchors.
 
-## Add your files
+### Networking (Photon Fusion)
+- Uses **Photon Fusion 1.1.0** in Host mode
+- Ball physics run exclusively on the host (`[Networked]` position synced to client)
+- Racket hits are sent as RPCs from client → host, which applies the velocity and resyncs
+- Table position/rotation adjustments synced via explicit RPCs
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### Passthrough AR
+- `OVRPassthroughLayer` with a transparent camera background
+- Players see the real room through the headset with the virtual table overlaid
+
+### Controller Racket
+- Pressing **B** (right hand) or **Y** (left hand) swaps the controller visual for a racket model
+- Racket velocity is tracked manually each frame since kinematic rigidbodies report zero velocity to Unity's physics engine
+
+---
+
+## Tech Stack
+
+| Component | Version |
+|-----------|---------|
+| Unity | 2022.3.62f1 |
+| Render Pipeline | URP 14.0.12 |
+| Meta XR SDK Core | 71.0.0 |
+| Meta XR SDK Interaction (OVR) | 81.0.0 |
+| Meta XR SDK Platform | 81.0.0 |
+| Photon Fusion | 1.1.0 |
+| Target Platform | Android (Meta Quest 2 / Quest 3) |
+
+---
+
+## Project Structure
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.inf.uni-konstanz.de/nidanur.guenay/colocation-table-tennis.git
-git branch -M main
-git push -uf origin main
+Assets/Colocation/
+├── Scenes/
+│   ├── Colocation.unity            # Main entry scene
+│   └── Demo2/Demo2_cube.unity      # Main multiplayer scene
+└── Scripts/
+    ├── ColocationManager.cs                 # Base class: anchor creation & sharing
+    ├── AnchorGUIManager_AutoAlignment.cs    # UI wizard for colocation setup
+    ├── PassthroughGameManager.cs            # AR game logic (table, ball, phases)
+    └── TableTennis/
+        ├── ControllerRacket.cs   # Attaches racket model to controller
+        ├── NetworkedBall.cs      # Host-authoritative ball with Fusion sync
+        └── GamePhaseDefinitions.cs
 ```
 
-## Integrate with your tools
+---
 
-- [ ] [Set up project integrations](https://gitlab.inf.uni-konstanz.de/nidanur.guenay/colocation-table-tennis/-/settings/integrations)
+## Setup
 
-## Collaborate with your team
+### Requirements
+- Two Meta Quest 2 or Quest 3 headsets on the **same Wi-Fi network**
+- Unity 2022.3 LTS
+- Meta XR SDK (via Unity Package Manager or Meta XR All-in-One package)
+- Photon Fusion 1.1.0 SDK
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### Steps
 
-## Test and Deploy
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/nidanurgunay/Colocation-Table-Tennis.git
+   ```
 
-Use the built-in continuous integration in GitLab.
+2. **Open in Unity 2022.3**
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+3. **Set your Photon App ID**
+   - Create a free account at [photonengine.com](https://www.photonengine.com)
+   - Create a new Fusion app and copy the App ID
+   - In Unity: open `Assets/Photon/Fusion/Resources/PhotonAppSettings.asset` and paste your App ID
 
-***
+4. **Configure Meta XR**
+   - Go to `Edit > Project Settings > Meta XR` and follow the setup wizard
 
-# Editing this README
+5. **Build to both headsets**
+   - `File > Build Settings > Android → Build And Run`
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+### Playing
 
-## Suggestions for a good README
+1. Both headsets launch the app; one host, one joins
+2. Use the on-screen wizard to place and share spatial anchors
+3. Once both headsets are aligned, tap **Start AR Game**
+4. Adjust the table with thumbsticks, confirm with **A/X**
+5. Press **B** or **Y** to equip a racket, then hit the ball!
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+---
 
-## Name
-Choose a self-explaining name for your project.
+## Known Limitations
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+- Drift can accumulate over long sessions as SLAM tracking estimates diverge — periodic re-alignment helps but does not fully eliminate it
+- Ball physics are host-authoritative; high network latency causes visible lag for the client
+- The 16KB page-size alignment warnings on Android 15+ are in third-party SDK binaries (Photon/Meta) and require upstream fixes
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+---
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+MIT License — see [LICENSE](LICENSE) for details.
