@@ -4,6 +4,8 @@ A multiplayer AR/VR table tennis game for **Meta Quest** headsets that uses **co
 
 Built as a research/prototype project at the University of Konstanz.
 
+**Demo:** [Watch on YouTube](https://youtu.be/ll0tqw7C1IY)
+
 ---
 
 ## How It Works
